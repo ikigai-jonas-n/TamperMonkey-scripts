@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Git pre-commit hook — deploys gist subfolders, bumps versions, regenerates README,
+# then stages the updated gitlinks + README into the incoming commit.
+# Install once: cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+ROOT=$(git rev-parse --show-toplevel)
+MSG=$(git log -1 --pretty=%s 2>/dev/null || echo "Update scripts")
+
+echo "[deploy] Auto-deploying script repos (pre-commit)..."
+"$ROOT/deploy.sh" "$MSG" --hook
+
+"$ROOT/generate-readme.sh"
+
+# Stage updated gitlinks and README into this commit
+git add "$ROOT/README.md"
+for dir in "$ROOT"/*/; do
+  [ -e "${dir}.git" ] || continue
+  git add "$ROOT/$(basename "$dir")" 2>/dev/null || true
+done

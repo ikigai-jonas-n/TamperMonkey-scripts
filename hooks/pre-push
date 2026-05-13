@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Automation has moved to hooks/pre-commit (fires before commit, fixes the
+# "nothing staged" Catch-22 when the user edits only inside a gist subfolder).
+# This file is kept as a no-op stub so existing installs don't error.
+exit 0
