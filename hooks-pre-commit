@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Git pre-commit hook — bumps versions of modified scripts, regenerates README,
+# then stages the updated scripts and README into the incoming commit.
+# Install once: cp hooks-pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+ROOT=$(git rev-parse --show-toplevel)
+MSG=$(git log -1 --pretty=%s 2>/dev/null || echo "Update scripts")
+
+echo "[deploy] Auto-deploying scripts (pre-commit)..."
+"$ROOT/deploy.sh" "$MSG" --hook
+
+"$ROOT/generate-readme.sh"
+
+# Stage updated files into this commit
+git add "$ROOT/README.md"
+git add "$ROOT"/*.user.js

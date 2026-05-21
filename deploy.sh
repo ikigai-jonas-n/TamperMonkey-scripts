@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Usage: ./deploy.sh ["commit message"] [--hook]
-# Auto-discovers every subdir that is a git repo, fixes TamperMonkey URLs,
-# bumps @version, and deploys to its remote (Gist).
-# --hook: called internally by pre-push; skips the final main-repo push to avoid recursion.
+# Auto-discovers every userscript in the root, fixes TamperMonkey URLs,
+# bumps @version, and regenerates the README.
+# --hook: called internally by pre-commit; skips the final commit/push to avoid recursion.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 MSG="${1:-Update scripts}"
 HOOK_MODE="${2:-}"
+GIST_ID="f532c3a6c1b3cdeb7d6bbbfba3ecfd0e"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -15,26 +16,33 @@ is_userscript() {
   grep -q '// ==UserScript==' "$1" 2>/dev/null
 }
 
-gist_id_from_remote() {
-  # SSH:   git@gist.github.com:<ID>.git
-  # HTTPS: https://gist.github.com/<ID>.git
-  git remote get-url origin 2>/dev/null | grep -oE '[0-9a-f]{32}' || true
-}
-
 github_username() {
   local file="$1" gist_id="$2"
+  local user
 
   # 1. Try extracting from any existing URL in the script header
-  local user
   user=$(grep -m1 -oE 'gist\.githubusercontent\.com/[^/]+' "$file" 2>/dev/null \
          | cut -d/ -f2 || true)
-  [ -n "$user" ] && { echo "$user"; return; }
+  if [ -n "$user" ]; then
+    echo "$user"
+    return
+  fi
 
-  # 2. Fall back to GitHub CLI (requires gh auth)
+  # 2. Fall back to Git remote URL if possible
+  user=$(git remote get-url origin 2>/dev/null | grep -oE 'github\.com[:/][^/]+' | cut -d: -f2 | cut -d/ -f2 || true)
+  if [ -n "$user" ]; then
+    echo "$user"
+    return
+  fi
+
+  # 3. Fall back to GitHub CLI (requires gh auth)
   user=$(gh api "gists/$gist_id" --jq '.owner.login' 2>/dev/null || true)
-  [ -n "$user" ] && { echo "$user"; return; }
+  if [ -n "$user" ]; then
+    echo "$user"
+    return
+  fi
 
-  echo ""  # could not determine
+  echo "ikigai-jonas-n"  # default fallback based on files
 }
 
 # ── fix @updateURL / @downloadURL ─────────────────────────────────────────────
@@ -43,13 +51,7 @@ fix_urls() {
   local filename username raw_url
 
   filename=$(basename "$file")
-
   username=$(github_username "$file" "$gist_id")
-  if [ -z "$username" ]; then
-    echo "  ⚠  Cannot determine GitHub username — skipping URL fix for $filename"
-    echo "     Set it manually or run: gh auth login"
-    return
-  fi
 
   # Always-latest raw URL (no commit hash)
   raw_url="https://gist.githubusercontent.com/${username}/${gist_id}/raw/${filename}"
@@ -88,7 +90,9 @@ fix_urls() {
     changed=true
   fi
 
-  [ "$changed" = false ] && echo "  · URLs already correct"
+  if [ "$changed" = false ]; then
+    echo "  · URLs already correct"
+  fi
 }
 
 # ── version bumper ─────────────────────────────────────────────────────────────
@@ -102,7 +106,7 @@ bump_version() {
     return
   fi
 
-  # Bump last numeric segment (7.0 → 7.1, 7.0.3 → 7.0.4)
+  # Bump last numeric segment (7.83 → 7.84)
   local prefix last new_version
   prefix=$(echo "$current" | rev | cut -d. -f2- | rev)
   last=$(echo "$current" | rev | cut -d. -f1 | rev)
@@ -113,13 +117,13 @@ bump_version() {
 }
 
 # ── name version prefix sync ─────────────────────────────────────────────────
-# Ensures @name starts with [X.Y] matching current @version. Strips any
-# existing bracket prefix first so re-runs don't double-prefix.
 sync_name_version() {
   local file="$1"
   local version name clean new_name
   version=$(grep -m1 '// @version' "$file" | grep -oE '[0-9]+(\.[0-9]+)+' || true)
-  [ -z "$version" ] && return
+  if [ -z "$version" ]; then
+    return
+  fi
 
   name=$(grep -m1 '// @name' "$file" | sed 's|.*// @name[[:space:]]*||;s/[[:space:]]*$//')
   clean=$(echo "$name" | sed 's/^\[[^]]*\][[:space:]]*//')
@@ -131,68 +135,50 @@ sync_name_version() {
   fi
 }
 
-# ── deploy one gist subdir ────────────────────────────────────────────────────
-deploy_gist() {
-  local name="$1"
-  local dir="$ROOT/$name"
-
-  pushd "$dir" > /dev/null
-
-  # Find the .user.js file (one per folder)
-  local userscript
-  userscript=$(find . -maxdepth 1 -name "*.user.js" -type f | head -1)
-
-  if [ -n "$userscript" ] && is_userscript "$userscript"; then
-    local gist_id
-    gist_id=$(gist_id_from_remote)
-    if [ -n "$gist_id" ]; then
-      fix_urls "$userscript" "$gist_id"
-    else
-      echo "  ⚠  No Gist ID found in remote URL — skipping URL fix for $name"
+# ── process all scripts ────────────────────────────────────────────────────────
+process_scripts() {
+  local found=0
+  for file in "$ROOT"/*.user.js; do
+    if [ ! -f "$file" ]; then
+      continue
     fi
+    if ! is_userscript "$file"; then
+      continue
+    fi
+    local filename
+    filename=$(basename "$file")
+
+    found=1
+    # Check if the file is modified (has staged, unstaged, or untracked changes)
+    if [ -n "$(git status --porcelain "$file")" ]; then
+      echo "→ Processing script changes: $filename"
+      fix_urls "$file" "$GIST_ID"
+      bump_version "$file"
+      sync_name_version "$file"
+    else
+      # Still ensure the URLs are up to date and correct
+      fix_urls "$file" "$GIST_ID"
+      sync_name_version "$file"
+    fi
+  done
+
+  if [ "$found" -eq 0 ]; then
+    echo "No .user.js scripts found in the root directory!"
   fi
-
-  if [ -z "$(git status --porcelain)" ]; then
-    echo "· No changes: $name"
-    popd > /dev/null
-    return
-  fi
-
-  echo "→ Deploying: $name"
-  [ -n "$userscript" ] && is_userscript "$userscript" && bump_version "$userscript"
-  [ -n "$userscript" ] && is_userscript "$userscript" && sync_name_version "$userscript"
-
-  git add .
-  git commit -m "$MSG"
-  git push
-  echo "✓ Deployed: $name"
-
-  popd > /dev/null
 }
 
-# ── auto-discover: any direct subdir that contains a .git entry ───────────────
-found=0
-for dir in "$ROOT"/*/; do
-  [ -e "${dir}.git" ] || continue
-  name=$(basename "$dir")
-  deploy_gist "$name"
-  found=1
-done
+process_scripts
 
-[ "$found" -eq 0 ] && echo "No script repos found. Add one: git clone <gist-ssh-url> <folder-name>"
-
-# ── sync main repo (README, deploy.sh, hooks/, etc.) ─────────────────────────
-# Skipped when called from pre-push hook — the hook fires during the main push.
+# ── sync Gist (README, deploy.sh, hooks, etc.) ─────────────────────────────────
+# Skipped when called from pre-commit hook to avoid infinite recursion
 if [ "${HOOK_MODE}" != "--hook" ]; then
-  pushd "$ROOT" > /dev/null
   "$ROOT/generate-readme.sh"
   if [ -n "$(git status --porcelain)" ]; then
     git add .
     git commit -m "$MSG"
     git push
-    echo "✓ Deployed: main repo"
+    echo "✓ Deployed changes to private Gist"
   else
-    echo "· No changes: main repo"
+    echo "· No changes to deploy"
   fi
-  popd > /dev/null
 fi

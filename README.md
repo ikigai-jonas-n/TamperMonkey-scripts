@@ -28,7 +28,7 @@ Before installing any scripts, configure your browser:
 
 ## 📦 Available Scripts
 
-### 1. [7.83] IKG Attendance Pro (Autopilot & Alarms)
+### 1. [7.85] IKG Attendance Pro (Autopilot & Alarms)
 
 A complete overhaul of the [Attendance System](https://attendance.iki-utl.cc/). Includes a high-level analytics dashboard, auto-login, and cross-device alarms.
 
@@ -40,11 +40,11 @@ A complete overhaul of the [Attendance System](https://attendance.iki-utl.cc/). 
 * **💾 Persistent Cache:** Loads instantly using `localStorage`. No more waiting for the scan every time you refresh.
 
 
-👉 **[Install [7.83] IKG Attendance Pro (Autopilot & Alarms)](https://gist.githubusercontent.com/ikigai-jonas-n/e946d3a0431233b4e0f550d1bddf5a2b/raw/IKG-attendance.user.js)**
+👉 **[Install [7.85] IKG Attendance Pro (Autopilot & Alarms)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js)**
 
 ---
 
-### 2. [19.20] EnvDashboard Matrix History & Overview (Ultimate Live Engine)
+### 2. [19.22] EnvDashboard Matrix History & Overview (Ultimate Live Engine)
 
 Upgrades the [Env Dashboard](https://lab.iki-utl.cc/dashboard/env-dashboard/) with advanced deployment tracking, timeline overviews, and Jira-like filtering.
 
@@ -54,12 +54,12 @@ Upgrades the [Env Dashboard](https://lab.iki-utl.cc/dashboard/env-dashboard/) wi
 * **Alerts:** Floating red badge for deployments awaiting approval.
 
 
-👉 **[Install [19.20] EnvDashboard Matrix History & Overview (Ultimate Live Engine)](https://gist.githubusercontent.com/ikigai-jonas-n/6849ad29f84369608e4de77021fcad0f/raw/QA-env-dashboard.user.js)**
+👉 **[Install [19.22] EnvDashboard Matrix History & Overview (Ultimate Live Engine)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/QA-env-dashboard.user.js)**
 
 ---
 
 ## 🔄 Automatic Updates
-Scripts are hosted as Gists to enable seamless background syncing.
+Scripts are hosted in this Gist to enable seamless background syncing.
 * **Auto:** Tampermonkey checks for updates daily.
 * **Manual:** Go to Tampermonkey Dashboard -> Utilities -> **Check for userscript updates**.
 
@@ -69,25 +69,18 @@ Scripts are hosted as Gists to enable seamless background syncing.
 
 ### First-time setup (run once after cloning this repo)
 
-**Step 1 — Install the pre-commit hook:**
+**Install the pre-commit hook:**
 
 ```bash
-cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
-```
-
-**Step 2 — Clone the script repos** (they're not included in the main clone):
-
-```bash
-git clone git@gist.github.com:6849ad29f84369608e4de77021fcad0f.git QA-env-dashboard
-git clone git@gist.github.com:e946d3a0431233b4e0f550d1bddf5a2b.git IKG-attendance
+cp hooks-pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 ```
 
 ---
 
 ### Day-to-day workflow
 
-1. Edit the `.user.js` inside the relevant folder.
-2. From the **repo root**, commit and push:
+1. Edit any `.user.js` file directly in the root directory.
+2. Commit and push:
 
 ```bash
 git add .
@@ -96,61 +89,28 @@ git push
 ```
 
 The pre-commit hook fires automatically and:
-- Bumps `@version` in every modified script
-- Commits & pushes each script to its Gist
-- Regenerates this README (install links stay current)
-- Tampermonkey users receive the update within 24 hours
+- Bumps `@version` in every modified script.
+- Fixes `@updateURL` / `@downloadURL` tags in the scripts to point to raw files in this main Gist.
+- Regenerates this README (install links stay current).
+- Tampermonkey users receive the update within 24 hours.
 
 ---
 
 ### Adding a new TamperMonkey script
 
-**No config changes needed** — `deploy.sh` auto-discovers every subfolder that contains a `.git` directory.
+Adding a new script is incredibly simple now since everything is in the root directory of this Gist:
 
-#### Step 1 — Create a secret Gist on GitHub
-
-1. Go to **https://gist.github.com**
-2. Click **+** (top-right) → create a **secret** Gist
-3. Give it a filename ending in `.user.js` and paste your script content
-4. Click **Create secret gist**
-
-#### Step 2 — Get the SSH clone URL
-
-On your new Gist page:
-1. Click the **Embed** dropdown (top-right of the file)
-2. Switch to **Clone via SSH**
-3. Copy the URL — it looks like:
-
-```
-git@gist.github.com:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX.git
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                     32-character hex Gist ID
+#### Step 1 — Create the script file
+Create a new file in the root directory ending in `.user.js` (e.g. `my-awesome-script.user.js`) and paste your UserScript content. Ensure it starts with the standard header block:
+```javascript
+// ==UserScript==
+// @name         My Awesome Script
+// @version      1.0
+// ==/UserScript==
 ```
 
-#### Step 3 — Clone it into this repo
-
-From the **repo root**, choose a folder name that matches your script:
-
-```bash
-git clone git@gist.github.com:<GIST_ID>.git my-script-name
-#                              ^^^^^^^^  ← paste your actual 32-char ID here
-#                                                 ^^^^^^^^^^^^^^  ← any short name
-```
-
-> ⚠️ **Do not use `git submodule add`** — just `git clone`. This repo uses plain nested git repos, not submodules.
-
-#### Step 4 — Add your files
-
-Your cloned folder already has the `.user.js` (from the Gist). Optionally add a README:
-
-```
-my-script-name/
-├── my-script-name.user.js   ← already here from the clone
-└── README.md                ← optional: shown in "Available Scripts" above
-```
-
-`README.md` format (keep it concise — it's embedded directly into this README):
-
+#### Step 2 — Create the README file (optional)
+Create a markdown file in the root matching your script's base name ending in `-README.md` (e.g. `my-awesome-script-README.md`). Keep it concise:
 ```markdown
 One-line summary of what the script does.
 
@@ -159,18 +119,15 @@ One-line summary of what the script does.
 * Feature two
 ```
 
-#### Step 5 — Commit and push from the repo root
-
+#### Step 3 — Commit and push
 ```bash
 git add .
-git commit -m "add my-script-name"
+git commit -m "Add my-awesome-script"
 git push
 ```
 
-On commit, automatically:
-- `@updateURL` / `@downloadURL` inserted into the `.user.js`
-- Script pushed to its Gist
-- **This README regenerated** — new script appears in **Available Scripts** with its install link
-
-> Each script folder is an independent Gist repo. The pre-commit hook iterates all of them automatically.
+The pre-commit hook will automatically:
+- Inject correct `@updateURL` and `@downloadURL` tags pointing to this Gist.
+- Sync the `@name` version prefix.
+- Regenerate this `README.md` so your new script appears under the **Available Scripts** list with its install link!
 
