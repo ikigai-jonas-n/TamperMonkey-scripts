@@ -5,20 +5,16 @@ MSG=${1:-"chore: auto-update scripts"}
 
 echo "[acp] 🚀 Starting deployment pipeline..."
 
-# 1. Update scripts, fix URLs, and bump versions
-./deploy.sh "$MSG"
+# 1. Update scripts, fix URLs, bump versions, push to individual Gists, AND build the README
+./deploy.sh
 
-# 2. Regenerate your README
-./generate-readme.sh
-
-# 3. Stage everything (This ensures your .gif and .m4a files are tracked!)
+# 2. Stage everything
 git add .
 
-# 4. Commit the changes
-# 🎯 THE FIX: --no-verify prevents the pre-commit hook from causing a double-bump loop!
+# 3. Commit the changes (--no-verify avoids the pre-commit hook double-bump bug)
 git commit --no-verify -m "$MSG"
 
-# 5. Push to your new standard GitHub repository
+# 4. Push to standard GitHub Repo
 git push
 
 echo "[acp] ✅ All done!"

@@ -1,69 +1,43 @@
 #!/usr/bin/env bash
 # Usage: ./deploy.sh
-# Auto-discovers every userscript in the root, fixes TamperMonkey URLs, and bumps @version.
+# Intelligently syncs Tampermonkey scripts to their respective Gists and updates README.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+# ── Ensure GitHub CLI is installed ────────────────────────────────────────────
+if ! command -v gh &> /dev/null; then
+  echo "❌ Error: GitHub CLI ('gh') is required for surgical Gist deployment."
+  exit 1
+fi
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 is_userscript() {
   grep -q '// ==UserScript==' "$1" 2>/dev/null
 }
 
-# ── fix @updateURL / @downloadURL ─────────────────────────────────────────────
-fix_urls() {
+inject_urls() {
   local file="$1"
-  local filename raw_url
-  filename=$(basename "$file")
-
-  # 🎯 Restored exactly to your requested Gist URL!
-  raw_url="https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/${filename}"
-
-  local changed=false
+  local raw_url="$2"
 
   if grep -q '// @updateURL' "$file"; then
-    local current_update
-    current_update=$(grep -m1 '// @updateURL' "$file" | grep -oE 'https://[^ ]+' || true)
-    if [ "$current_update" != "$raw_url" ]; then
-      perl -i -pe "s|// \@updateURL(\s+).*|// \@updateURL\$1$raw_url|" "$file"
-      echo "  ✎ @updateURL  fixed → $raw_url"
-      changed=true
-    fi
+    perl -i -pe "s|// \@updateURL(\s+).*|// \@updateURL\$1$raw_url|" "$file"
   else
     perl -i -pe "s|(// \@version\s+\S+\n)|\$1// \@updateURL    $raw_url\n|" "$file"
-    echo "  + @updateURL  added → $raw_url"
-    changed=true
   fi
 
   if grep -q '// @downloadURL' "$file"; then
-    local current_download
-    current_download=$(grep -m1 '// @downloadURL' "$file" | grep -oE 'https://[^ ]+' || true)
-    if [ "$current_download" != "$raw_url" ]; then
-      perl -i -pe "s|// \@downloadURL(\s+).*|// \@downloadURL\$1$raw_url|" "$file"
-      echo "  ✎ @downloadURL fixed → $raw_url"
-      changed=true
-    fi
+    perl -i -pe "s|// \@downloadURL(\s+).*|// \@downloadURL\$1$raw_url|" "$file"
   else
     perl -i -pe "s|(// \@updateURL\s+\S+\n)|\$1// \@downloadURL  $raw_url\n|" "$file"
-    echo "  + @downloadURL added → $raw_url"
-    changed=true
-  fi
-
-  if [ "$changed" = false ]; then
-    echo "  · URLs already correct"
   fi
 }
 
-# ── version bumper ─────────────────────────────────────────────────────────────
 bump_version() {
   local file="$1"
   local current
   current=$(grep -m1 '// @version' "$file" | grep -oE '[0-9]+(\.[0-9]+)+' || true)
-
-  if [ -z "$current" ]; then
-    echo "  ⚠  No @version found in $(basename "$file"), skipping bump"
-    return
-  fi
+  [ -z "$current" ] && return
 
   local prefix last new_version
   prefix=$(echo "$current" | rev | cut -d. -f2- | rev)
@@ -74,7 +48,6 @@ bump_version() {
   echo "  ↑ @version: $current → $new_version"
 }
 
-# ── name version prefix sync ─────────────────────────────────────────────────
 sync_name_version() {
   local file="$1"
   local version name clean new_name
@@ -91,26 +64,115 @@ sync_name_version() {
   fi
 }
 
-# ── process all scripts ────────────────────────────────────────────────────────
+# ── Core File Processor ───────────────────────────────────────────────────────
+process_file() {
+  local file="$1"
+  local filename
+  filename=$(basename "$file")
+
+  echo "→ Processing script: $filename"
+  
+  bump_version "$file"
+  sync_name_version "$file"
+
+  # Intelligently extract the Gist ID from the script's own header
+  local gist_id
+  gist_id=$(grep -m1 -oE 'gist\.githubusercontent\.com/[^/]+/[a-f0-9]+' "$file" | cut -d/ -f3 || true)
+  
+  if [ -n "$gist_id" ]; then
+    local username
+    username=$(grep -m1 -oE 'gist\.githubusercontent\.com/[^/]+/' "$file" | cut -d/ -f2 || echo "ikigai-jonas-n")
+    local raw_url="https://gist.githubusercontent.com/${username}/${gist_id}/raw/${filename}"
+    
+    inject_urls "$file" "$raw_url"
+    
+    echo "  ☁️  Pushing to existing Gist ($gist_id)..."
+    gh gist edit "$gist_id" "$file" > /dev/null
+    echo "  ✓  Gist updated."
+  else
+    echo "  ☁️  No Gist URL found. Creating new Gist automatically..."
+    local gist_url
+    gist_url=$(gh gist create "$file" --public)
+    gist_id=$(echo "$gist_url" | grep -oE '[a-f0-9]+$')
+    
+    local username
+    username=$(gh api user -q .login)
+    local raw_url="https://gist.githubusercontent.com/${username}/${gist_id}/raw/${filename}"
+    
+    inject_urls "$file" "$raw_url"
+    
+    echo "  ☁️  Updating Gist with new self-referencing URLs..."
+    gh gist edit "$gist_id" "$file" > /dev/null
+    echo "  ✓  New Gist created & configured."
+  fi
+}
+
+# ── README GENERATOR ──────────────────────────────────────────────────────────
+regenerate_readme() {
+  echo "→ Regenerating README.md..."
+  local index=1
+  local tmp_body="${ROOT}/.readme_body.tmp"
+  > "$tmp_body"
+
+  for userscript in "$ROOT"/*.js; do
+    [ -f "$userscript" ] || continue
+    is_userscript "$userscript" || continue
+
+    local name install_url filename readme_file
+    filename=$(basename "$userscript")
+    readme_file="${ROOT}/${filename%.*}-README.md"
+
+    name=$(grep -m1 '// @name' "$userscript" | sed 's|.*// @name[[:space:]]*||;s/[[:space:]]*$//')
+    install_url=$(grep -m1 '// @downloadURL' "$userscript" | grep -oE 'https://[^ ]+' 2>/dev/null \
+               || grep -m1 '// @updateURL'   "$userscript" | grep -oE 'https://[^ ]+' 2>/dev/null \
+               || true)
+
+    printf '### %d. %s\n\n' "$index" "$name" >> "$tmp_body"
+
+    if [ -f "$readme_file" ]; then
+      cat "$readme_file" >> "$tmp_body"
+    else
+      local desc
+      desc=$(grep -m1 '// @description' "$userscript" | sed 's|.*// @description[[:space:]]*||;s/[[:space:]]*$//')
+      printf '%s\n' "$desc" >> "$tmp_body"
+    fi
+    printf '\n\n' >> "$tmp_body"
+
+    if [ -n "$install_url" ]; then
+      printf '👉 **[Install %s](%s)**\n' "$name" "$install_url" >> "$tmp_body"
+    else
+      printf '> ⚠️  Install URL not set yet.\n' >> "$tmp_body"
+    fi
+
+    printf '\n---\n\n' >> "$tmp_body"
+    index=$((index + 1))
+  done
+
+  {
+    cat "$ROOT/README-header.md"
+    cat "$tmp_body"
+    cat "$ROOT/README-footer.md"
+    printf '\n'
+  } > "$ROOT/README.md"
+
+  rm -f "$tmp_body"
+  echo "  · README.md regenerated ($((index - 1)) scripts listed)"
+}
+
+# ── Main Loop ─────────────────────────────────────────────────────────────────
 found=0
-for file in "$ROOT"/*.user.js; do
+for file in "$ROOT"/*.js; do
   [ ! -f "$file" ] && continue
   is_userscript "$file" || continue
-  
-  filename=$(basename "$file")
   found=1
   
   if [ -n "$(git status --porcelain "$file")" ]; then
-    echo "→ Processing script changes: $filename"
-    fix_urls "$file"
-    bump_version "$file"
-    sync_name_version "$file"
-  else
-    fix_urls "$file"
-    sync_name_version "$file"
+    process_file "$file"
   fi
 done
 
 if [ "$found" -eq 0 ]; then
-  echo "No .user.js scripts found in the root directory!"
+  echo "No UserScripts found in the root directory!"
+else
+  regenerate_readme
 fi
