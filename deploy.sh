@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: ./deploy.sh
-# Intelligently syncs Tampermonkey scripts to their respective Gists and updates README.
+# Intelligently syncs modified Tampermonkey scripts to their respective Gists and updates README.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -70,12 +70,13 @@ process_file() {
   local filename
   filename=$(basename "$file")
 
-  echo "→ Processing script: $filename"
+  echo "→ Processing script changes: $filename"
   
+  # 🎯 Bumps and metadata synchronization only fire for modified items
   bump_version "$file"
   sync_name_version "$file"
 
-  # Intelligently extract the Gist ID from the script's own header
+  # Extract the Gist ID directly from the script's own update header
   local gist_id
   gist_id=$(grep -m1 -oE 'gist\.githubusercontent\.com/[^/]+/[a-f0-9]+' "$file" | cut -d/ -f3 || true)
   
@@ -86,11 +87,11 @@ process_file() {
     
     inject_urls "$file" "$raw_url"
     
-    echo "  ☁️  Pushing to existing Gist ($gist_id)..."
+    echo "  ☁️  Surgically pushing script modifications directly to Gist ($gist_id)..."
     gh gist edit "$gist_id" "$file" > /dev/null
-    echo "  ✓  Gist updated."
+    echo "  ✓ Gist synchronization complete."
   else
-    echo "  ☁️  No Gist URL found. Creating new Gist automatically..."
+    echo "  ☁️  No update URL found. Creating a fresh tracking Gist on your profile..."
     local gist_url
     gist_url=$(gh gist create "$file" --public)
     gist_id=$(echo "$gist_url" | grep -oE '[a-f0-9]+$')
@@ -101,13 +102,13 @@ process_file() {
     
     inject_urls "$file" "$raw_url"
     
-    echo "  ☁️  Updating Gist with new self-referencing URLs..."
+    echo "  ☁️  Syncing internal update targets back to tracking Gist..."
     gh gist edit "$gist_id" "$file" > /dev/null
-    echo "  ✓  New Gist created & configured."
+    echo "  ✓ Fresh tracking channels configured."
   fi
 }
 
-# ── README GENERATOR ──────────────────────────────────────────────────────────
+# ── README Generator Integration ──────────────────────────────────────────────
 regenerate_readme() {
   echo "→ Regenerating README.md..."
   local index=1
@@ -120,7 +121,7 @@ regenerate_readme() {
 
     local name install_url filename readme_file
     filename=$(basename "$userscript")
-    readme_file="${ROOT}/${filename%.*}-README.md"
+    readme_file="${ROOT}/${filename%.js}-README.md"
 
     name=$(grep -m1 '// @name' "$userscript" | sed 's|.*// @name[[:space:]]*||;s/[[:space:]]*$//')
     install_url=$(grep -m1 '// @downloadURL' "$userscript" | grep -oE 'https://[^ ]+' 2>/dev/null \
@@ -159,20 +160,24 @@ regenerate_readme() {
   echo "  · README.md regenerated ($((index - 1)) scripts listed)"
 }
 
-# ── Main Loop ─────────────────────────────────────────────────────────────────
+# ── Main Run Loop ─────────────────────────────────────────────────────────────
 found=0
 for file in "$ROOT"/*.js; do
   [ ! -f "$file" ] && continue
   is_userscript "$file" || continue
   found=1
   
+  # 🎯 Check status against git tracking to strictly execute only on active modifications
   if [ -n "$(git status --porcelain "$file")" ]; then
     process_file "$file"
+  else
+    # Maintain existing names and url tags without running dynamic versions increments
+    sync_name_version "$file"
   fi
 done
 
 if [ "$found" -eq 0 ]; then
-  echo "No UserScripts found in the root directory!"
+  echo "No active user scripts discovered in directory!"
 else
   regenerate_readme
 fi

@@ -1,7 +1,7 @@
     // ==UserScript==
-    // @name         [7.89] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.90] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.89
+    // @version      7.90
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -71,7 +71,7 @@
                 if (targetEmail) {
                     const clickable = targetEmail.closest('[role="link"]');
                     if (clickable) {
-                        IkgLog.debug("Target email found. Simulating click.");
+                        IkgLog.debug("Target email found. Simulatin' click.");
                         GM_setValue('IKG_SSO_TRIGGERED', 0); // Clear the flag instantly
                         clickable.click();
                         return true;
