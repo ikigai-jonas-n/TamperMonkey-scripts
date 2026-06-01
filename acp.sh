@@ -5,19 +5,20 @@ MSG=${1:-"chore: auto-update scripts"}
 
 echo "[acp] 🚀 Starting deployment pipeline..."
 
-# 1. Safely deploy submodules (Commits the Gists without environment variable bleed)
+# 1. Update scripts, fix URLs, and bump versions
 ./deploy.sh "$MSG"
 
 # 2. Regenerate your README
 ./generate-readme.sh
 
-# 3. Stage the parent repo (This now successfully grabs the updated README and submodule hashes!)
+# 3. Stage everything (This ensures your .gif and .m4a files are tracked!)
 git add .
 
-# 4. Commit the parent
-git commit -m "$MSG"
+# 4. Commit the changes
+# 🎯 THE FIX: --no-verify prevents the pre-commit hook from causing a double-bump loop!
+git commit --no-verify -m "$MSG"
 
-# 5. Push the parent
+# 5. Push to your new standard GitHub repository
 git push
 
 echo "[acp] ✅ All done!"
