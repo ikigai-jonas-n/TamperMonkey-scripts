@@ -1,7 +1,7 @@
     // ==UserScript==
-    // @name         [7.87] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.89] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.87
+    // @version      7.89
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -117,12 +117,20 @@
             const huntDeelToken = setInterval(() => {
                 const token = localStorage.getItem('token') || sessionStorage.getItem('token');
                 if (token) {
+                    try {
+                        // 🎯 NEW: Decode the JWT to check if it's a dead "ghost" token
+                        const payload = JSON.parse(atob(token.split('.')[1]));
+                        if (payload.exp && (payload.exp * 1000 < Date.now())) {
+                            IkgLog.warn("Found a token, but it's expired. Waiting for Deel to refresh it...");
+                            return; // Skip this tick and wait
+                        }
+                    } catch (e) { /* Not a standard JWT, proceed anyway */ }
+
                     GM_setValue('IKG_DEEL_TOKEN', token);
-                    IkgLog.info("✅ Deel Token secured. Handing back to Attendance App and closing tab...");
+                    IkgLog.info("✅ FRESH Deel Token secured. Handing back to Attendance App...");
                     clearInterval(huntDeelToken);
                     setTimeout(() => { window.close(); }, 500); 
                 } else {
-                    // If no token, proactively look for the login button
                     attemptDeelLogin();
                 }
             }, 500);
@@ -911,104 +919,110 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             if (!token) return null;
 
             const fetchDeel = (path) => new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    method: "GET", url: `https://ikg.deel.team/deelapi/${path}`,
-                    headers: {
-                        "Accept": "application/json, text/plain, */*",
-                        "x-auth-token": token,
-                        "Authorization": `Bearer ${token}`, // 🎯 REQUIRED NEW PATCH
-                        "x-api-version": "2",
-                        "x-app-host": "ikg.deel.team"
-                    },
-                    onload: (res) => {
-                        if (res.status === 401 || res.status === 403) reject({ status: 401 });
-                        else if (res.status === 200) resolve(JSON.parse(res.responseText));
-                        else reject({ status: res.status });
-                    },
-                    onerror: (err) => reject(err)
-                });
+            GM_xmlhttpRequest({
+                method: "GET", 
+                url: `https://ikg.deel.team/deelapi/${path}`,
+                withCredentials: true, // 🎯 CRITICAL: Passes Deel's session cookies cross-origin
+                headers: {
+                    "Accept": "application/json, text/plain, */*",
+                    "x-auth-token": token,
+                    "x-api-version": "2",
+                    "x-app-host": "ikg.deel.team",
+                    "x-platform": "web",         // 🎯 Spoofs Deel's frontend client
+                    "x-owner": "timeoff-fe",     // 🎯 Required for this specific API route
+                    "Origin": "https://ikg.deel.team",
+                    "Referer": "https://ikg.deel.team/"
+                },
+                onload: (res) => {
+                    if (res.status === 401 || res.status === 403) reject({ status: res.status });
+                    else if (res.status === 200) resolve(JSON.parse(res.responseText));
+                    else reject({ status: res.status });
+                },
+                onerror: (err) => reject(err)
             });
+        });
 
             try {
-                IkgLog.info("Fetching Deel PTO Data natively...");
-                let profileId = GM_getValue('IKG_DEEL_PROFILE_ID', null);
-                let entData = null;
+            IkgLog.info("Fetching Deel PTO Data natively...");
+            let profileId = GM_getValue('IKG_DEEL_PROFILE_ID', null);
+            let entData = null;
 
-                if (!profileId) {
-                    IkgLog.info("Resolving Time-Off Profile UUID...");
-                    const timeOffsMe = await fetchDeel('time_offs/me');
-                    const jsonStr = JSON.stringify(timeOffsMe);
-                    const allUuids = [...new Set(jsonStr.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi) || [])];
-
-                    for (const uuid of allUuids) {
-                        try {
-                            entData = await fetchDeel(`time_offs/profile/${uuid}/entitlements`);
-                            profileId = uuid;
-                            GM_setValue('IKG_DEEL_PROFILE_ID', profileId);
-                            IkgLog.info(`✅ Successfully resolved Time-Off Profile UUID: ${profileId}`);
-                            break;
-                        } catch (e) { }
-                    }
-                    if (!profileId || !entData) throw new Error("Could not extract a valid Time-Off UUID from /time_offs/me.");
-                } else {
-                    entData = await fetchDeel(`time_offs/profile/${profileId}/entitlements`);
-                }
-
-                const toData = await fetchDeel(`time_offs/profile/${profileId}/time_off?orderType=DESC&lightweight=true`);
-                const ptoCalendar = {}; const syncLog = [];
-
-                if (entData && entData.entitlements) {
-                    entData.entitlements.forEach(ent => {
-                        const name = ent.Policy?.name || "Leave";
-                        const unit = ent.Policy?.entitlementUnit || "HOUR";
-                        const adj = parseFloat(ent.balanceAdjusted) || 0;
-                        if (adj !== 0) syncLog.push(`[${name}] Adj: ${adj} ${unit}s`);
-                    });
-                }
-
-                if (Array.isArray(toData)) {
-                    toData.forEach(req => {
-                        if (req.status !== "USED" && req.status !== "APPROVED") return;
-
-                        const startStr = req.startDate.substring(0, 10);
-                        const endStr = req.endDate.substring(0, 10);
-                        const typeName = req.timeOffType?.name || "Leave";
-                        const unit = req.timeOffType?.policy?.entitlementUnit || "BUSINESS_DAY";
-                        const totalAmt = parseFloat(req.amount) || 0;
-
-                        let curr = new Date(startStr + "T00:00:00");
-                        const end = new Date(endStr + "T00:00:00");
-                        const daySpan = Math.round((end - curr) / 86400000) + 1;
-                        const dailyAmt = totalAmt / daySpan;
-
-                        while (curr <= end) {
-                            const pad = n => String(n).padStart(2, '0');
-                            const dStr = `${curr.getFullYear()}-${pad(curr.getMonth() + 1)}-${pad(curr.getDate())}`;
-
-                            // 🎯 CRITICAL FIX: Handle CALENDAR_DAY alongside BUSINESS_DAY
-                            const isFullDay = (unit === "BUSINESS_DAY" || unit === "CALENDAR_DAY");
-
-                            ptoCalendar[dStr] = {
-                                isFullDay: isFullDay,
-                                type: typeName,
-                                hours: isFullDay ? dailyAmt * 8 : dailyAmt
-                            };
-                            curr.setDate(curr.getDate() + 1);
-                        }
-                    });
-                }
-                return { ptoCalendar, syncLog };
-
-            } catch (e) {
-                if (e.status === 401 && !isRetry) {
-                    IkgLog.warn("Deel Token expired. Clearing and retrying...");
-                    GM_setValue('IKG_DEEL_TOKEN', null);
-                    GM_setValue('IKG_DEEL_PROFILE_ID', null);
-                    return await fetchAndParseDeelPTO(true);
-                }
-                IkgLog.error("Deel PTO Sync Failed:", e);
-                return null;
+            if (!profileId) {
+                IkgLog.info("Resolving Time-Off Profile UUID...");
+                const timeOffsMe = await fetchDeel('time_offs/me');
+                
+                // 🎯 THE FIX: Directly grab the ID from the JSON instead of guessing with Regex!
+                profileId = timeOffsMe?.profile?.id;
+                
+                if (!profileId) throw new Error("Could not find profile.id in /time_offs/me response.");
+                
+                GM_setValue('IKG_DEEL_PROFILE_ID', profileId);
+                IkgLog.info(`✅ Successfully resolved Time-Off Profile UUID: ${profileId}`);
             }
+
+            // 🎯 MAKE ENTITLEMENTS SAFE: If Deel removed this endpoint, we catch the error 
+            // and continue so it doesn't block the actual PTO days from syncing.
+            try {
+                entData = await fetchDeel(`time_offs/profile/${profileId}/entitlements`);
+            } catch (entErr) {
+                IkgLog.warn("Could not fetch entitlements (Deel may have changed this API), skipping...", entErr);
+            }
+
+            const toData = await fetchDeel(`time_offs/profile/${profileId}/time_off?orderType=DESC&lightweight=true`);
+            const ptoCalendar = {}; const syncLog = [];
+
+            if (entData && entData.entitlements) {
+                entData.entitlements.forEach(ent => {
+                    const name = ent.Policy?.name || "Leave";
+                    const unit = ent.Policy?.entitlementUnit || "HOUR";
+                    const adj = parseFloat(ent.balanceAdjusted) || 0;
+                    if (adj !== 0) syncLog.push(`[${name}] Adj: ${adj} ${unit}s`);
+                });
+            }
+
+            if (Array.isArray(toData)) {
+                toData.forEach(req => {
+                    if (req.status !== "USED" && req.status !== "APPROVED") return;
+
+                    const startStr = req.startDate.substring(0, 10);
+                    const endStr = req.endDate.substring(0, 10);
+                    const typeName = req.timeOffType?.name || "Leave";
+                    const unit = req.timeOffType?.policy?.entitlementUnit || "BUSINESS_DAY";
+                    const totalAmt = parseFloat(req.amount) || 0;
+
+                    let curr = new Date(startStr + "T00:00:00");
+                    const end = new Date(endStr + "T00:00:00");
+                    const daySpan = Math.round((end - curr) / 86400000) + 1;
+                    const dailyAmt = totalAmt / daySpan;
+
+                    while (curr <= end) {
+                        const pad = n => String(n).padStart(2, '0');
+                        const dStr = `${curr.getFullYear()}-${pad(curr.getMonth() + 1)}-${pad(curr.getDate())}`;
+
+                        const isFullDay = (unit === "BUSINESS_DAY" || unit === "CALENDAR_DAY");
+
+                        ptoCalendar[dStr] = {
+                            isFullDay: isFullDay,
+                            type: typeName,
+                            hours: isFullDay ? dailyAmt * 8 : dailyAmt
+                        };
+                        curr.setDate(curr.getDate() + 1);
+                    }
+                });
+            }
+            return { ptoCalendar, syncLog };
+
+        } catch (e) {
+    if (e.status === 401 && !isRetry) {
+        IkgLog.warn("Deel Token expired. Clearing and retrying...");
+        GM_setValue('IKG_DEEL_TOKEN', null);
+        GM_setValue('IKG_DEEL_PROFILE_ID', null);
+        return await fetchAndParseDeelPTO(true);
+    }
+    // 🎯 NEW: Better error visibility
+    IkgLog.error("Deel PTO Sync Failed:", e.status ? `HTTP Status ${e.status}` : (e.message || JSON.stringify(e)));
+    return null;
+}
         };
 
 
@@ -1297,29 +1311,41 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
                     const item = dataItems[index];
                     const cleanPtoLabel = item.ptoType ? item.ptoType.split(' - ')[0] : 'PTO';
                     
-                    // 📊 MULTI-LINE CHART HOVER CARD (UNIFIED)
-                    let text = `<div style="color:var(--text-muted); font-size:11px; margin-bottom:5px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase;">${labels[index]}</div>`;
+                    // 📊 MINIMALIST CHART HOVER CARD (Emoji Only)
+                    let text = `<div style="color:var(--text-muted); font-size:11px; margin-bottom:8px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase;">${labels[index]}</div>`;
                     
                     const totalHrs = item.val + item.pto;
                     const totalColor = totalHrs >= 9.0 ? 'var(--success)' : 'var(--danger)';
 
+                    text += `<div style="display: grid; grid-template-columns: 20px 1fr; gap: 4px 8px; align-items: center; font-size: 13px;">`;
+
                     if (item.val > 0) {
-                        text += `<div style="color:var(--text-main); margin-bottom: 2px;">⏱️ Worked: <b>${item.val.toFixed(2)}h</b></div>`;
+                        text += `
+                            <div style="text-align:center; font-size:14px;" title="Worked">⏱️</div>
+                            <div style="color:var(--text-main);"><b>${item.val.toFixed(2)}h</b></div>
+                        `;
                     }
-                    if (item.pto > 0) {
-                        text += `<div style="color:var(--pto); margin-bottom: 2px;">🏝️ PTO: <b>${item.pto.toFixed(2)}h</b> <span style="font-size:10px; opacity:0.75;">(${cleanPtoLabel})</span></div>`;
+                    if (item.pto > 0 && !item.isFullPTO) {
+                        text += `
+                            <div style="text-align:center; font-size:14px;" title="PTO">🏝️</div>
+                            <div style="color:var(--pto);"><b>${item.pto.toFixed(2)}h</b> <span style="font-size:10px; opacity:0.75;">(${cleanPtoLabel})</span></div>
+                        `;
                     }
 
-                    // 🎯 ALWAYS show divider and color-coded total if there is tracked activity
                     if (totalHrs > 0) {
-                        text += `<div style="margin:6px 0; border-top:1px dashed var(--border);"></div>`;
-                        text += `<div style="color:${totalColor}; font-weight:700;">Total: ${totalHrs.toFixed(2)}h</div>`;
+                        text += `<div style="grid-column: 1 / -1; margin: 4px 0; border-top: 1px dashed var(--border);"></div>`;
+                        text += `
+                            <div style="text-align:center; font-size:14px;" title="Total">📊</div>
+                            <div style="color:${totalColor}; font-weight:700;">${totalHrs.toFixed(2)}h</div>
+                        `;
                     } else if (item.isFullPTO) {
-                        text += `<div style="color:var(--pto); font-weight:700;">🏝️ Full Day PTO</div>`;
+                        text += `<div style="grid-column: 1 / -1; color:var(--pto); font-weight:700; margin-top:4px;">🏝️ Full Day PTO</div>`;
                     }
+
+                    text += `</div>`; // Close grid
 
                     if (item.isSpoofed) {
-                        text += `<div style="color:var(--warn); font-size:10px; margin-top:5px; font-weight:600;">⚠️ Manual Override Active</div>`;
+                        text += `<div style="color:var(--warn); font-size:10px; margin-top:8px; font-weight:600;">⚠️ Manual Override Active</div>`;
                     }
 
                     tooltip.innerHTML = text;
@@ -1515,14 +1541,21 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             .ikg-canvas-container { flex: 1; position: relative; width: 100%; height: 100%; min-height: 0; }
             .ikg-canvas-container canvas { width: 100% !important; height: 100% !important; display: block; }
             
-            #ikg-heatmap-wrapper { display: none; height: 100%; width: 100%; flex-direction: column; gap: 4px; overflow-x: auto; padding-bottom: 8px;}
+            #ikg-heatmap-wrapper { display: none; height: 100%; width: 100%; flex-direction: column; gap: 4px; overflow-x: hidden; padding-bottom: 8px; align-items: center;}
+            #ikg-heatmap-months { position: relative; height: 16px; margin-left: 36px; width: 100%; max-width: 100%; }
+            .hm-layout { display: flex; flex: 1; min-height: 0; gap: 8px; width: 100%; max-width: 100%; justify-content: center; }
+            .hm-y-axis { display: grid; grid-template-rows: repeat(7, 1fr); gap: 4px; font-size: 10px; color: var(--text-muted); width: 28px; padding-right: 6px; text-align: right; }
+            #ikg-heatmap-grid { display: grid; grid-template-rows: repeat(7, 1fr); grid-auto-flow: column; gap: 4px; flex: 1; align-content: stretch; width: 100%; justify-content: center; }
+            
+            .ikg-heat-sq { 
+                position: relative;
+                border-radius: 4px; width: 100%; height: 100%; min-width: 0; min-height: 0; 
+                cursor: pointer; transition: transform 0.1s; display: flex; align-items: center; justify-content: center;
+                font-size: clamp(8px, 1.2vw, 12px); font-weight: 700; color: rgba(255,255,255,0.95); user-select: none;
+                overflow: hidden;
+            }
             #ikg-heatmap-wrapper::-webkit-scrollbar { height: 6px; }
             #ikg-heatmap-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-            #ikg-heatmap-months { position: relative; height: 16px; margin-left: 36px; min-width: max-content; }
-            .hm-layout { display: flex; flex: 1; min-height: 0; gap: 8px; min-width: max-content; }
-            .hm-y-axis { display: grid; grid-template-rows: repeat(7, 1fr); gap: 4px; font-size: 10px; color: var(--text-muted); width: 28px; padding-right: 6px; text-align: right; }
-            .hm-y-axis div { display: flex; align-items: center; justify-content: flex-end; }
-            #ikg-heatmap-grid { display: grid; grid-template-rows: repeat(7, 1fr); grid-auto-flow: column; gap: 4px; flex: 1; align-content: stretch; }
             
             .ikg-heat-sq { 
                 position: relative;
@@ -2923,30 +2956,43 @@ heatmapGrid.innerHTML += `
                         const monthNames = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
                         const formattedDateLabel = `${monthNames[dObj.getMonth()]} ${dObj.getDate()}`;
 
-                        let text = `<div style="color:var(--text-muted); font-size:11px; margin-bottom:5px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase;">${formattedDateLabel}</div>`;
+                        // 🎯 MINIMALIST GRID HOVER CARD (Emoji Only)
+                        let text = `<div style="color:var(--text-muted); font-size:11px; margin-bottom:8px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase;">${formattedDateLabel}</div>`;
 
                         const totalHrs = evalDay.actualHrs + evalDay.ptoHrs;
                         const totalColor = totalHrs >= 9.0 ? 'var(--success)' : 'var(--danger)';
 
+                        text += `<div style="display: grid; grid-template-columns: 20px 1fr; gap: 4px 8px; align-items: center; font-size: 13px;">`;
+
                         if (evalDay.actualHrs > 0) {
-                            text += `<div style="color:var(--text-main); margin-bottom: 2px;">⏱️ Worked: <b>${evalDay.actualHrs.toFixed(2)}h</b></div>`;
+                            text += `
+                                <div style="text-align:center; font-size:14px;" title="Worked">⏱️</div>
+                                <div style="color:var(--text-main);"><b>${evalDay.actualHrs.toFixed(2)}h</b></div>
+                            `;
                         }
                         if (evalDay.ptoHrs > 0 && !evalDay.isFullPTO) {
-                            text += `<div style="color:var(--pto); margin-bottom: 2px;">🏝️ PTO: <b>${evalDay.ptoHrs.toFixed(2)}h</b> <span style="font-size:10px; opacity:0.75;">(${cleanPtoLabel})</span></div>`;
+                            text += `
+                                <div style="text-align:center; font-size:14px;" title="PTO">🏝️</div>
+                                <div style="color:var(--pto);"><b>${evalDay.ptoHrs.toFixed(2)}h</b> <span style="font-size:10px; opacity:0.75;">(${cleanPtoLabel})</span></div>
+                            `;
                         }
 
-                        // 🎯 PARITY MATCH: Divider + color-coded absolute total line
                         if (totalHrs > 0) {
-                            text += `<div style="margin:6px 0; border-top:1px dashed var(--border);"></div>`;
-                            text += `<div style="color:${totalColor}; font-weight:700;">Total: ${totalHrs.toFixed(2)}h</div>`;
+                            text += `<div style="grid-column: 1 / -1; margin: 4px 0; border-top: 1px dashed var(--border);"></div>`;
+                            text += `
+                                <div style="text-align:center; font-size:14px;" title="Total">📊</div>
+                                <div style="color:${totalColor}; font-weight:700;">${totalHrs.toFixed(2)}h</div>
+                            `;
                         } else if (evalDay.isFullPTO) {
-                            text += `<div style="color:var(--pto); font-weight:700;">🏝️ Full Day PTO</div>`;
+                            text += `<div style="grid-column: 1 / -1; color:var(--pto); font-weight:700; margin-top:4px;">🏝️ Full Day PTO</div>`;
                         } else if (evalDay.status === 'pending') {
-                            text += `<div style="color:var(--warn); font-weight: 600;">⌛ Shift Pending Checkout</div>`;
+                            text += `<div style="grid-column: 1 / -1; color:var(--warn); font-weight: 600; margin-top:4px;">⌛ Pending</div>`;
                         }
+
+                        text += `</div>`; // Close grid
 
                         if (evalDay.isSpoofed) {
-                            text += `<div style="color:var(--warn); font-size:10px; margin-top:5px; font-weight:600;">⚠️ Manual Override Active</div>`;
+                            text += `<div style="color:var(--warn); font-size:10px; margin-top:8px; font-weight:600;">⚠️ Manual Override Active</div>`;
                         }
 
                         if (!gridTooltip) {

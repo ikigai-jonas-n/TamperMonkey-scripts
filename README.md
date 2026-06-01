@@ -28,7 +28,7 @@ Before installing any scripts, configure your browser:
 
 ## 📦 Available Scripts
 
-### 1. [7.87] IKG Attendance Pro (Autopilot & Alarms)
+### 1. [7.89] IKG Attendance Pro (Autopilot & Alarms)
 
 A complete overhaul of the [Attendance System](https://attendance.iki-utl.cc/). Includes a high-level analytics dashboard, auto-login, and cross-device alarms.
 
@@ -40,7 +40,7 @@ A complete overhaul of the [Attendance System](https://attendance.iki-utl.cc/). 
 * **💾 Persistent Cache:** Loads instantly using `localStorage`. No more waiting for the scan every time you refresh.
 
 
-👉 **[Install [7.87] IKG Attendance Pro (Autopilot & Alarms)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js)**
+👉 **[Install [7.89] IKG Attendance Pro (Autopilot & Alarms)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js)**
 
 ---
 
