@@ -169,16 +169,16 @@ process_scripts() {
 
 process_scripts
 
-# ── sync Gist (README, deploy.sh, hooks, etc.) ─────────────────────────────────
-# Skipped when called from pre-commit hook to avoid infinite recursion
-if [ "${HOOK_MODE}" != "--hook" ]; then
-  "$ROOT/generate-readme.sh"
-  if [ -n "$(git status --porcelain)" ]; then
-    git add .
-    git commit -m "$MSG"
-    git push
-    echo "✓ Deployed changes to private Gist"
-  else
-    echo "· No changes to deploy"
-  fi
-fi
+# # ── sync Gist (README, deploy.sh, hooks, etc.) ─────────────────────────────────
+# # Skipped when called from pre-commit hook to avoid infinite recursion
+# if [ "${HOOK_MODE}" != "--hook" ]; then
+#   "$ROOT/generate-readme.sh"
+#   if [ -n "$(git status --porcelain)" ]; then
+#     git add .
+#     git commit -m "$MSG"
+#     git push
+#     echo "✓ Deployed changes to private Gist"
+#   else
+#     echo "· No changes to deploy"
+#   fi
+# fi
