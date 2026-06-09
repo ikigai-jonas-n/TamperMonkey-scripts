@@ -1,7 +1,7 @@
     // ==UserScript==
-    // @name         [7.91] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.92] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.91
+    // @version      7.92
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -927,7 +927,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
                     }
                 });
 
-                // Fallback timeout in case the Deel tab gets stuck
+                // 🎯 CRITICAL FIX: Increased timeout to 60 seconds to allow full Google SSO Redirect chain
                 setTimeout(() => {
                     GM_removeValueChangeListener(listenerId);
                     if (!GM_getValue('IKG_DEEL_TOKEN', null)) {
@@ -935,14 +935,14 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
                         updateHeaderStatus("❌ Deel Auth Failed. Log in manually!", "var(--danger)");
                         
                         // 🎯 LOUD WARNING: Forces the user to fix their broken session
-                        if (confirm("Attendance Pro:\n\nAuto-Login to Deel failed. Please open Deel, log in manually once, then return here to sync.\n\nOpen Deel now?")) {
+                        if (confirm("Attendance Pro:\n\nAuto-Login to Deel failed or took too long.\nPlease open Deel, log in manually once, then return here to sync.\n\nOpen Deel now?")) {
                             window.open('https://ikg.deel.team/', '_blank');
                         }
 
                         try { deelTab.close(); } catch(e) {} // Force close the stuck background tab
                         resolve(null);
                     }
-                }, 15000);
+                }, 60000); // 60 seconds instead of 15!
             });
         };
 
