@@ -1,7 +1,7 @@
     // ==UserScript==
-    // @name         [7.90] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.91] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.90
+    // @version      7.91
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -98,15 +98,37 @@
         // ==========================================
         if (location.hostname === 'ikg.deel.team') {
             IkgLog.info("Deel Domain Detected. Hunting for Auth Token...");
+            let hasClickedDeelLogin = false;
 
+            // 🎯 Helper: Safely checks and sends the token if valid
+            const checkAndSendToken = () => {
+                const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+                if (token) {
+                    try {
+                        const payload = JSON.parse(atob(token.split('.')[1]));
+                        if (payload.exp && (payload.exp * 1000 < Date.now())) {
+                            return false; // Token is expired, wait for Deel to refresh it
+                        }
+                    } catch (e) { /* Not a standard JWT, proceed anyway */ }
+
+                    GM_setValue('IKG_DEEL_TOKEN', token);
+                    IkgLog.info("✅ FRESH Deel Token secured. Handing back to Attendance App...");
+                    setTimeout(() => { window.close(); }, 500); 
+                    return true;
+                }
+                return false;
+            };
+
+            // 🎯 Helper: Hunts for the login button
             const attemptDeelLogin = () => {
+                if (hasClickedDeelLogin) return false;
                 const elements = Array.from(document.querySelectorAll('span, button, a'));
                 
-                // 🎯 CRITICAL FIX: Broaden the search text to survive Deel UI changes
                 const loginBtn = elements.find(el => el.innerText && (el.innerText.includes('IKG Google Workspace') || el.innerText.includes('Log in with IKG')));
                 
                 if (loginBtn && loginBtn.offsetParent !== null) {
-                    IkgLog.info("Deel login button found. Engaging Autopilot...");
+                    hasClickedDeelLogin = true;
+                    IkgLog.info("Deel login button found. Engaging Autopilot and waiting for Google...");
                     GM_setValue('IKG_SSO_TRIGGERED', Date.now()); // Grant VIP pass for Google SSO
                     loginBtn.click();
                     return true;
@@ -114,26 +136,36 @@
                 return false;
             };
 
-            const huntDeelToken = setInterval(() => {
-                const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-                if (token) {
-                    try {
-                        // 🎯 NEW: Decode the JWT to check if it's a dead "ghost" token
-                        const payload = JSON.parse(atob(token.split('.')[1]));
-                        if (payload.exp && (payload.exp * 1000 < Date.now())) {
-                            IkgLog.warn("Found a token, but it's expired. Waiting for Deel to refresh it...");
-                            return; // Skip this tick and wait
-                        }
-                    } catch (e) { /* Not a standard JWT, proceed anyway */ }
+            // 1. Check immediately on page load
+            if (!checkAndSendToken()) {
+                attemptDeelLogin();
+            }
 
-                    GM_setValue('IKG_DEEL_TOKEN', token);
-                    IkgLog.info("✅ FRESH Deel Token secured. Handing back to Attendance App...");
-                    clearInterval(huntDeelToken);
-                    setTimeout(() => { window.close(); }, 500); 
+            // 2. 🎯 CRITICAL FIX: Use MutationObserver instead of spamming setInterval
+            const deelObserver = new MutationObserver(() => {
+                if (checkAndSendToken()) {
+                    deelObserver.disconnect(); // Stop observing once we have the token
                 } else {
                     attemptDeelLogin();
                 }
-            }, 500);
+            });
+
+            // Start observing the DOM for React rendering the login button
+            if (document.body) {
+                deelObserver.observe(document.body, { childList: true, subtree: true });
+            } else {
+                document.addEventListener('DOMContentLoaded', () => {
+                    deelObserver.observe(document.body, { childList: true, subtree: true });
+                });
+            }
+
+            // 3. Fallback: Listen for native storage changes (Instantly catches token generation)
+            window.addEventListener('storage', (e) => {
+                if (e.key === 'token') {
+                    if (checkAndSendToken()) deelObserver.disconnect();
+                }
+            });
+
             return; // CRITICAL: Stop the rest of the Attendance script from rendering on Deel
         }
 
