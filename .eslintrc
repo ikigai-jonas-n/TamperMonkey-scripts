@@ -1,0 +1,40 @@
+{
+  "extends": [
+    "eslint:recommended",
+    "plugin:@typescript-eslint/recommended",
+    "plugin:unicorn/recommended"
+  ],
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "project": true
+  },
+  "plugins": [
+    "@typescript-eslint",
+    "unicorn"
+  ],
+  "env": {
+    "es2024": true
+  },
+  "rules": {
+    "unicorn/prevent-abbreviations": "off",
+    "unicorn/prefer-top-level-await": "off",
+    "unicorn/prefer-module": "off",
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": ["../../../*"]
+      }
+    ],
+    "no-return-await": "off",
+    "@typescript-eslint/return-await": ["error", "always"],
+    "unicorn/filename-case": [
+      "error",
+      {
+        "case": "kebabCase",
+        "ignore": [
+          "^\\d{13}-\\w+\\.ts$"
+        ]
+      }
+    ]
+  }
+}

@@ -1,7 +1,7 @@
     // ==UserScript==
-    // @name         [7.92] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.93] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.92
+    // @version      7.93
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -113,7 +113,7 @@
 
                     GM_setValue('IKG_DEEL_TOKEN', token);
                     IkgLog.info("✅ FRESH Deel Token secured. Handing back to Attendance App...");
-                    setTimeout(() => { window.close(); }, 500); 
+                    setTimeout(() => { window.close(); }, 500);
                     return true;
                 }
                 return false;
@@ -123,9 +123,9 @@
             const attemptDeelLogin = () => {
                 if (hasClickedDeelLogin) return false;
                 const elements = Array.from(document.querySelectorAll('span, button, a'));
-                
+
                 const loginBtn = elements.find(el => el.innerText && (el.innerText.includes('IKG Google Workspace') || el.innerText.includes('Log in with IKG')));
-                
+
                 if (loginBtn && loginBtn.offsetParent !== null) {
                     hasClickedDeelLogin = true;
                     IkgLog.info("Deel login button found. Engaging Autopilot and waiting for Google...");
@@ -166,7 +166,7 @@
                 }
             });
 
-            return; // CRITICAL: Stop the rest of the Attendance script from rendering on Deel
+               return; // CRITICAL: Stop the rest of the Attendance script from rendering on Deel
         }
 
         // ==========================================
@@ -310,7 +310,7 @@
             };
             try { return { ...def, ...JSON.parse(localStorage.getItem(SETTINGS_KEY)) }; } catch (e) { return def; }
         };
-        
+
         // NEW: Analytics View State
         let currentAnalyticsView = 'CHART';
 
@@ -736,7 +736,7 @@
                 if (!localStorage.getItem(newKey)) {
                     let highestOldVal = null;
                     let highestOldVer = -1;
-                    
+
                     // 1. Look for highest versioned key
                     for (let i = 0; i < localStorage.length; i++) {
                         const key = localStorage.key(i);
@@ -749,7 +749,7 @@
                             }
                         }
                     }
-                    
+
                     // 2. 🎯 CRITICAL FIX: Rescue unversioned legacy keys if no versioned ones exist!
                     if (highestOldVal === null && localStorage.getItem(base)) {
                         highestOldVal = localStorage.getItem(base);
@@ -913,7 +913,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
                 updateHeaderStatus("Auto-Syncing PTO...", "var(--warn)");
 
                 const deelTab = GM_openInTab('https://ikg.deel.team/', { active: false, insert: true });
-                
+
                 if (!deelTab) {
                     IkgLog.error("Failed to open background tab. Check Tampermonkey permissions.");
                     return resolve(null);
@@ -933,7 +933,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
                     if (!GM_getValue('IKG_DEEL_TOKEN', null)) {
                         IkgLog.error("Timeout waiting for Deel tab.");
                         updateHeaderStatus("❌ Deel Auth Failed. Log in manually!", "var(--danger)");
-                        
+
                         // 🎯 LOUD WARNING: Forces the user to fix their broken session
                         if (confirm("Attendance Pro:\n\nAuto-Login to Deel failed or took too long.\nPlease open Deel, log in manually once, then return here to sync.\n\nOpen Deel now?")) {
                             window.open('https://ikg.deel.team/', '_blank');
@@ -952,7 +952,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
 
             const fetchDeel = (path) => new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
-                method: "GET", 
+                method: "GET",
                 url: `https://ikg.deel.team/deelapi/${path}`,
                 withCredentials: true, // 🎯 CRITICAL: Passes Deel's session cookies cross-origin
                 headers: {
@@ -982,17 +982,17 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             if (!profileId) {
                 IkgLog.info("Resolving Time-Off Profile UUID...");
                 const timeOffsMe = await fetchDeel('time_offs/me');
-                
+
                 // 🎯 THE FIX: Directly grab the ID from the JSON instead of guessing with Regex!
                 profileId = timeOffsMe?.profile?.id;
-                
+
                 if (!profileId) throw new Error("Could not find profile.id in /time_offs/me response.");
-                
+
                 GM_setValue('IKG_DEEL_PROFILE_ID', profileId);
                 IkgLog.info(`✅ Successfully resolved Time-Off Profile UUID: ${profileId}`);
             }
 
-            // 🎯 MAKE ENTITLEMENTS SAFE: If Deel removed this endpoint, we catch the error 
+            // 🎯 MAKE ENTITLEMENTS SAFE: If Deel removed this endpoint, we catch the error
             // and continue so it doesn't block the actual PTO days from syncing.
             try {
                 entData = await fetchDeel(`time_offs/profile/${profileId}/entitlements`);
@@ -1198,7 +1198,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
         // 🎯 SMART SOURCE OF TRUTH OVERRIDE (Handles seconds + partial inputs)
         if (useOverrides !== false && override && (override.manualIn || override.manualOut)) {
             const [y, m, d] = dateStr.split('-');
-            
+
             let effStartD = null;
             if (override.manualIn) {
                 const s = override.manualIn.split(':');
@@ -1217,7 +1217,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
 
             if (effStartD && effEndD) {
                 // 🎯 THE MATH FIX: Removed the "- 1" lunch deduction to match the native API.
-                actualHrs = Math.max(0, (effEndD - effStartD) / 3600000); 
+                actualHrs = Math.max(0, (effEndD - effStartD) / 3600000);
                 effStart = effStartD.getTime(); effEnd = effEndD.getTime();
                 isSpoofed = true;
             } else if (effStartD) { // Pending case
@@ -1237,10 +1237,10 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             status = 'pending'; color = 'var(--warn)'; chartColor = '#F59E0B'; heatmapBg = '#F59E0B'; reason = 'Pending Checkout';
         } else if (actualHrs > 0) {
             if (isPartialPTO) {
-                if (effectiveHrs >= targetHrs) { status = 'partial-pto-pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = 'linear-gradient(135deg, #10B981 50%, #8B5CF6 50%)'; reason = `Goal passed`; } 
+                if (effectiveHrs >= targetHrs) { status = 'partial-pto-pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = 'linear-gradient(135deg, #10B981 50%, #8B5CF6 50%)'; reason = `Goal passed`; }
                 else { status = 'partial-pto-fail'; color = 'var(--danger)'; chartColor = '#EF4444'; heatmapBg = 'linear-gradient(135deg, #EF4444 50%, #8B5CF6 50%)'; reason = `Short`; }
             } else {
-                if (actualHrs >= targetHrs) { status = 'pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = '#10B981'; reason = 'Goal met'; } 
+                if (actualHrs >= targetHrs) { status = 'pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = '#10B981'; reason = 'Goal met'; }
                 else { status = 'fail'; color = 'var(--danger)'; chartColor = '#EF4444'; heatmapBg = '#EF4444'; reason = `Short`; }
             }
         }
@@ -1253,7 +1253,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
     };
 
         let chartHoverHandler = null; // Global reference to clear old listeners
-        
+
         const drawNativeChart = (canvasId, labels, dataItems) => {
             const canvas = document.getElementById(canvasId);
             if (!canvas) return;
@@ -1342,10 +1342,10 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
                 if (index >= 0 && index < dataItems.length) {
                     const item = dataItems[index];
                     const cleanPtoLabel = item.ptoType ? item.ptoType.split(' - ')[0] : 'PTO';
-                    
+
                     // 📊 MINIMALIST CHART HOVER CARD (Emoji Only)
                     let text = `<div style="color:var(--text-muted); font-size:11px; margin-bottom:8px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase;">${labels[index]}</div>`;
-                    
+
                     const totalHrs = item.val + item.pto;
                     const totalColor = totalHrs >= 9.0 ? 'var(--success)' : 'var(--danger)';
 
@@ -1393,12 +1393,12 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
         };
 
         GM_addStyle(`
-            :root { 
-                --bg-base: #0B0D12; --bg-surface: #14171F; --bg-elevated: #1F232E; 
+            :root {
+                --bg-base: #0B0D12; --bg-surface: #14171F; --bg-elevated: #1F232E;
                 --primary: #3B82F6; --primary-hover: #60A5FA; --primary-glow: rgba(59, 130, 246, 0.15);
-                --text-main: #F8FAFC; --text-muted: #94A3B8; --border: #2A2E39; 
-                --success: #10B981; --success-bg: rgba(16, 185, 129, 0.1); 
-                --danger: #EF4444; --danger-bg: rgba(239, 68, 68, 0.1); 
+                --text-main: #F8FAFC; --text-muted: #94A3B8; --border: #2A2E39;
+                --success: #10B981; --success-bg: rgba(16, 185, 129, 0.1);
+                --danger: #EF4444; --danger-bg: rgba(239, 68, 68, 0.1);
                 --warn: #F59E0B; --warn-bg: rgba(245, 158, 11, 0.1);
                 --pto: #8B5CF6; --pto-bg: rgba(139, 92, 246, 0.1);
                 --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -1420,11 +1420,11 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             #ikg-close { cursor: pointer; font-size: 28px; color: var(--text-muted); line-height: 1; transition: color 0.2s; }
             #ikg-close:hover { color: var(--text-main); }
             #ikg-modal-body { display: flex; flex: 1; overflow: hidden; position: relative; }
-            
+
             .ikg-view { display: none; width: 100%; height: 100%; flex: 1; }
             .ikg-view.active { display: flex; }
-            #view-settings.active { justify-content: center; } 
-            
+            #view-settings.active { justify-content: center; }
+
             #ikg-calendar-pane { flex: 2.5; border-right: 1px solid var(--border); display: flex; flex-direction: column; background: var(--bg-base); height: 100%; position: relative;}
             .ikg-cal-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 32px; font-size: 22px; font-weight: 600; letter-spacing: -0.02em;}
             .ikg-cal-nav { background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-main); width: 36px; height: 36px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
@@ -1453,7 +1453,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             .ikg-times div { display: flex; justify-content: space-between; align-items: center; }
             .ikg-times span { color: var(--text-main); font-family: monospace; font-size: 10.5px; letter-spacing: -0.5px;}
             .pto-pill { background: var(--pto-bg); color: var(--pto); border: 1px solid var(--pto); padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-align: center; margin-top:auto;}
-            
+
             .ikg-summary-pane { flex: 1; padding: 24px; overflow-y: auto; background: var(--bg-surface); display: flex; flex-direction: column; gap: 20px; justify-content: flex-start; }
             .ikg-card { background: var(--bg-base); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; flex-shrink: 0; }
             .ikg-card-title { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 16px; font-weight: 600; }
@@ -1486,22 +1486,22 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             .btn-cancel:hover { background: var(--danger-bg); }
 
             /* Dynamic Custom Native Month Select Dropdowns */
-            select.ikg-filter-btn { 
-                appearance: none; -webkit-appearance: none; -moz-appearance: none; 
-                padding-right: 20px !important; 
-                background-image: url("data:image/svg+xml;utf8,<svg fill='%2394A3B8' height='18' viewBox='0 0 24 24' width='18' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/></svg>") !important; 
-                background-repeat: no-repeat !important; 
-                background-position: right 2px center !important; 
+            select.ikg-filter-btn {
+                appearance: none; -webkit-appearance: none; -moz-appearance: none;
+                padding-right: 20px !important;
+                background-image: url("data:image/svg+xml;utf8,<svg fill='%2394A3B8' height='18' viewBox='0 0 24 24' width='18' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/></svg>") !important;
+                background-repeat: no-repeat !important;
+                background-position: right 2px center !important;
                 background-color: transparent;
                 outline: none; cursor: pointer; text-align: center;
                 font-family: inherit;
             }
-            select.ikg-filter-btn.active { 
-                background-image: url("data:image/svg+xml;utf8,<svg fill='%233B82F6' height='18' viewBox='0 0 24 24' width='18' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/></svg>") !important; 
+            select.ikg-filter-btn.active {
+                background-image: url("data:image/svg+xml;utf8,<svg fill='%233B82F6' height='18' viewBox='0 0 24 24' width='18' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/></svg>") !important;
                 background-color: var(--bg-surface);
             }
             select.ikg-filter-btn option { background: var(--bg-elevated); color: var(--text-main); }
-            
+
             /* Custom Dual Calendar UI */
             .ikg-cal-group { display: flex; gap: 8px; align-items: center; background: var(--bg-surface); padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); position: absolute; top: 100%; right: 0; margin-top: 6px; z-index: 50; box-shadow: 0 6px 16px rgba(0,0,0,0.4); justify-content: flex-end; }
             .ikg-cal-input-wrapper { position: relative; display: flex; align-items: center; }
@@ -1546,7 +1546,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             .ikg-sync-btn { width: 100%; background: var(--primary); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 600; font-size: 14px; cursor: pointer; text-align: center; transition: 0.2s; box-shadow: 0 4px 12px var(--primary-glow); }
             .ikg-sync-btn:hover:not(:disabled) { background: var(--primary-hover); transform: translateY(-1px); }
             .ikg-sync-btn:disabled { background: var(--bg-elevated); color: var(--text-muted); cursor: not-allowed; box-shadow: none; border: 1px solid var(--border); }
-            
+
             #ikg-ringing-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); backdrop-filter: blur(10px); z-index: 99999; display: none; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s; font-family: var(--font-family); }
             #ikg-ringing-overlay.active { display: flex; opacity: 1; }
             .ringing-box { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 24px; padding: 40px; width: 400px; max-width: 90vw; text-align: center; box-shadow: 0 0 100px rgba(59, 130, 246, 0.2); animation: ringPulse 2s infinite; }
@@ -1572,26 +1572,26 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             .ikg-filter-btn.active { background: var(--bg-surface); color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
             .ikg-canvas-container { flex: 1; position: relative; width: 100%; height: 100%; min-height: 0; }
             .ikg-canvas-container canvas { width: 100% !important; height: 100% !important; display: block; }
-            
+
             #ikg-heatmap-wrapper { display: none; height: 100%; width: 100%; flex-direction: column; gap: 4px; overflow-x: hidden; padding-bottom: 8px; align-items: center;}
             #ikg-heatmap-months { position: relative; height: 16px; margin-left: 36px; width: 100%; max-width: 100%; }
             .hm-layout { display: flex; flex: 1; min-height: 0; gap: 8px; width: 100%; max-width: 100%; justify-content: center; }
             .hm-y-axis { display: grid; grid-template-rows: repeat(7, 1fr); gap: 4px; font-size: 10px; color: var(--text-muted); width: 28px; padding-right: 6px; text-align: right; }
             #ikg-heatmap-grid { display: grid; grid-template-rows: repeat(7, 1fr); grid-auto-flow: column; gap: 4px; flex: 1; align-content: stretch; width: 100%; justify-content: center; }
-            
-            .ikg-heat-sq { 
+
+            .ikg-heat-sq {
                 position: relative;
-                border-radius: 4px; width: 100%; height: 100%; min-width: 0; min-height: 0; 
+                border-radius: 4px; width: 100%; height: 100%; min-width: 0; min-height: 0;
                 cursor: pointer; transition: transform 0.1s; display: flex; align-items: center; justify-content: center;
                 font-size: clamp(8px, 1.2vw, 12px); font-weight: 700; color: rgba(255,255,255,0.95); user-select: none;
                 overflow: hidden;
             }
             #ikg-heatmap-wrapper::-webkit-scrollbar { height: 6px; }
             #ikg-heatmap-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-            
-            .ikg-heat-sq { 
+
+            .ikg-heat-sq {
                 position: relative;
-                border-radius: 4px; width: 100%; height: 100%; min-width: 32px; min-height: 32px; 
+                border-radius: 4px; width: 100%; height: 100%; min-width: 32px; min-height: 32px;
                 cursor: pointer; transition: transform 0.1s; display: flex; align-items: center; justify-content: center;
                 font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.95); user-select: none;
             }
@@ -1606,7 +1606,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             .audit-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px;}
             .audit-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--text-main); font-family: monospace; font-size: 12px; }
             .audit-table tr:hover { background: var(--bg-elevated); }
-            
+
             /* Instant CSS Tooltips */
             .ikg-fast-tt { position: relative; cursor: help; border-bottom: 1px dotted rgba(148, 163, 184, 0.5); }
             .ikg-fast-tt.no-dot { border-bottom: none; }
@@ -1614,197 +1614,248 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             .ikg-fast-tt:hover::after { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); }
             .ikg-fast-tt.tt-right::after { left: auto; right: 0; transform: translateX(0) translateY(4px); }
             .ikg-fast-tt.tt-right:hover::after { transform: translateX(0) translateY(0); }
-            
+
             span[title] { border-bottom: 1px dotted rgba(148, 163, 184, 0.5); cursor: help; }
         `);
 
         // --- ACTIVE SHIFT UI RENDERER ---
-        const updateActiveShiftUI = () => {
-            let localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
-            let dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || '{}');
-            const appSettings = getSettings();
-            const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || '{}'); // 🎯 NEW
+        // --- ACTIVE SHIFT UI RENDERER ---
+                const updateActiveShiftUI = () => {
+                    let localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
+                    let dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || '{}');
+                    const appSettings = getSettings();
+                    const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || '{}');
 
-            const todayReal = new Date();
-            const todayStr = toYMD(todayReal);
-            const isDismissed = localStorage.getItem(`IKG_ALARM_DISMISSED_${todayStr}`) === "true";
+                    const todayReal = new Date();
+                    const todayStr = toYMD(todayReal);
+                    const isDismissed = localStorage.getItem(`IKG_ALARM_DISMISSED_${todayStr}`) === "true";
 
-            let realMonthBalance = 0;
-            let lockedShift = null;
-            const prefixRealMonth = `${todayReal.getFullYear()}-${String(todayReal.getMonth() + 1).padStart(2, '0')}`;
+                    let realMonthBalance = 0;
+                    let lockedShift = null;
+                    const prefixRealMonth = `${todayReal.getFullYear()}-${String(todayReal.getMonth() + 1).padStart(2, '0')}`;
 
-            const shiftCounts = { "09:00 ~ 18:00": 0, "09:30 ~ 18:30": 0, "10:00 ~ 19:00": 0, "13:00 ~ 22:00": 0 };
+                       const shiftCounts = { "09:00 ~ 18:00": 0, "09:30 ~ 18:30": 0, "10:00 ~ 19:00": 0, "13:00 ~ 22:00": 0 };
 
-            for (let i = 1; i <= 31; i++) {
-                const dStr = `${prefixRealMonth}-${String(i).padStart(2, '0')}`;
-                const record = localCache[dStr];
-                
-                // 🎯 THE FIX 1
-                const evalDay = evaluateDay(dStr, record, dayNotes[dStr], overrides[dStr], appSettings.useManualOverrides);
+                    for (let i = 1; i <= 31; i++) {
+                        const dStr = `${prefixRealMonth}-${String(i).padStart(2, '0')}`;
+                        const record = localCache[dStr];
+                        const evalDay = evaluateDay(dStr, record, dayNotes[dStr], overrides[dStr], appSettings.useManualOverrides);
 
-                if (i < todayReal.getDate()) {
-                    if (evalDay.status !== 'pending' && evalDay.status !== 'none' && !evalDay.isFullPTO) {
-                        realMonthBalance = safeFloat(realMonthBalance + evalDay.flexHrs);
-                    }
-                }
-
-                if (!evalDay.isFullPTO && record && record.startTime) {
-                    const startD = new Date(record.startTime);
-                    const h = startD.getHours(); const m = startD.getMinutes();
-                    if (h < 9 || (h === 9 && m < 30)) shiftCounts["09:00 ~ 18:00"]++;
-                    else if (h === 9 && m >= 30) shiftCounts["09:30 ~ 18:30"]++;
-                    else if (h >= 10 && h < 13) shiftCounts["10:00 ~ 19:00"]++;
-                    else if (h >= 13) shiftCounts["13:00 ~ 22:00"]++;
-                }
-            }
-
-            if (appSettings.manualShift && appSettings.manualShift !== 'auto') {
-                lockedShift = appSettings.manualShift;
-            } else {
-                let maxCount = 0;
-                for (const [shift, count] of Object.entries(shiftCounts)) {
-                    if (count > maxCount) { maxCount = count; lockedShift = shift; }
-                }
-            }
-
-            if (!lockedShift) lockedShift = "Undetermined";
-            let lockedShiftDisplay = lockedShift;
-            let lockedShiftTitle = "Determined by your most frequent check-in this month. See Rules tab.";
-
-            if (appSettings.manualShift && appSettings.manualShift !== 'auto') {
-                lockedShiftDisplay = `${lockedShift} (Manual)`;
-                lockedShiftTitle = "Manually overridden in Settings. HR Approved.";
-            }
-
-            let useFlexTodayRaw = localStorage.getItem(`IKG_TODAY_FLEX_${todayStr}`);
-            if (useFlexTodayRaw === null) useFlexTodayRaw = appSettings.useFlexDef ? 'true' : 'false';
-            const applyFlex = useFlexTodayRaw === 'true';
-
-            // 🎯 THE FIX 2
-            const todaysEval = evaluateDay(todayStr, localCache[todayStr], dayNotes[todayStr], overrides[todayStr], appSettings.useManualOverrides);
-            let todaysFlexGoal = safeFloat(9.0 - todaysEval.ptoHrs);
-
-            if (applyFlex) {
-                todaysFlexGoal = safeFloat(todaysFlexGoal - realMonthBalance);
-            }
-            if (todaysFlexGoal < 0) todaysFlexGoal = 0;
-
-            let container = document.getElementById('ikg-active-shift-container');
-            if (!container) return;
-
-            const record = localCache[todayStr];
-            if (record && record.startTime) {
-                const startMs = record.startTime;
-                const targetMs = startMs + (todaysFlexGoal * 3600 * 1000);
-                const isCompleted = record.workHours ? parseFloat(record.workHours) >= todaysFlexGoal : false;
-
-                const gcalStart = new Date(targetMs).toISOString().replace(/[-:]|\.\d{3}/g, '');
-                const gcalEnd = new Date(targetMs + 15 * 60000).toISOString().replace(/[-:]|\.\d{3}/g, '');
-
-                if (isCompleted) {
-                    container.innerHTML = `<div id="ikg-active-shift" style="border-color: var(--success); background: var(--success-bg); padding: 16px; border-radius: 12px;"><div class="ikg-active-header" style="color: var(--success); margin-bottom: 4px;">🎉 Shift Completed</div><div style="font-size:12px; color: var(--text-main);">Goal reached! Time to disconnect.</div></div>`;
-                } else {
-                    const alarmTime = formatTime(targetMs);
-                    const flexStr = formatDurFromDec(realMonthBalance, true);
-                    let flexBadge = '';
-
-                    if (applyFlex) {
-                        if (realMonthBalance > 0) flexBadge = `<span style="display:inline-block; white-space:nowrap; background:var(--success); color:#000; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700;">${flexStr} Flex</span>`;
-                        else if (realMonthBalance < 0) flexBadge = `<span style="display:inline-block; white-space:nowrap; background:var(--danger); color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700;">${flexStr} Deficit</span>`;
-                    }
-
-                    let alarmSection = '';
-                    if (isDismissed) {
-                        alarmSection = `<div style="text-align:center; font-size:12px; color:var(--text-muted); font-weight:600; padding:8px 0; background: var(--bg-elevated); border-radius: 6px; border: 1px solid var(--border); margin-bottom: 12px;">✅ Alarm Dismissed for Today</div>`;
-                    } else {
-                        alarmSection = `
-                            <div id="alarm-ui-container" style="margin-bottom: 12px;">
-                                <button id="ikg-btn-alarm" data-endms="${targetMs}" class="ikg-btn-outline" style="margin-top:0; width:100%; padding: 8px; border-radius: 6px; font-size: 12px; font-weight: 600;">🔔 Set Browser Alarm</button>
-                                
-                                <div id="ikg-alarm-active-view" style="display:none; align-items:center; justify-content:space-between; background:var(--success-bg); border:1px solid rgba(16, 185, 129, 0.3); border-radius:6px; padding:6px 10px;">
-                                    <span id="ikg-alarm-status-text" style="font-size:12px; color:var(--success); font-weight:600;">✅ Scheduled!</span>
-                                    <button id="ikg-btn-cancel-alarm" style="background:transparent; color:var(--danger); border:1px solid var(--danger); padding:4px 8px; border-radius:4px; cursor:pointer; font-size:11px; font-weight:700; transition:0.2s;">🔕 Cancel</button>
-                                </div>
-                            </div>
-                        `;
-                    }
-
-                    container.innerHTML = `
-                        <div id="ikg-active-shift" style="background: var(--bg-base); border: 1px solid var(--border); border-radius: 12px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-                            
-                            <div class="ikg-active-header" style="margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
-                                <div style="color: var(--primary); font-weight: 700; display: flex; align-items: center; gap: 8px; font-size: 15px;">
-                                    ⏱️ Active Shift Today
-                                </div>
-                                <div class="ikg-fast-tt tt-right no-dot" data-title="${lockedShiftTitle}" style="background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); color: #c4b5fd; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-family: monospace; font-weight: 600; display: flex; align-items: center; gap: 4px;">
-                                    🔒 ${lockedShiftDisplay}
-                                </div>
-                            </div>
-                            
-                            <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; font-size: 13px; margin-bottom: 12px; color: var(--text-main); align-items: center;">
-                                <div style="color: var(--text-muted); font-weight: 500;">In:</div>
-                                <div style="display: flex; align-items: center; min-width: 0;"><b style="font-family: monospace; font-size: 15px; letter-spacing: 0.5px;">${formatTime(startMs)}</b></div>
-                                
-                                <div class="ikg-fast-tt no-dot" data-title="Note: Calendar shows system checkout time (lags 1 day). Trust the Goal Out above." style="color: var(--text-muted); font-weight: 500; display: flex; align-items: center; gap: 6px; width: fit-content; border-bottom: 1px dotted var(--text-muted);">
-                                    Goal Out <span style="display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; background:var(--border); color:var(--text-muted); border-radius:4px; font-size:10px; font-weight:bold; font-family:serif;">i</span>:
-                                </div>
-                                <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0;">
-                                    <b style="font-family: monospace; font-size: 15px; color: var(--primary); letter-spacing: 0.5px;">${alarmTime}</b>
-                                    <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">(${todaysFlexGoal.toFixed(2)}h)</span>
-                                    ${flexBadge}
-                                </div>
-                            </div>
-                            
-                            <label id="ikg-flex-toggle-wrap" style="display:flex; align-items:center; gap: 8px; margin-bottom: 12px; background: var(--bg-elevated); padding: 8px 10px; border-radius: 6px; cursor:pointer; border: 1px solid var(--border); transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border)'">
-                                <input type="checkbox" id="ikg-today-flex" ${applyFlex ? 'checked' : ''} style="width:14px; height:14px; cursor:pointer; accent-color: var(--primary);">
-                                <span style="font-size:12px; font-weight: 500; color:var(--text-main); user-select:none;">Apply Monthly Flex (${flexStr})</span>
-                            </label>
-                            
-                            ${alarmSection}
-
-                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; border-top:1px dashed var(--border); padding-top:12px;">
-                                <a href="https://calendar.google.com/calendar/render?action=TEMPLATE&text=Clock+Out+⏰&dates=${gcalStart}/${gcalEnd}&details=Time+to+go+home!" target="_blank" class="ikg-btn-outline" style="margin:0; font-size:11px; font-weight: 600; display:flex; align-items:center; justify-content:center; text-align: center; gap:6px; padding: 8px; border-radius: 6px; text-decoration: none; line-height: 1.2; box-sizing: border-box;">🗓️ Open in GCal</a>
-                                <a href="#" id="ikg-btn-mac-alarm" data-endms="${targetMs}" class="ikg-btn-outline" style="margin:0; font-size:11px; font-weight: 600; display:flex; align-items:center; justify-content:center; text-align: center; gap:6px; padding: 8px; border-radius: 6px; text-decoration: none; line-height: 1.2; box-sizing: border-box;">🍎 Download Mac OS .ics</a>
-                            </div>
-                        </div>
-                    `;
-
-                    const flexToggle = document.getElementById('ikg-today-flex');
-                    if (flexToggle) {
-                        flexToggle.addEventListener('change', (e) => {
-                            localStorage.setItem(`IKG_TODAY_FLEX_${todayStr}`, e.target.checked);
-                            sessionStorage.removeItem('IKG_ALARM_TARGET');
-                            updateActiveShiftUI();
-                        });
-                    }
-
-                    setTimeout(() => {
-                        const btn = document.getElementById('ikg-btn-alarm');
-                        if (!btn) return;
-
-                        const cachedTarget = sessionStorage.getItem('IKG_ALARM_TARGET');
-                        if (appSettings.autoSetAlarm && window.ikgScheduledTargetMs !== targetMs && cachedTarget !== targetMs.toString()) {
-                            scheduleAlarms(targetMs, false);
-                        } else if (window.ikgScheduledTargetMs === targetMs || cachedTarget === targetMs.toString()) {
-                            if (window.ikgAlarmTimeouts.length === 0 && cachedTarget === targetMs.toString()) {
-                                scheduleAlarms(targetMs, true);
-                            } else {
-                                const activeView = document.getElementById('ikg-alarm-active-view');
-                                const statusText = document.getElementById('ikg-alarm-status-text');
-                                if (activeView && statusText) {
-                                    btn.style.display = 'none';
-                                    statusText.innerText = `✅ Scheduled (${formatTime(targetMs)})`;
-                                    statusText.style.color = 'var(--success)';
-                                    activeView.style.background = 'var(--success-bg)';
-                                    activeView.style.borderColor = 'rgba(16, 185, 129, 0.3)';
-                                    activeView.style.display = 'flex';
-                                }
+                        if (i < todayReal.getDate()) {
+                            if (evalDay.status !== 'pending' && evalDay.status !== 'none' && !evalDay.isFullPTO) {
+                                realMonthBalance = safeFloat(realMonthBalance + evalDay.flexHrs);
                             }
                         }
-                    }, 10);
-                }
-            } else { container.innerHTML = ''; }
-        };
+
+                        if (!evalDay.isFullPTO && record && record.startTime) {
+                            const startD = new Date(record.startTime);
+                            const h = startD.getHours(); const m = startD.getMinutes();
+                            if (h < 9 || (h === 9 && m < 30)) shiftCounts["09:00 ~ 18:00"]++;
+                            else if (h === 9 && m >= 30) shiftCounts["09:30 ~ 18:30"]++;
+                            else if (h >= 10 && h < 13) shiftCounts["10:00 ~ 19:00"]++;
+                            else if (h >= 13) shiftCounts["13:00 ~ 22:00"]++;
+                        }
+                    }
+
+                    if (appSettings.manualShift && appSettings.manualShift !== 'auto') {
+                        lockedShift = appSettings.manualShift;
+                    } else {
+                        let maxCount = 0;
+                        for (const [shift, count] of Object.entries(shiftCounts)) {
+                            if (count > maxCount) { maxCount = count; lockedShift = shift; }
+                        }
+                    }
+
+                    if (!lockedShift) lockedShift = "Undetermined";
+                    let lockedShiftDisplay = lockedShift;
+                    let lockedShiftTitle = "Determined by your most frequent check-in this month. See Rules tab.";
+
+                    if (appSettings.manualShift && appSettings.manualShift !== 'auto') {
+                        lockedShiftDisplay = `${lockedShift} (Manual)`;
+                        lockedShiftTitle = "Manually overridden in Settings. HR Approved.";
+                    }
+
+                    let useFlexTodayRaw = localStorage.getItem(`IKG_TODAY_FLEX_${todayStr}`);
+                    if (useFlexTodayRaw === null) useFlexTodayRaw = appSettings.useFlexDef ? 'true' : 'false';
+                    const applyFlex = useFlexTodayRaw === 'true';
+                    const flexStr = formatDurFromDec(realMonthBalance, true);
+
+                    // 🎯 NEW: Parse Shift Base End Time
+                    let shiftEndHour = 18; let shiftEndMin = 0;
+                    if (lockedShift && lockedShift.includes('~')) {
+                        const outStr = lockedShift.split('~')[1].trim();
+                        const parts = outStr.split(':');
+                        shiftEndHour = parseInt(parts[0], 10);
+                        shiftEndMin = parseInt(parts[1], 10);
+                    }
+                    let baseShiftEndD = new Date(todayReal);
+                    baseShiftEndD.setHours(shiftEndHour, shiftEndMin, 0, 0);
+                    const baseShiftEndMs = baseShiftEndD.getTime();
+
+                    const todaysEval = evaluateDay(todayStr, localCache[todayStr], dayNotes[todayStr], overrides[todayStr], appSettings.useManualOverrides);
+                    let todaysFlexGoal = safeFloat(9.0 - todaysEval.ptoHrs);
+                    let appliedFlexToday = 0;
+
+                    let container = document.getElementById('ikg-active-shift-container');
+                    if (!container) return;
+
+                    const record = localCache[todayStr];
+                    if (record && record.startTime) {
+                        const startMs = record.startTime;
+
+                        // 🎯 Calculate Absolute Minimum Checkout Time (Official End - PTO)
+                        const minCheckoutMs = baseShiftEndMs - (todaysEval.ptoHrs * 3600000);
+
+                        if (applyFlex) {
+                            if (realMonthBalance > 0) {
+                                const requiredMs = todaysFlexGoal * 3600000;
+                                const expectedOutMs = startMs + requiredMs;
+                                const lateMs = expectedOutMs - minCheckoutMs;
+
+                                // 🎯 Only apply flex if they are mathematically checking out AFTER the official end time
+                                if (lateMs > 0) {
+                                    const lateHrs = lateMs / 3600000;
+                                    const maxBurnable = Math.min(0.5, lateHrs); // Cap at 30 mins (0.5h) per day
+                                    appliedFlexToday = Math.min(realMonthBalance, maxBurnable);
+                                    todaysFlexGoal = safeFloat(todaysFlexGoal - appliedFlexToday);
+                                }
+                            } else if (realMonthBalance < 0) {
+                                todaysFlexGoal = safeFloat(todaysFlexGoal - realMonthBalance); // Make up negative deficit
+                            }
+                        }
+
+                        if (todaysFlexGoal < 0) todaysFlexGoal = 0;
+                        let targetMs = startMs + (todaysFlexGoal * 3600 * 1000);
+
+                        // 🎯 ENFORCE HR RULE: Goal Out can NEVER be earlier than official Shift End (minus PTO)
+                        if (targetMs < minCheckoutMs) {
+                            targetMs = minCheckoutMs;
+                            todaysFlexGoal = (targetMs - startMs) / 3600000;
+                        }
+
+                        const isCompleted = record.workHours ? parseFloat(record.workHours) >= todaysFlexGoal : false;
+                        const gcalStart = new Date(targetMs).toISOString().replace(/[-:]|\.\d{3}/g, '');
+                        const gcalEnd = new Date(targetMs + 15 * 60000).toISOString().replace(/[-:]|\.\d{3}/g, '');
+
+                        if (isCompleted) {
+                            container.innerHTML = `<div id="ikg-active-shift" style="border-color: var(--success); background: var(--success-bg); padding: 16px; border-radius: 12px;"><div class="ikg-active-header" style="color: var(--success); margin-bottom: 4px;">🎉 Shift Completed</div><div style="font-size:12px; color: var(--text-main);">Goal reached! Time to disconnect.</div></div>`;
+                        } else {
+                            const alarmTime = formatTime(targetMs);
+                            let flexBadge = '';
+                            let applyFlexHtml = '';
+
+                            // 🎯 DYNAMIC TOGGLE TEXT
+                            if (applyFlex) {
+                                if (realMonthBalance > 0) {
+                                    if (appliedFlexToday > 0) {
+                                        const appliedStr = formatDurFromDec(appliedFlexToday, false);
+                                        flexBadge = `<span class="ikg-fast-tt" data-title="Burned ${appliedStr} of your ${flexStr} total balance to offset late check-in." style="display:inline-block; white-space:nowrap; background:var(--warn); color:#000; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; cursor:help;">-${appliedStr} Flex Applied</span>`;
+                                        applyFlexHtml = `Apply Flex (-${appliedStr} applied today)`;
+                                    } else {
+                                        applyFlexHtml = `Apply Flex (No late check-in to offset)`;
+                                    }
+                                } else if (realMonthBalance < 0) {
+                                    flexBadge = `<span class="ikg-fast-tt" data-title="Added your deficit to today's shift." style="display:inline-block; white-space:nowrap; background:var(--danger); color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; cursor:help;">${flexStr} Deficit Added</span>`;
+                                    applyFlexHtml = `Make up Deficit (${flexStr})`;
+                                } else {
+                                    applyFlexHtml = `Apply Flex (Balance is 0)`;
+                                }
+                            } else {
+                                applyFlexHtml = `Apply Monthly Flex (${flexStr} available)`;
+                            }
+
+                            let alarmSection = '';
+                            if (isDismissed) {
+                                alarmSection = `<div style="text-align:center; font-size:12px; color:var(--text-muted); font-weight:600; padding:8px 0; background: var(--bg-elevated); border-radius: 6px; border: 1px solid var(--border); margin-bottom: 12px;">✅ Alarm Dismissed for Today</div>`;
+                            } else {
+                                alarmSection = `
+                                    <div id="alarm-ui-container" style="margin-bottom: 12px;">
+                                        <button id="ikg-btn-alarm" data-endms="${targetMs}" class="ikg-btn-outline" style="margin-top:0; width:100%; padding: 8px; border-radius: 6px; font-size: 12px; font-weight: 600;">🔔 Set Browser Alarm</button>
+
+                                        <div id="ikg-alarm-active-view" style="display:none; align-items:center; justify-content:space-between; background:var(--success-bg); border:1px solid rgba(16, 185, 129, 0.3); border-radius:6px; padding:6px 10px;">
+                                            <span id="ikg-alarm-status-text" style="font-size:12px; color:var(--success); font-weight:600;">✅ Scheduled!</span>
+                                            <button id="ikg-btn-cancel-alarm" style="background:transparent; color:var(--danger); border:1px solid var(--danger); padding:4px 8px; border-radius:4px; cursor:pointer; font-size:11px; font-weight:700; transition:0.2s;">🔕 Cancel</button>
+                                        </div>
+                                    </div>
+                                `;
+                            }
+
+                            container.innerHTML = `
+                                <div id="ikg-active-shift" style="background: var(--bg-base); border: 1px solid var(--border); border-radius: 12px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+
+                                    <div class="ikg-active-header" style="margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+                                        <div style="color: var(--primary); font-weight: 700; display: flex; align-items: center; gap: 8px; font-size: 15px;">
+                                            ⏱️ Active Shift Today
+                                        </div>
+                                        <div class="ikg-fast-tt tt-right no-dot" data-title="${lockedShiftTitle}" style="background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); color: #c4b5fd; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-family: monospace; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                                            🔒 ${lockedShiftDisplay}
+                                        </div>
+                                    </div>
+
+                                    <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; font-size: 13px; margin-bottom: 12px; color: var(--text-main); align-items: center;">
+                                        <div style="color: var(--text-muted); font-weight: 500;">In:</div>
+                                        <div style="display: flex; align-items: center; min-width: 0;"><b style="font-family: monospace; font-size: 15px; letter-spacing: 0.5px;">${formatTime(startMs)}</b></div>
+
+                                        <div class="ikg-fast-tt no-dot" data-title="Note: Calendar shows system checkout time (lags 1 day). Trust the Goal Out above." style="color: var(--text-muted); font-weight: 500; display: flex; align-items: center; gap: 6px; width: fit-content; border-bottom: 1px dotted var(--text-muted);">
+                                            Goal Out <span style="display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; background:var(--border); color:var(--text-muted); border-radius:4px; font-size:10px; font-weight:bold; font-family:serif;">i</span>:
+                                        </div>
+                                        <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0;">
+                                            <b style="font-family: monospace; font-size: 15px; color: var(--primary); letter-spacing: 0.5px;">${alarmTime}</b>
+                                            <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">(${todaysFlexGoal.toFixed(2)}h)</span>
+                                            ${flexBadge}
+                                        </div>
+                                    </div>
+
+                                    <label id="ikg-flex-toggle-wrap" style="display:flex; align-items:center; gap: 8px; margin-bottom: 12px; background: var(--bg-elevated); padding: 8px 10px; border-radius: 6px; cursor:pointer; border: 1px solid var(--border); transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border)'">
+                                        <input type="checkbox" id="ikg-today-flex" ${applyFlex ? 'checked' : ''} style="width:14px; height:14px; cursor:pointer; accent-color: var(--primary);">
+                                        <span style="font-size:12px; font-weight: 500; color:var(--text-main); user-select:none;">${applyFlexHtml}</span>
+                                    </label>
+
+                                    ${alarmSection}
+
+                                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; border-top:1px dashed var(--border); padding-top:12px;">
+                                        <a href="https://calendar.google.com/calendar/render?action=TEMPLATE&text=Clock+Out+⏰&dates=${gcalStart}/${gcalEnd}&details=Time+to+go+home!" target="_blank" class="ikg-btn-outline" style="margin:0; font-size:11px; font-weight: 600; display:flex; align-items:center; justify-content:center; text-align: center; gap:6px; padding: 8px; border-radius: 6px; text-decoration: none; line-height: 1.2; box-sizing: border-box;">🗓️ Open in GCal</a>
+                                        <a href="#" id="ikg-btn-mac-alarm" data-endms="${targetMs}" class="ikg-btn-outline" style="margin:0; font-size:11px; font-weight: 600; display:flex; align-items:center; justify-content:center; text-align: center; gap:6px; padding: 8px; border-radius: 6px; text-decoration: none; line-height: 1.2; box-sizing: border-box;">🍎 Download Mac OS .ics</a>
+                                    </div>
+                                </div>
+                            `;
+
+                            const flexToggle = document.getElementById('ikg-today-flex');
+                            if (flexToggle) {
+                                flexToggle.addEventListener('change', (e) => {
+                                    localStorage.setItem(`IKG_TODAY_FLEX_${todayStr}`, e.target.checked);
+                                    sessionStorage.removeItem('IKG_ALARM_TARGET');
+                                    updateActiveShiftUI();
+                                });
+                            }
+
+                            setTimeout(() => {
+                                const btn = document.getElementById('ikg-btn-alarm');
+                                if (!btn) return;
+
+                                const cachedTarget = sessionStorage.getItem('IKG_ALARM_TARGET');
+                                if (appSettings.autoSetAlarm && window.ikgScheduledTargetMs !== targetMs && cachedTarget !== targetMs.toString()) {
+                                    scheduleAlarms(targetMs, false);
+                                } else if (window.ikgScheduledTargetMs === targetMs || cachedTarget === targetMs.toString()) {
+                                    if (window.ikgAlarmTimeouts.length === 0 && cachedTarget === targetMs.toString()) {
+                                        scheduleAlarms(targetMs, true);
+                                    } else {
+                                        const activeView = document.getElementById('ikg-alarm-active-view');
+                                        const statusText = document.getElementById('ikg-alarm-status-text');
+                                        if (activeView && statusText) {
+                                            btn.style.display = 'none';
+                                            statusText.innerText = `✅ Scheduled (${formatTime(targetMs)})`;
+                                            statusText.style.color = 'var(--success)';
+                                            activeView.style.background = 'var(--success-bg)';
+                                            activeView.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+                                            activeView.style.display = 'flex';
+                                        }
+                                    }
+                                }
+                            }, 10);
+                        }
+                    } else { container.innerHTML = ''; }
+                };
 
         const parseLocalDate = (dateString) => { if (!dateString) return null; const [y, m, d] = dateString.split('-'); return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10)); };
         const formatDateForInput = (date) => { return date ? `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}` : ''; };
@@ -1909,128 +1960,146 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
         let auditCalInstance = null;
 
         // --- RENDER LOGIC ---
-        function renderCalendar() {
-            const grid = document.getElementById('ikg-cal-grid');
-            const headerText = document.getElementById('ikg-cal-month-text');
-            const prevBtn = document.getElementById('ikg-prev-month');
-            const nextBtn = document.getElementById('ikg-next-month');
+        // --- RENDER LOGIC ---
+                function renderCalendar() {
+                    const grid = document.getElementById('ikg-cal-grid');
+                    const headerText = document.getElementById('ikg-cal-month-text');
+                    const prevBtn = document.getElementById('ikg-prev-month');
+                    const nextBtn = document.getElementById('ikg-next-month');
 
-            grid.innerHTML = '';
-            const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-            headerText.innerText = `${monthNames[currentViewMonth - 1]} ${currentViewYear}`;
+                    grid.innerHTML = '';
+                    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+                    headerText.innerText = `${monthNames[currentViewMonth - 1]} ${currentViewYear}`;
 
-            const todayReal = new Date();
-            nextBtn.classList.toggle('hidden', currentViewYear === todayReal.getFullYear() && currentViewMonth === todayReal.getMonth() + 1);
-            if (globalFirstDate !== "--") {
-                const fd = new Date(globalFirstDate);
-                prevBtn.classList.toggle('hidden', currentViewYear === fd.getFullYear() && currentViewMonth === fd.getMonth() + 1);
-            }
-
-            const firstDay = new Date(currentViewYear, currentViewMonth - 1, 1).getDay();
-            const daysInMonth = new Date(currentViewYear, currentViewMonth, 0).getDate();
-
-            let localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
-            let dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || '{}');
-
-            const monthStr = `${currentViewYear}-${String(currentViewMonth).padStart(2, '0')}`;
-            const todayStr = `${todayReal.getFullYear()}-${String(todayReal.getMonth() + 1).padStart(2, '0')}-${String(todayReal.getDate()).padStart(2, '0')}`;
-
-            for (let i = 0; i < firstDay; i++) grid.innerHTML += `<div class="ikg-day empty"></div>`;
-
-            let monthWorkedDays = 0;
-            let monthTotalHours = 0;
-            let ptoDays = 0;
-            
-            // 🎯 NEW REQUIRED VARIABLES
-            const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || '{}');
-            const settings = getSettings();
-
-            for (let i = 1; i <= daysInMonth; i++) {
-                const dateStr = `${monthStr}-${String(i).padStart(2, '0')}`;
-                const record = localCache[dateStr];
-                
-                // 🎯 THE FIX: Pass all 5 arguments
-                const evalDay = evaluateDay(dateStr, record, dayNotes[dateStr], overrides[dateStr], settings.useManualOverrides);
-
-                let isToday = (dateStr === todayStr);
-                let cellContent = '';
-                let partialPill = ''; // 🎯 Initialized outside so it can be injected into the header
-
-                if (isFetchingData && dateStr <= todayStr && record === undefined && !evalDay.isFullPTO) {
-                    cellContent = `<div class="ikg-cell-data"><div class="skeleton skel-hrs"></div><div class="skeleton skel-box"></div></div>`;
-                }
-                else if (evalDay.isFullPTO) {
-                    ptoDays++;
-                    cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
-                }
-                else if (record && record.startTime) {
-                    if (!isToday) monthWorkedDays++;
-                    if (!isToday) monthTotalHours = safeFloat(monthTotalHours + evalDay.effectiveHrs);
-
-                    let pendingIcon = '';
-                    let timesClass = '';
-                    
-                    // 🎯 THE FIX: Use effStart/effEnd from evaluateDay, not the raw API record
-                    const inTimeDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : formatTime(record.startTime);
-                    let outTimeDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : (record.endTime ? formatTime(record.endTime) : '--:--');
-
-                    if (evalDay.status === 'pending') {
-                        timesClass = 'pending';
-                        pendingIcon = ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>';
-                        outTimeDisplay = "Pending";
+                    const todayReal = new Date();
+                    nextBtn.classList.toggle('hidden', currentViewYear === todayReal.getFullYear() && currentViewMonth === todayReal.getMonth() + 1);
+                    if (globalFirstDate !== "--") {
+                        const fd = new Date(globalFirstDate);
+                        prevBtn.classList.toggle('hidden', currentViewYear === fd.getFullYear() && currentViewMonth === fd.getMonth() + 1);
                     }
 
-                    // 🎯 UI FIX: Move pill to the date header.
-                    const shortPtoName = evalDay.ptoType ? evalDay.ptoType.split(' - ')[0] : 'PTO';
-                    if (evalDay.isPartialPTO) {
-                        partialPill = `<div class="ikg-fast-tt no-dot" data-title="${evalDay.ptoType}" style="font-size:9px; background:var(--pto); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70px; box-shadow: 0 2px 4px rgba(139,92,246,0.3); cursor:help; margin-right:auto;">+${evalDay.ptoHrs}h ${shortPtoName}</div>`;
+                    const firstDay = new Date(currentViewYear, currentViewMonth - 1, 1).getDay();
+                    const daysInMonth = new Date(currentViewYear, currentViewMonth, 0).getDate();
+
+                    let localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
+                    let dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || '{}');
+
+                    const monthStr = `${currentViewYear}-${String(currentViewMonth).padStart(2, '0')}`;
+                    const todayStr = `${todayReal.getFullYear()}-${String(todayReal.getMonth() + 1).padStart(2, '0')}-${String(todayReal.getDate()).padStart(2, '0')}`;
+
+                    for (let i = 0; i < firstDay; i++) grid.innerHTML += `<div class="ikg-day empty"></div>`;
+
+                    let monthWorkedDays = 0;
+                    let monthTotalHours = 0;
+                    let ptoDays = 0;
+
+                    const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || '{}');
+                    const settings = getSettings();
+
+                    for (let i = 1; i <= daysInMonth; i++) {
+                        const dateStr = `${monthStr}-${String(i).padStart(2, '0')}`;
+                        const record = localCache[dateStr];
+
+                        const evalDay = evaluateDay(dateStr, record, dayNotes[dateStr], overrides[dateStr], settings.useManualOverrides);
+
+                        let isToday = (dateStr === todayStr);
+                        let cellContent = '';
+                        let partialPill = '';
+
+                        if (isFetchingData && dateStr <= todayStr && record === undefined && !evalDay.isFullPTO) {
+                            cellContent = `<div class="ikg-cell-data"><div class="skeleton skel-hrs"></div><div class="skeleton skel-box"></div></div>`;
+                        }
+                        else if (evalDay.isFullPTO) {
+                            ptoDays++;
+                            cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
+                        }
+                        else if (record && record.startTime) {
+                            if (!isToday) monthWorkedDays++;
+                            if (!isToday) monthTotalHours = safeFloat(monthTotalHours + evalDay.effectiveHrs);
+
+                            let pendingIcon = '';
+                            let timesClass = '';
+
+                            const inTimeDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : formatTime(record.startTime);
+                            let outTimeDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : (record.endTime ? formatTime(record.endTime) : '--:--');
+
+                            if (evalDay.status === 'pending') {
+                                timesClass = 'pending';
+                                pendingIcon = ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>';
+                                outTimeDisplay = "Pending";
+                            }
+
+                            const shortPtoName = evalDay.ptoType ? evalDay.ptoType.split(' - ')[0] : 'PTO';
+                            if (evalDay.isPartialPTO) {
+                                partialPill = `<div class="ikg-fast-tt no-dot" data-title="${evalDay.ptoType}" style="font-size:9px; background:var(--pto); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70px; box-shadow: 0 2px 4px rgba(139,92,246,0.3); cursor:help; margin-right:auto;">+${evalDay.ptoHrs}h ${shortPtoName}</div>`;
+                            }
+
+                            const flexTooltip = evalDay.flexHrs >= 0 ? `+${formatDurFromDec(evalDay.flexHrs, false)}` : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
+                            let activeShiftStyles = (isToday && evalDay.status !== 'pass' && evalDay.status !== 'partial-pto-pass') ? 'background:var(--primary-glow); border:1px solid var(--border);' : '';
+
+                            cellContent = `
+                                <div class="ikg-cell-data">
+                                    <div class="ikg-total-hrs ikg-fast-tt" data-title="${flexTooltip}" style="color:${evalDay.color}; width:fit-content; cursor:help; margin-bottom:4px; min-height:22px; display:flex; align-items:center;">
+                                        ${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + 'h' : (isToday ? '--.--h' : '0.00h')} ${pendingIcon}
+                                    </div>
+                                    <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
+                                        <div>IN <span>${inTimeDisplay}</span></div>
+                                        <div>OUT <span>${outTimeDisplay}</span></div>
+                                    </div>
+                                </div>
+                            `;
+                        }
+
+                        grid.innerHTML += `
+                            <div class="ikg-day ${isToday ? 'today' : ''}" data-date="${dateStr}">
+                                <div class="ikg-date-header" style="align-items: center;">
+                                    ${partialPill}
+                                    <div class="ikg-date-num">${i}</div>
+                                </div>
+                                ${cellContent}
+                            </div>`;
                     }
 
-                    const flexTooltip = evalDay.flexHrs >= 0 ? `+${formatDurFromDec(evalDay.flexHrs, false)}` : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
-                    let activeShiftStyles = (isToday && evalDay.status !== 'pass' && evalDay.status !== 'partial-pto-pass') ? 'background:var(--primary-glow); border:1px solid var(--border);' : '';
+                    const totalCells = firstDay + daysInMonth;
+                    for (let i = 0; i < (42 - totalCells); i++) grid.innerHTML += `<div class="ikg-day empty"></div>`;
 
-                    cellContent = `
-                        <div class="ikg-cell-data">
-                            <div class="ikg-total-hrs ikg-fast-tt" data-title="${flexTooltip}" style="color:${evalDay.color}; width:fit-content; cursor:help; margin-bottom:4px; min-height:22px; display:flex; align-items:center;">
-                                ${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + 'h' : (isToday ? '--.--h' : '0.00h')} ${pendingIcon}
+                    const targetHours = safeFloat((monthWorkedDays + ptoDays) * 9.0);
+                    const effectiveHours = safeFloat(monthTotalHours + (ptoDays * 9.0));
+                    const netBalance = safeFloat(effectiveHours - targetHours);
+
+                    document.getElementById('side-val-days').innerText = monthWorkedDays + ptoDays;
+                    document.getElementById('side-val-actual').innerText = formatDurFromDec(effectiveHours, false);
+                    document.getElementById('side-val-target').innerText = formatDurFromDec(targetHours, false);
+
+                    const balanceEl = document.getElementById('side-val-net');
+
+                    // 🎯 NEW: Dynamic Burn Insight UI
+                    let insightEl = document.getElementById('ikg-flex-insight');
+                    if (!insightEl) {
+                        insightEl = document.createElement('div');
+                        insightEl.id = 'ikg-flex-insight';
+                        balanceEl.parentNode.insertAdjacentElement('afterend', insightEl);
+                    }
+
+                    if (netBalance > 0) {
+                        balanceEl.innerHTML = `<span class="good">${formatDurFromDec(netBalance, true)}</span>`;
+                        const burnDays = Math.ceil(netBalance / 0.5); // 0.5h (30m) max burn per day
+                        insightEl.innerHTML = `
+                            <div style="font-size:11px; color:var(--warn); background:var(--warn-bg); border:1px solid rgba(245, 158, 11, 0.3); padding:8px 10px; border-radius:6px; margin-top:12px; display:flex; gap:8px; align-items:flex-start; line-height:1.4;">
+                                <span style="font-size:14px;">💡</span>
+                                <span>Flex burns max <b>30m/day</b> to offset late arrivals.<br>Requires <b>~${burnDays} planned late-ins</b> (e.g. 09:30) to clear.</span>
                             </div>
-                            <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
-                                <div>IN <span>${inTimeDisplay}</span></div>
-                                <div>OUT <span>${outTimeDisplay}</span></div>
-                            </div>
-                        </div>
-                    `;
+                        `;
+                    } else if (netBalance < 0) {
+                        balanceEl.innerHTML = `<span class="bad">${formatDurFromDec(netBalance, true)}</span>`;
+                        insightEl.innerHTML = '';
+                    } else {
+                        balanceEl.innerHTML = `<span style="color:var(--text-muted)">Perfect</span>`;
+                        insightEl.innerHTML = '';
+                    }
+
+                    updateActiveShiftUI();
                 }
-
-                // 🎯 INJECT PILL INTO HEADER
-                grid.innerHTML += `
-                    <div class="ikg-day ${isToday ? 'today' : ''}" data-date="${dateStr}">
-                        <div class="ikg-date-header" style="align-items: center;">
-                            ${partialPill}
-                            <div class="ikg-date-num">${i}</div>
-                        </div>
-                        ${cellContent}
-                    </div>`;
-            }
-
-            const totalCells = firstDay + daysInMonth;
-            for (let i = 0; i < (42 - totalCells); i++) grid.innerHTML += `<div class="ikg-day empty"></div>`;
-
-            const targetHours = safeFloat((monthWorkedDays + ptoDays) * 9.0);
-            const effectiveHours = safeFloat(monthTotalHours + (ptoDays * 9.0));
-            const netBalance = safeFloat(effectiveHours - targetHours);
-
-            document.getElementById('side-val-days').innerText = monthWorkedDays + ptoDays;
-            document.getElementById('side-val-actual').innerText = formatDurFromDec(effectiveHours, false);
-            document.getElementById('side-val-target').innerText = formatDurFromDec(targetHours, false);
-
-            const balanceEl = document.getElementById('side-val-net');
-            if (netBalance > 0) balanceEl.innerHTML = `<span class="good">${formatDurFromDec(netBalance, true)}</span>`;
-            else if (netBalance < 0) balanceEl.innerHTML = `<span class="bad">${formatDurFromDec(netBalance, true)}</span>`;
-            else balanceEl.innerHTML = `<span style="color:var(--text-muted)">Perfect</span>`;
-
-            updateActiveShiftUI();
-        }
 
         function renderSettings() {
             const settings = getSettings();
@@ -2054,7 +2123,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             // 🎯 FIXED: Load the checkbox state visually (Defaults to true via getSettings())
         const overrideCheckbox = document.getElementById('set-use-overrides');
         if (overrideCheckbox) {
-            overrideCheckbox.checked = settings.useManualOverrides !== false; 
+            overrideCheckbox.checked = settings.useManualOverrides !== false;
         }
 
         const manualShiftEl = document.getElementById('set-manual-shift');
@@ -2134,7 +2203,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             const dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || '{}');
             const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || '{}'); // 🎯 NEW
             const settings = getSettings(); // 🎯 NEW
-            
+
             if (!tbody) return;
 
             let html = '';
@@ -2148,7 +2217,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
                     const exactHrs = evalDay.actualHrs;
                     const exactFlexHrs = evalDay.flexHrs;
                     const flexStr = exactFlexHrs === 0 ? '-' : formatDurFromDec(exactFlexHrs, true);
-                    
+
                     // Show spoofed times if overridden, else show raw API times
                     const startDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : formatTime(record.startTime);
                     const endDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : formatTime(record.endTime);
@@ -2226,7 +2295,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
                 const record = localCache[dateStr];
                 const note = dayNotes[dateStr];
                 const isFullPTO = note?.isPTO;
-                
+
                 // 🎯 THE FIX 1
                 const evalDay = evaluateDay(dateStr, record, note, overrides[dateStr], settings.useManualOverrides);
                 const hrs = evalDay.actualHrs; // 🎯 FORCE OVERRIDE RESPECT
@@ -2316,7 +2385,7 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
             if (filteredDates.length > 0) {
                 let start = new Date(filteredDates[0]);
                 let end = new Date(filteredDates[filteredDates.length - 1]);
-                
+
                 // Pad to full weeks (Sunday to Saturday)
                 start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - start.getDay());
                 end.setHours(0, 0, 0, 0); end.setDate(end.getDate() + (6 - end.getDay()));
@@ -2328,10 +2397,10 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
 
                 const totalDays = Math.round((end - start) / 86400000) + 1;
                 const totalCols = totalDays / 7;
-                
+
                 // 🎯 FIXED: Capped maximum column width at 75px to prevent ugly stretching
                 heatmapGrid.style.gridTemplateColumns = `repeat(${totalCols}, minmax(32px, 75px))`;
-                
+
                 // 🎯 FIXED: Apply the exact same grid layout to the months header for perfect alignment
                 monthsContainer.style.display = 'grid';
                 monthsContainer.style.gridTemplateColumns = `repeat(${totalCols}, minmax(32px, 75px))`;
@@ -2348,24 +2417,24 @@ const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 100000
                         }
                         const rec = localCache[dStr]; const note = dayNotes[dStr];
                         const evalDay = evaluateDay(dStr, rec, note, overrides[dStr], settings.useManualOverrides);
-                        
+
                         const shortPto = evalDay.ptoType ? evalDay.ptoType.split(' - ')[0] : 'PTO';
-                        
+
                         let color = 'var(--bg-elevated)'; let title = dStr; let pointerEvent = ''; let innerTxt = '';
 
                         if (curr > todayObj) { color = 'transparent'; title = ''; pointerEvent = 'pointer-events:none;'; }
-                        else if (evalDay.status === 'full-pto') { 
-                            color = evalDay.heatmapBg; title = `${dStr} | ${evalDay.ptoHrs}h ${shortPto}`; innerTxt = 'PTO'; 
+                        else if (evalDay.status === 'full-pto') {
+                            color = evalDay.heatmapBg; title = `${dStr} | ${evalDay.ptoHrs}h ${shortPto}`; innerTxt = 'PTO';
                         }
                         else if (evalDay.actualHrs > 0) {
                             color = evalDay.heatmapBg;
                             if (evalDay.isPartialPTO) title = `${dStr} | ${evalDay.effectiveHrs.toFixed(2)}h (${evalDay.actualHrs.toFixed(1)}h worked + ${evalDay.ptoHrs}h ${shortPto})`;
                             else title = `${dStr} | ${evalDay.actualHrs.toFixed(2)}h worked`;
-                            
+
                             if (evalDay.isSpoofed) title += ' ⚠️(Override)';
                             innerTxt = evalDay.effectiveHrs.toFixed(1);
-                        } else if (evalDay.status === 'pending') { 
-                            color = evalDay.heatmapBg; title += ' | Pending'; innerTxt = '⌛'; 
+                        } else if (evalDay.status === 'pending') {
+                            color = evalDay.heatmapBg; title += ' | Pending'; innerTxt = '⌛';
                         }
 
                        // 🎯 FIXED: Purged static title strings so the smart multi-line card system takes over tracking
@@ -2376,7 +2445,7 @@ heatmapGrid.innerHTML += `
     </div>`;
                         curr.setDate(curr.getDate() + 1);
                     }
-                    
+
                     // 🎯 FIXED: Place the month title directly into its corresponding column cell
                     if (isNewMonth) {
                         monthsContainer.innerHTML += `<div style="font-size:11px; color:var(--text-muted); font-weight:500;">${monthName}</div>`;
@@ -2386,21 +2455,21 @@ heatmapGrid.innerHTML += `
                 }
             }
         } else {
-                canvasContainer.style.display = 'block'; 
+                canvasContainer.style.display = 'block';
                 heatmapWrapper.style.display = 'none';
                 const dataItems = []; const labels = [];
                 filteredDates.forEach(dStr => {
                     const d = new Date(dStr); const isDense = filteredDates.length > 60;
                     labels.push(isDense ? `${d.getMonth() + 1}/${d.getDate()}` : `${d.toLocaleString('default', { month: 'short' })} ${d.getDate()}`);
-                    
+
                     const evalDay = evaluateDay(dStr, localCache[dStr], dayNotes[dStr], overrides[dStr], settings.useManualOverrides);
-                    
+
                     // 🎯 Pass full context to the native chart drawer
-                    dataItems.push({ 
-                        dateStr: dStr, 
-                        val: evalDay.actualHrs, 
-                        pto: evalDay.ptoHrs, 
-                        color: evalDay.chartColor, 
+                    dataItems.push({
+                        dateStr: dStr,
+                        val: evalDay.actualHrs,
+                        pto: evalDay.ptoHrs,
+                        color: evalDay.chartColor,
                         isSpoofed: evalDay.isSpoofed,
                         ptoType: evalDay.ptoType
                     });
@@ -2431,7 +2500,7 @@ heatmapGrid.innerHTML += `
                             <div id="ikg-close">&times;</div>
                         </div>
                     </header>
-                    
+
                     <div id="ikg-modal-body">
                         <div id="view-cal" class="ikg-view active">
                             <div id="ikg-calendar-pane">
@@ -2442,7 +2511,7 @@ heatmapGrid.innerHTML += `
                                 </div>
                                 <div class="ikg-grid-header"><div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div></div>
                                 <div class="ikg-grid" id="ikg-cal-grid"></div>
-                                
+
                                 <div class="day-modal-overlay"></div>
                                 <div id="ikg-day-modal" class="ikg-popup-modal">
                                     <div class="dm-title" id="dm-title-date">
@@ -2467,7 +2536,7 @@ heatmapGrid.innerHTML += `
                                     </div>
                                 </div>
                             </div>
-                            
+
                             <div class="ikg-summary-pane">
                                 <div id="ikg-active-shift-container"></div>
 
@@ -2509,7 +2578,7 @@ heatmapGrid.innerHTML += `
                                         </div>
                                     </div>
                                 </div> <div class="ikg-canvas-container"><canvas id="ikg-main-chart"></canvas></div>
-                                
+
                                 <div id="ikg-heatmap-wrapper">
                                     <div id="ikg-heatmap-months"></div>
                                     <div class="hm-layout">
@@ -2521,7 +2590,7 @@ heatmapGrid.innerHTML += `
                                 </div>
 
                             </div>
-                            
+
                             <div class="ikg-summary-pane">
                                 <div class="ikg-card">
                                     <div class="ikg-card-title">Shift Insights</div>
@@ -2591,7 +2660,7 @@ heatmapGrid.innerHTML += `
 
                         <div id="view-settings" class="ikg-view" style="padding: 32px 48px; background: var(--bg-surface); justify-content: center; align-items: flex-start;">
                             <div style="width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 20px;">
-                                
+
                                 <div class="set-header-wrap">
                                     <div class="set-header">⚙️ Preferences & Customization</div>
                                     <div style="font-size:14px; color:var(--text-muted);">Configure how Attendance Pro behaves. (Changes save automatically)</div>
@@ -2663,11 +2732,11 @@ heatmapGrid.innerHTML += `
 
                                     <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; gap: 12px;">
                                         <div class="ikg-card-title" style="margin-bottom: 0;">Alarm Media</div>
-                                        
+
                                         <div style="font-size:11px; color:var(--warn); padding:6px 8px; background:var(--warn-bg); border-radius:6px; border:1px solid var(--warn); line-height: 1.3;">
                                             💡 <b>Mac sleep blocks alarms.</b> Use GCal to push to phone.
                                         </div>
-                                        
+
                                         <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
                                             <select id="set-sound" class="set-select" style="padding: 6px 8px; font-size: 12px; height: 32px;">
                                                 <option value="pro_fkj">🎹 FKJ - Just Piano (Def)</option>
@@ -2726,7 +2795,7 @@ heatmapGrid.innerHTML += `
 
                         <div id="view-rules" class="ikg-view" style="padding: 32px 48px; overflow-y: auto; background: var(--bg-surface); align-items: flex-start; justify-content: center;">
                             <div style="width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 20px;">
-                                
+
                                 <div class="set-header-wrap">
                                     <div class="set-header">📜 Shift & Flex Rules</div>
                                 </div>
@@ -2751,7 +2820,7 @@ heatmapGrid.innerHTML += `
                                             <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px; border-top: 1px dashed var(--border); padding-top: 6px;">* Official approved Overtime (OT) is calculated separately.</div>
                                         </div>
                                     </div>
-                                    
+
                                     <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column;">
                                         <div class="ikg-card-title" style="color: var(--warn);">3. 🟠 Late Arrival (30m Grace)</div>
                                         <div style="font-size: 13px; color: var(--text-main); line-height: 1.6;">
@@ -2771,7 +2840,7 @@ heatmapGrid.innerHTML += `
                                             Exceptions like morning sick leave won't break the auto-detection.
                                         </div>
                                     </div>
-                                    
+
                                     <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; background: rgba(239, 68, 68, 0.05); border-color: rgba(239, 68, 68, 0.3);">
                                         <div class="ikg-card-title" style="color: var(--danger);">5. ⛔ Checkout Blackouts</div>
                                         <div style="font-size: 13px; color: var(--text-main); line-height: 1.6;">
@@ -2954,13 +3023,13 @@ heatmapGrid.innerHTML += `
             if (heatmapGridEl) {
                 // Keep your existing click handler to navigate back to calendar cells
                 heatmapGridEl.addEventListener('click', (e) => {
-                    const heatSq = e.target.closest('.ikg-heat-sq'); 
+                    const heatSq = e.target.closest('.ikg-heat-sq');
                     if (heatSq) {
                         const jumpStr = heatSq.getAttribute('data-jump');
                         if (jumpStr) {
-                            currentViewYear = new Date(jumpStr).getFullYear(); 
+                            currentViewYear = new Date(jumpStr).getFullYear();
                             currentViewMonth = new Date(jumpStr).getMonth() + 1;
-                            document.getElementById('tab-cal').click(); 
+                            document.getElementById('tab-cal').click();
                             renderCalendar();
                         }
                     }
@@ -3056,18 +3125,18 @@ heatmapGrid.innerHTML += `
 
             const handleAutoSave = () => {
                 if (!activeModalDate) return;
-                const manIn = document.getElementById('dm-manual-in').value; 
+                const manIn = document.getElementById('dm-manual-in').value;
                 const manOut = document.getElementById('dm-manual-out').value;
 
                 let overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || '{}');
 
                 if (manIn || manOut) {
-                    overrides[activeModalDate] = { 
-                        manualIn: manIn || null, 
-                        manualOut: manOut || null 
+                    overrides[activeModalDate] = {
+                        manualIn: manIn || null,
+                        manualOut: manOut || null
                     };
                 } else {
-                    delete overrides[activeModalDate]; 
+                    delete overrides[activeModalDate];
                 }
                 localStorage.setItem(OVERRIDES_KEY, JSON.stringify(overrides));
 
@@ -3087,7 +3156,7 @@ heatmapGrid.innerHTML += `
 
             const inputIn = document.getElementById('dm-manual-in');
             const inputOut = document.getElementById('dm-manual-out');
-            
+
             // Native time inputs trigger 'input' reliably and safely
             if (inputIn) inputIn.addEventListener('input', handleAutoSave);
             if (inputOut) inputOut.addEventListener('input', handleAutoSave);
@@ -3103,8 +3172,8 @@ heatmapGrid.innerHTML += `
                         if (titleDateSpan) titleDateSpan.innerText = activeModalDate;
 
                         const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || '{}');
-                        const localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); 
-                        const record = localCache[activeModalDate]; 
+                        const localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
+                        const record = localCache[activeModalDate];
 
                         const toTimeInputStr = (ms) => {
                             if (!ms) return '';
@@ -3125,7 +3194,7 @@ heatmapGrid.innerHTML += `
             if (closeBtn) {
                 closeBtn.addEventListener('click', () => { if (dmModal) dmModal.classList.remove('open'); });
             }
-            
+
             // Safe document boundary tracking
             document.addEventListener('click', (e) => {
                 if (dmModal && dmModal.classList.contains('open')) {
@@ -3146,7 +3215,7 @@ heatmapGrid.innerHTML += `
                         const targetDate = new Date(jumpStr);
                         currentViewYear = targetDate.getFullYear();
                         currentViewMonth = targetDate.getMonth() + 1;
-                        
+
                         const calTabBtn = document.getElementById('tab-cal');
                         if (calTabBtn) calTabBtn.click();
                         renderCalendar();
@@ -3175,7 +3244,7 @@ heatmapGrid.innerHTML += `
                     renderCalendar();
                 });
             }
-            
+
             dmOverlay.addEventListener('click', () => { dmOverlay.classList.remove('open'); dmModal.classList.remove('open'); });
 
             // 🎯 SETTINGS AUTOSAVE LOGIC
@@ -3194,7 +3263,7 @@ heatmapGrid.innerHTML += `
                 settings.manualShift = document.getElementById('set-manual-shift').value;
                 settings.alarmImgType = document.getElementById('set-img-type').value;
                 settings.pulseSpeed = parseFloat(document.getElementById('set-pulse-speed').value) || 0;
-                
+
                 // 🎯 THE FIX: Force it to read the Manual Override checkbox!
                 const overrideCheckbox = document.getElementById('set-use-overrides');
                 if (overrideCheckbox) settings.useManualOverrides = overrideCheckbox.checked;
@@ -3320,7 +3389,7 @@ heatmapGrid.innerHTML += `
                 }
             }, 300);
 
-            // 🎯 THE RANGE PROTOCOL IMPLEMENTATION 
+            // 🎯 THE RANGE PROTOCOL IMPLEMENTATION
             document.getElementById('ikg-btn-fetch').addEventListener('click', async () => {
                 IkgLog.info("Sync Triggered via The Range Protocol.");
                 const btn = document.getElementById('ikg-btn-fetch');
@@ -3403,7 +3472,7 @@ heatmapGrid.innerHTML += `
                 // 1. Release the main UI instantly
                 isFetchingData = false;
                 localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
-                
+
                 updateHeaderStatus('Syncing Deel PTO...', 'var(--warn)');
                 renderCalendar(); // Renders IKG data immediately
                 if (activeTab === 'stats') renderAnalytics(localCache);
@@ -3422,13 +3491,13 @@ heatmapGrid.innerHTML += `
                         });
                         localStorage.setItem(DAY_NOTES_KEY, JSON.stringify(dayNotes));
                         IkgLog.info(`Successfully injected ${Object.keys(deelPto.ptoCalendar).length} PTO records from Deel.`);
-                        
+
                         // Re-render silently to show new PTO pills
                         renderCalendar();
                         if (activeTab === 'stats') renderAnalytics(localCache);
                         if (activeTab === 'audit') renderAudit(localCache);
                     }
-                    
+
                     // Finalize Cache Aggregates
                     globalTotalDays = 0; globalTotalHours = 0; let earliestDate = "9999-99-99";
                     Object.keys(localCache).forEach(dateStr => {
@@ -3443,7 +3512,7 @@ heatmapGrid.innerHTML += `
                     });
                     globalFirstDate = earliestDate === "9999-99-99" ? "--" : earliestDate;
                     localStorage.setItem(AGG_CACHE_KEY, JSON.stringify({ globalTotalDays, globalTotalHours, globalFirstDate }));
-                    
+
                     document.getElementById('all-val-days').innerText = globalTotalDays;
                     document.getElementById('all-val-hours').innerText = formatDurFromDec(globalTotalHours, false);
                     document.getElementById('all-val-first').innerText = globalFirstDate;
