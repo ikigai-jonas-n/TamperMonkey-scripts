@@ -11,173 +11,270 @@
 // ==/UserScript==
 
 (function () {
-    'use strict';
+  "use strict";
 
-    // --- State & Settings Management ---
-    const SETTINGS_KEY = 'env_dash_rgs_settings';
+  // --- State & Settings Management ---
+  const SETTINGS_KEY = "env_dash_rgs_settings";
 
-    const DEFAULT_SETTINGS = {
-        fontSize: 10, maxWidth: 180, maxHeight: 60, maxItems: 50, flowFontSize: 9, flowLineLen: 50,
-        hideYear: true, hideTime: true, isExpanded: true,
-        saveFilters: false,
-        repoMode: 'pinned',
-        colOrder: [
-            "id", "date", "creator", "repo", "version", "env", "region", "title", "flow", "status", "action"
-        ],
-        colWidths: {
-            id: 55, date: 115, creator: 80, repo: 159, env: 63, region: 130, version: 109, title: 234, flow: 320, status: 81, action: 85
-        },
-        matrixStatuses: { APPROVED: true, REJECTED: true, INPROGRESS: true },
-        repoToggles: {}
+  const DEFAULT_SETTINGS = {
+    fontSize: 10,
+    maxWidth: 180,
+    maxHeight: 60,
+    maxItems: 50,
+    flowFontSize: 9,
+    flowLineLen: 50,
+    hideYear: true,
+    hideTime: true,
+    isExpanded: true,
+    saveFilters: false,
+    repoMode: "pinned",
+    colOrder: [
+      "id",
+      "date",
+      "creator",
+      "repo",
+      "version",
+      "env",
+      "region",
+      "title",
+      "flow",
+      "status",
+      "action",
+    ],
+    colWidths: {
+      id: 55,
+      date: 115,
+      creator: 80,
+      repo: 159,
+      env: 63,
+      region: 130,
+      version: 109,
+      title: 234,
+      flow: 320,
+      status: 81,
+      action: 85,
+    },
+    matrixStatuses: { APPROVED: true, REJECTED: true, INPROGRESS: true },
+    repoToggles: {},
+  };
+
+  let settings = {
+    ...DEFAULT_SETTINGS,
+    ...(JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}),
+  };
+  if (settings.saveFilters === undefined)
+    settings.saveFilters = DEFAULT_SETTINGS.saveFilters;
+  if (!settings.colWidths) settings.colWidths = DEFAULT_SETTINGS.colWidths;
+  if (!settings.colOrder) settings.colOrder = DEFAULT_SETTINGS.colOrder;
+  if (!settings.flowFontSize) settings.flowFontSize = 9;
+  if (!settings.flowLineLen) settings.flowLineLen = 50;
+  if (!settings.matrixStatuses)
+    settings.matrixStatuses = DEFAULT_SETTINGS.matrixStatuses;
+  if (!settings.repoMode) settings.repoMode = DEFAULT_SETTINGS.repoMode;
+  if (!settings.repoToggles) settings.repoToggles = {};
+
+  Object.keys(DEFAULT_SETTINGS.colWidths).forEach((k) => {
+    if (!settings.colWidths[k])
+      settings.colWidths[k] = DEFAULT_SETTINGS.colWidths[k];
+  });
+
+  let globalWorkflows = [];
+  let globalWfIds = new Set();
+  let activeCacheMap = {};
+  let globalGroups = {};
+  let engineStarted = false;
+  let notificationsActive = false;
+  let renderTimeout = null;
+  let saveTimeout = null;
+  let currentUser = null;
+  let myPendingApprovals = new Set();
+  let isTooltipLocked = false;
+
+  // --- Core Utils ---
+  function log(msg, ...args) {
+    console.log(
+      "%c [EnvDash Streamer] ",
+      "background: #10b981; color: #fff; font-weight: bold; border-radius: 3px;",
+      msg,
+      ...args,
+    );
+  }
+  function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  function escapeQuotes(str) {
+    return String(str || "").replace(/"/g, "&quot;");
+  }
+  function highlightHTML(text, highlightSet) {
+    if (!highlightSet || highlightSet.size === 0 || !text) return text || "";
+    let safeText = String(text).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const terms = Array.from(highlightSet)
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+    if (terms.length === 0) return safeText;
+    return safeText.replace(
+      new RegExp(`(${terms.map(escapeRegExp).join("|")})`, "gi"),
+      '<mark class="rgs-mark">$1</mark>',
+    );
+  }
+  function debounce(func, wait) {
+    let timeout;
+    return function (...args) {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func.apply(this, args), wait);
     };
-
-    let settings = { ...DEFAULT_SETTINGS, ...(JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}) };
-    if (settings.saveFilters === undefined) settings.saveFilters = DEFAULT_SETTINGS.saveFilters;
-    if (!settings.colWidths) settings.colWidths = DEFAULT_SETTINGS.colWidths;
-    if (!settings.colOrder) settings.colOrder = DEFAULT_SETTINGS.colOrder;
-    if (!settings.flowFontSize) settings.flowFontSize = 9;
-    if (!settings.flowLineLen) settings.flowLineLen = 50;
-    if (!settings.matrixStatuses) settings.matrixStatuses = DEFAULT_SETTINGS.matrixStatuses;
-    if (!settings.repoMode) settings.repoMode = DEFAULT_SETTINGS.repoMode;
-    if (!settings.repoToggles) settings.repoToggles = {};
-
-    Object.keys(DEFAULT_SETTINGS.colWidths).forEach(k => {
-        if (!settings.colWidths[k]) settings.colWidths[k] = DEFAULT_SETTINGS.colWidths[k];
-    });
-
-    let globalWorkflows = [];
-    let globalWfIds = new Set();
-    let activeCacheMap = {};
-    let globalGroups = {};
-    let engineStarted = false;
-    let notificationsActive = false;
-    let renderTimeout = null;
-    let saveTimeout = null;
-    let currentUser = null;
-    let myPendingApprovals = new Set();
-    let isTooltipLocked = false;
-
-    // --- Core Utils ---
-    function log(msg, ...args) { console.log('%c [EnvDash Streamer] ', 'background: #10b981; color: #fff; font-weight: bold; border-radius: 3px;', msg, ...args); }
-    function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-    function escapeQuotes(str) { return String(str || '').replace(/"/g, '&quot;'); }
-    function highlightHTML(text, highlightSet) {
-        if (!highlightSet || highlightSet.size === 0 || !text) return text || '';
-        let safeText = String(text).replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        const terms = Array.from(highlightSet).filter(Boolean).sort((a, b) => b.length - a.length);
-        if (terms.length === 0) return safeText;
-        return safeText.replace(new RegExp(`(${terms.map(escapeRegExp).join('|')})`, 'gi'), '<mark class="rgs-mark">$1</mark>');
+  }
+  function formatLocalTime(utcString) {
+    if (!utcString) return null;
+    const safeUtc = utcString.endsWith("Z") ? utcString : utcString + "Z";
+    const d = new Date(safeUtc);
+    if (isNaN(d.getTime())) return null;
+    const y = d.getFullYear(),
+      m = String(d.getMonth() + 1).padStart(2, "0"),
+      day = String(d.getDate()).padStart(2, "0");
+    const h = String(d.getHours()).padStart(2, "0"),
+      min = String(d.getMinutes()).padStart(2, "0"),
+      s = String(d.getSeconds()).padStart(2, "0");
+    return {
+      dateObj: d,
+      full: `${y}-${m}-${day} ${h}:${min}:${s}`,
+      year: `${y}`,
+      date: `${m}-${day}`,
+      time: `${h}:${min}`,
+      dayIndex: d.getDay(),
+    };
+  }
+  function formatDateForInput(date) {
+    return date
+      ? `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}`
+      : "";
+  }
+  function parseLocalDate(dateString) {
+    if (!dateString) return null;
+    const [y, m, d] = dateString.split("-");
+    return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+  }
+  function levenshtein(a, b) {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    const matrix = Array.from({ length: b.length + 1 }, (_, i) => [i]);
+    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+    for (let i = 1; i <= b.length; i++) {
+      for (let j = 1; j <= a.length; j++) {
+        if (b.charAt(i - 1) === a.charAt(j - 1))
+          matrix[i][j] = matrix[i - 1][j - 1];
+        else
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1,
+            Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1),
+          );
+      }
     }
-    function debounce(func, wait) {
-        let timeout;
-        return function (...args) {
-            clearTimeout(timeout);
-            timeout = setTimeout(() => func.apply(this, args), wait);
-        };
+    return matrix[b.length][a.length];
+  }
+  function truncateMiddle(str, maxLen = 20) {
+    if (!str) return "";
+    const s = String(str);
+    if (s.length <= maxLen) return s;
+    const front = Math.ceil((maxLen - 3) / 2);
+    const back = Math.floor((maxLen - 3) / 2);
+    return s.substring(0, front) + "..." + s.substring(s.length - back);
+  }
+
+  // --- Identity Engine ---
+  async function fetchCurrentUser() {
+    try {
+      const res = await fetch("https://lab.iki-utl.cc/dashboard/api/user");
+      if (res.ok) {
+        currentUser = await res.json();
+        log("Current User Authenticated:", currentUser.username);
+      }
+    } catch (e) {
+      log("Failed to fetch current user.");
     }
-    function formatLocalTime(utcString) {
-        if (!utcString) return null;
-        const safeUtc = utcString.endsWith('Z') ? utcString : utcString + 'Z';
-        const d = new Date(safeUtc);
-        if (isNaN(d.getTime())) return null;
-        const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
-        const h = String(d.getHours()).padStart(2, '0'), min = String(d.getMinutes()).padStart(2, '0'), s = String(d.getSeconds()).padStart(2, '0');
-        return { dateObj: d, full: `${y}-${m}-${day} ${h}:${min}:${s}`, year: `${y}`, date: `${m}-${day}`, time: `${h}:${min}`, dayIndex: d.getDay() };
+  }
+
+  async function fetchGroups() {
+    try {
+      const res = await fetch(
+        "https://lab.iki-utl.cc/dashboard/workflow-api/groups",
+        { cache: "no-store" },
+      );
+      if (res.ok) {
+        globalGroups = await res.json();
+        log("Dynamic User Groups fetched successfully.");
+      }
+    } catch (e) {
+      log("Failed to fetch user groups.");
     }
-    function formatDateForInput(date) { return date ? `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}` : ''; }
-    function parseLocalDate(dateString) { if (!dateString) return null; const [y, m, d] = dateString.split('-'); return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10)); }
-    function levenshtein(a, b) {
-        if (a.length === 0) return b.length;
-        if (b.length === 0) return a.length;
-        const matrix = Array.from({ length: b.length + 1 }, (_, i) => [i]);
-        for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
-        for (let i = 1; i <= b.length; i++) {
-            for (let j = 1; j <= a.length; j++) {
-                if (b.charAt(i - 1) === a.charAt(j - 1)) matrix[i][j] = matrix[i - 1][j - 1];
-                else matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1));
-            }
+  }
+
+  function updateActionFab() {
+    const fab = document.getElementById("rgs-action-fab");
+    const badge = document.getElementById("rgs-action-badge");
+    if (fab && badge) {
+      if (myPendingApprovals.size > 0) {
+        fab.style.display = "flex";
+        badge.textContent = myPendingApprovals.size;
+      } else {
+        fab.style.display = "none";
+        if (
+          typeof OverviewManager !== "undefined" &&
+          OverviewManager.myApprovalsOnly
+        ) {
+          OverviewManager.myApprovalsOnly = false;
+          const clrBtn = document.getElementById("ov-clear-approvals");
+          if (clrBtn) clrBtn.style.display = "none";
+          if (OverviewManager.isLoaded) OverviewManager.triggerCrossFilter();
         }
-        return matrix[b.length][a.length];
+      }
     }
-    function truncateMiddle(str, maxLen = 20) {
-        if (!str) return '';
-        const s = String(str);
-        if (s.length <= maxLen) return s;
-        const front = Math.ceil((maxLen - 3) / 2);
-        const back = Math.floor((maxLen - 3) / 2);
-        return s.substring(0, front) + '...' + s.substring(s.length - back);
-    }
+  }
 
-    // --- Identity Engine ---
-    async function fetchCurrentUser() {
-        try {
-            const res = await fetch('https://lab.iki-utl.cc/dashboard/api/user');
-            if (res.ok) {
-                currentUser = await res.json();
-                log("Current User Authenticated:", currentUser.username);
-            }
-        } catch (e) {
-            log("Failed to fetch current user.");
-        }
-    }
+  // --- Global Color Engine ---
+  function getStatusDotColor(status) {
+    const s = (status || "").toUpperCase();
+    if (s === "APPROVED" || s === "SUCCESS") return "#10b981";
+    if (
+      s === "REJECTED" ||
+      s === "FAILED" ||
+      s === "FAILURE" ||
+      s === "CANCELED" ||
+      s === "CANCELLED"
+    )
+      return "#ef4444";
+    if (s === "INPROGRESS" || s === "RUNNING") return "#f59e0b";
+    return "#94a3b8";
+  }
 
-    async function fetchGroups() {
-        try {
-            const res = await fetch('https://lab.iki-utl.cc/dashboard/workflow-api/groups', { cache: 'no-store' });
-            if (res.ok) {
-                globalGroups = await res.json();
-                log("Dynamic User Groups fetched successfully.");
-            }
-        } catch (e) {
-            log("Failed to fetch user groups.");
-        }
-    }
+  function getStatusStyle(status) {
+    const s = (status || "").toUpperCase();
+    if (s === "APPROVED" || s === "SUCCESS")
+      return "background: #dcfce7; color: #166534; border: 1px solid #86efac;";
+    if (
+      s === "REJECTED" ||
+      s === "FAILED" ||
+      s === "FAILURE" ||
+      s === "CANCELED" ||
+      s === "CANCELLED"
+    )
+      return "background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5;";
+    if (s === "INPROGRESS" || s === "RUNNING")
+      return "background: #fef9c3; color: #9a3412; border: 1px solid #fde047;";
+    return "background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1;";
+  }
 
-    function updateActionFab() {
-        const fab = document.getElementById('rgs-action-fab');
-        const badge = document.getElementById('rgs-action-badge');
-        if (fab && badge) {
-            if (myPendingApprovals.size > 0) {
-                fab.style.display = 'flex';
-                badge.textContent = myPendingApprovals.size;
-            } else {
-                fab.style.display = 'none';
-                if (typeof OverviewManager !== 'undefined' && OverviewManager.myApprovalsOnly) {
-                    OverviewManager.myApprovalsOnly = false;
-                    const clrBtn = document.getElementById('ov-clear-approvals');
-                    if (clrBtn) clrBtn.style.display = 'none';
-                    if (OverviewManager.isLoaded) OverviewManager.triggerCrossFilter();
-                }
-            }
-        }
-    }
+  // --- Notification & Inbox System ---
+  const NotificationManager = {
+    inbox: JSON.parse(localStorage.getItem("env_dash_inbox") || "[]"),
+    unreadCount: 0,
+    init() {
+      if (document.getElementById("rgs-inbox-fab")) return;
+      if (!settings.notifFilter) settings.notifFilter = "all";
 
-    // --- Global Color Engine ---
-    function getStatusDotColor(status) {
-        const s = (status || '').toUpperCase();
-        if (s === 'APPROVED' || s === 'SUCCESS') return '#10b981';
-        if (s === 'REJECTED' || s === 'FAILED' || s === 'FAILURE' || s === 'CANCELED' || s === 'CANCELLED') return '#ef4444';
-        if (s === 'INPROGRESS' || s === 'RUNNING') return '#f59e0b';
-        return '#94a3b8';
-    }
-
-    function getStatusStyle(status) {
-        const s = (status || '').toUpperCase();
-        if (s === 'APPROVED' || s === 'SUCCESS') return 'background: #dcfce7; color: #166534; border: 1px solid #86efac;';
-        if (s === 'REJECTED' || s === 'FAILED' || s === 'FAILURE' || s === 'CANCELED' || s === 'CANCELLED') return 'background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5;';
-        if (s === 'INPROGRESS' || s === 'RUNNING') return 'background: #fef9c3; color: #9a3412; border: 1px solid #fde047;';
-        return 'background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1;';
-    }
-
-    // --- Notification & Inbox System ---
-    const NotificationManager = {
-        inbox: JSON.parse(localStorage.getItem('env_dash_inbox') || '[]'),
-        unreadCount: 0,
-        init() {
-            if (document.getElementById('rgs-inbox-fab')) return;
-            if (!settings.notifFilter) settings.notifFilter = 'all';
-
-            document.body.insertAdjacentHTML('beforeend', `
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        `
                 <div id="rgs-toast-container"></div>
                 <div id="rgs-action-fab" class="rgs-action-fab" style="display:none;" title="Action Required: You have pending approvals!">
                     🚨<span id="rgs-action-badge">0</span>
@@ -190,8 +287,8 @@
                         <div style="display:flex; align-items:center; gap:8px;">
                             <span style="font-weight: bold; color: #0f172a;">Notifications</span>
                             <select id="rgs-inbox-filter" style="font-size:10px; border:1px solid #cbd5e1; border-radius:4px; padding:2px; outline:none; cursor:pointer;">
-                                <option value="pinned" ${settings.notifFilter === 'pinned' ? 'selected' : ''}>📌 Pinned</option>
-                                <option value="all" ${settings.notifFilter === 'all' ? 'selected' : ''}>🌐 All Repos</option>
+                                <option value="pinned" ${settings.notifFilter === "pinned" ? "selected" : ""}>📌 Pinned</option>
+                                <option value="all" ${settings.notifFilter === "all" ? "selected" : ""}>🌐 All Repos</option>
                             </select>
                         </div>
                         <div>
@@ -201,142 +298,177 @@
                     </div>
                     <div id="rgs-inbox-list" class="rgs-inbox-list"></div>
                 </div>
-            `);
+            `,
+      );
 
-            // --- ALL EVENT LISTENERS ---
-            document.getElementById('rgs-inbox-fab').addEventListener('click', () => {
-                document.getElementById('rgs-inbox-panel').classList.toggle('active');
-                this.renderInbox();
-            });
+      // --- ALL EVENT LISTENERS ---
+      document.getElementById("rgs-inbox-fab").addEventListener("click", () => {
+        document.getElementById("rgs-inbox-panel").classList.toggle("active");
+        this.renderInbox();
+      });
 
-            document.getElementById('rgs-inbox-close').addEventListener('click', () => {
-                document.getElementById('rgs-inbox-panel').classList.remove('active');
-            });
+      document
+        .getElementById("rgs-inbox-close")
+        .addEventListener("click", () => {
+          document.getElementById("rgs-inbox-panel").classList.remove("active");
+        });
 
-            // NEW: Clear Button Event Listener
-            document.getElementById('rgs-inbox-clear').addEventListener('click', () => {
-                if (confirm('Are you sure you want to clear all notifications?')) {
-                    this.inbox = [];
-                    localStorage.removeItem('env_dash_inbox');
-                    this.updateBadge();
-                    this.renderInbox();
-                }
-            });
-
-            document.getElementById('rgs-inbox-filter').addEventListener('change', (e) => {
-                settings.notifFilter = e.target.value;
-                saveSettings();
-                this.updateBadge();
-                this.renderInbox();
-            });
-
-            document.getElementById('rgs-action-fab').addEventListener('click', () => {
-                if (typeof OverviewManager !== 'undefined') {
-                    OverviewManager.myApprovalsOnly = true;
-                    OverviewManager.open();
-                }
-            });
-
+      // NEW: Clear Button Event Listener
+      document
+        .getElementById("rgs-inbox-clear")
+        .addEventListener("click", () => {
+          if (confirm("Are you sure you want to clear all notifications?")) {
+            this.inbox = [];
+            localStorage.removeItem("env_dash_inbox");
             this.updateBadge();
             this.renderInbox();
-            updateActionFab();
-        },
-        add(title, message, wfId, repoNames, status) {
-            const id = Date.now();
-            const notif = { id, title, message, wfId, repoNames: repoNames || [], status: status || 'UNKNOWN', read: false, time: new Date().toLocaleTimeString() };
-            this.inbox.unshift(notif);
-            if (this.inbox.length > 50) this.inbox.length = 50;
-            localStorage.setItem('env_dash_inbox', JSON.stringify(this.inbox));
+          }
+        });
 
-            this.updateBadge();
+      document
+        .getElementById("rgs-inbox-filter")
+        .addEventListener("change", (e) => {
+          settings.notifFilter = e.target.value;
+          saveSettings();
+          this.updateBadge();
+          this.renderInbox();
+        });
 
-            const isPinnedOnly = settings.notifFilter === 'pinned';
-            const pinnedList = getPinnedRepos();
-            const isRelevant = !isPinnedOnly || notif.repoNames.some(r => pinnedList.includes(r.replace('Tolgee: ', '')));
+      document
+        .getElementById("rgs-action-fab")
+        .addEventListener("click", () => {
+          if (typeof OverviewManager !== "undefined") {
+            OverviewManager.myApprovalsOnly = true;
+            OverviewManager.open();
+          }
+        });
 
-            if (isRelevant) this.showToast(notif);
-            if (document.getElementById('rgs-inbox-panel').classList.contains('active')) this.renderInbox();
-        },
-        updateStatus(wfId, newStatus) {
-            let updated = false;
-            this.inbox.forEach(i => {
-                if (String(i.wfId) === String(wfId) && i.status !== newStatus) {
-                    i.status = newStatus;
-                    updated = true;
-                }
+      this.updateBadge();
+      this.renderInbox();
+      updateActionFab();
+    },
+    add(title, message, wfId, repoNames, status) {
+      const id = Date.now();
+      const notif = {
+        id,
+        title,
+        message,
+        wfId,
+        repoNames: repoNames || [],
+        status: status || "UNKNOWN",
+        read: false,
+        time: new Date().toLocaleTimeString(),
+      };
+      this.inbox.unshift(notif);
+      if (this.inbox.length > 50) this.inbox.length = 50;
+      localStorage.setItem("env_dash_inbox", JSON.stringify(this.inbox));
+
+      this.updateBadge();
+
+      const isPinnedOnly = settings.notifFilter === "pinned";
+      const pinnedList = getPinnedRepos();
+      const isRelevant =
+        !isPinnedOnly ||
+        notif.repoNames.some((r) =>
+          pinnedList.includes(r.replace("Tolgee: ", "")),
+        );
+
+      if (isRelevant) this.showToast(notif);
+      if (
+        document.getElementById("rgs-inbox-panel").classList.contains("active")
+      )
+        this.renderInbox();
+    },
+    updateStatus(wfId, newStatus) {
+      let updated = false;
+      this.inbox.forEach((i) => {
+        if (String(i.wfId) === String(wfId) && i.status !== newStatus) {
+          i.status = newStatus;
+          updated = true;
+        }
+      });
+      if (updated) {
+        localStorage.setItem("env_dash_inbox", JSON.stringify(this.inbox));
+        if (
+          document
+            .getElementById("rgs-inbox-panel")
+            .classList.contains("active")
+        ) {
+          this.renderInbox();
+        }
+        // Live sync active toasts on screen
+        document
+          .querySelectorAll(`.rgs-toast[data-wfid="${wfId}"] .rgs-toast-status`)
+          .forEach((el) => {
+            el.textContent = newStatus;
+            el.style.cssText = `position: absolute; top: 10px; right: 28px; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: bold; line-height: 1; box-shadow: 0 2px 4px rgba(0,0,0,0.05); ${getStatusStyle(newStatus)}`;
+          });
+      }
+    },
+    updateBadge() {
+      const badge = document.getElementById("rgs-inbox-badge");
+      if (badge) {
+        const isPinnedOnly = settings.notifFilter === "pinned";
+        const pinnedList = getPinnedRepos();
+        const visibleNotifs = this.inbox.filter((i) => {
+          if (!isPinnedOnly) return true;
+          return (i.repoNames || []).some((r) =>
+            pinnedList.includes(r.replace("Tolgee: ", "")),
+          );
+        });
+
+        this.unreadCount = visibleNotifs.filter((i) => !i.read).length;
+        badge.textContent = this.unreadCount;
+        badge.classList.toggle("active", this.unreadCount > 0);
+      }
+    },
+    markAsRead(id) {
+      const item = this.inbox.find((i) => i.id === id);
+      if (item && !item.read) {
+        item.read = true;
+        localStorage.setItem("env_dash_inbox", JSON.stringify(this.inbox));
+        this.updateBadge();
+        const node = document.querySelector(
+          `.rgs-inbox-item[data-nid="${id}"]`,
+        );
+        if (node) node.classList.remove("unread");
+      }
+    },
+    manageToastStack() {
+      const container = document.getElementById("rgs-toast-container");
+      if (!container) return;
+      const toasts = container.querySelectorAll(".rgs-toast");
+      let clearBtn = document.getElementById("rgs-toast-clear-btn");
+
+      // Apple Style Stack feature: inject "Clear All" if 3 or more toasts stack up
+      if (toasts.length >= 3) {
+        if (!clearBtn) {
+          clearBtn = document.createElement("button");
+          clearBtn.id = "rgs-toast-clear-btn";
+          clearBtn.textContent = "Clear All Notifications ×";
+          clearBtn.className = "rgs-toast-clear-btn rgs-fade-in";
+          clearBtn.onclick = () => {
+            container.querySelectorAll(".rgs-toast").forEach((t) => {
+              t.style.transform = "translateX(120%)";
+              t.style.opacity = "0";
+              setTimeout(() => t.remove(), 400);
             });
-            if (updated) {
-                localStorage.setItem('env_dash_inbox', JSON.stringify(this.inbox));
-                if (document.getElementById('rgs-inbox-panel').classList.contains('active')) {
-                    this.renderInbox();
-                }
-                // Live sync active toasts on screen
-                document.querySelectorAll(`.rgs-toast[data-wfid="${wfId}"] .rgs-toast-status`).forEach(el => {
-                    el.textContent = newStatus;
-                    el.style.cssText = `position: absolute; top: 10px; right: 28px; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: bold; line-height: 1; box-shadow: 0 2px 4px rgba(0,0,0,0.05); ${getStatusStyle(newStatus)}`;
-                });
-            }
-        },
-        updateBadge() {
-            const badge = document.getElementById('rgs-inbox-badge');
-            if (badge) {
-                const isPinnedOnly = settings.notifFilter === 'pinned';
-                const pinnedList = getPinnedRepos();
-                const visibleNotifs = this.inbox.filter(i => {
-                    if (!isPinnedOnly) return true;
-                    return (i.repoNames || []).some(r => pinnedList.includes(r.replace('Tolgee: ', '')));
-                });
+            clearBtn.remove();
+          };
+          container.insertBefore(clearBtn, container.firstChild);
+        }
+      } else if (clearBtn) {
+        clearBtn.remove();
+      }
+    },
+    showToast(notif) {
+      const container = document.getElementById("rgs-toast-container");
+      if (!container) return;
 
-                this.unreadCount = visibleNotifs.filter(i => !i.read).length;
-                badge.textContent = this.unreadCount;
-                badge.classList.toggle('active', this.unreadCount > 0);
-            }
-        },
-        markAsRead(id) {
-            const item = this.inbox.find(i => i.id === id);
-            if (item && !item.read) {
-                item.read = true;
-                localStorage.setItem('env_dash_inbox', JSON.stringify(this.inbox));
-                this.updateBadge();
-                const node = document.querySelector(`.rgs-inbox-item[data-nid="${id}"]`);
-                if (node) node.classList.remove('unread');
-            }
-        },
-        manageToastStack() {
-            const container = document.getElementById('rgs-toast-container');
-            if (!container) return;
-            const toasts = container.querySelectorAll('.rgs-toast');
-            let clearBtn = document.getElementById('rgs-toast-clear-btn');
-
-            // Apple Style Stack feature: inject "Clear All" if 3 or more toasts stack up
-            if (toasts.length >= 3) {
-                if (!clearBtn) {
-                    clearBtn = document.createElement('button');
-                    clearBtn.id = 'rgs-toast-clear-btn';
-                    clearBtn.textContent = 'Clear All Notifications ×';
-                    clearBtn.className = 'rgs-toast-clear-btn rgs-fade-in';
-                    clearBtn.onclick = () => {
-                        container.querySelectorAll('.rgs-toast').forEach(t => {
-                            t.style.transform = 'translateX(120%)';
-                            t.style.opacity = '0';
-                            setTimeout(() => t.remove(), 400);
-                        });
-                        clearBtn.remove();
-                    };
-                    container.insertBefore(clearBtn, container.firstChild);
-                }
-            } else if (clearBtn) {
-                clearBtn.remove();
-            }
-        },
-        showToast(notif) {
-            const container = document.getElementById('rgs-toast-container');
-            if (!container) return;
-
-            const toast = document.createElement('div');
-            toast.className = 'rgs-toast';
-            toast.dataset.wfid = notif.wfId;
-            toast.innerHTML = `
+      const toast = document.createElement("div");
+      toast.className = "rgs-toast";
+      toast.dataset.wfid = notif.wfId;
+      toast.innerHTML = `
                 <div class="rgs-toast-icon">✨</div>
                 <div class="rgs-toast-content">
                     <div class="rgs-toast-title">${notif.title}</div>
@@ -346,334 +478,388 @@
                 <button class="rgs-toast-close" style="position: absolute; top: 8px; right: 8px; background: none; border: none; font-size: 16px; color: #94a3b8; cursor: pointer; line-height: 1; padding: 0 4px; transition: color 0.2s;">×</button>
             `;
 
-            toast.querySelector('.rgs-toast-close').addEventListener('click', (e) => {
-                e.stopPropagation();
-                toast.style.transform = 'translateX(120%)';
-                toast.style.opacity = '0';
-                setTimeout(() => { toast.remove(); this.manageToastStack(); }, 400);
-            });
+      toast.querySelector(".rgs-toast-close").addEventListener("click", (e) => {
+        e.stopPropagation();
+        toast.style.transform = "translateX(120%)";
+        toast.style.opacity = "0";
+        setTimeout(() => {
+          toast.remove();
+          this.manageToastStack();
+        }, 400);
+      });
 
-            toast.addEventListener('click', (e) => {
-                if (e.target.closest('.rgs-toast-close')) return;
-                if (typeof OverviewManager !== 'undefined') OverviewManager.openAndHighlight(notif.wfId);
-                toast.querySelector('.rgs-toast-close').click();
-            });
+      toast.addEventListener("click", (e) => {
+        if (e.target.closest(".rgs-toast-close")) return;
+        if (typeof OverviewManager !== "undefined")
+          OverviewManager.openAndHighlight(notif.wfId);
+        toast.querySelector(".rgs-toast-close").click();
+      });
 
-            container.appendChild(toast);
-            requestAnimationFrame(() => toast.classList.add('show'));
+      container.appendChild(toast);
+      requestAnimationFrame(() => toast.classList.add("show"));
+      this.manageToastStack();
+
+      // Smart Visibility & Hover Timing Engine
+      let remaining = 6000;
+      let lastTime = performance.now();
+      let isHovered = false;
+      let rafId;
+
+      toast.addEventListener("mouseenter", () => (isHovered = true));
+      toast.addEventListener("mouseleave", () => {
+        isHovered = false;
+        if (remaining < 2000) remaining = 2000; // Give buffer after mouse leave
+      });
+
+      const animate = (time) => {
+        const delta = time - lastTime;
+        lastTime = time;
+
+        // Only tick down if document is fully visible and user isn't hovering
+        if (!document.hidden && !isHovered) {
+          remaining -= delta;
+        }
+
+        if (remaining <= 0) {
+          toast.style.transform = "translateX(120%)";
+          toast.style.opacity = "0";
+          setTimeout(() => {
+            toast.remove();
             this.manageToastStack();
+          }, 400);
+        } else {
+          rafId = requestAnimationFrame(animate);
+        }
+      };
+      rafId = requestAnimationFrame(animate);
+    },
+    renderInbox() {
+      const list = document.getElementById("rgs-inbox-list");
+      if (!list) return;
 
-            // Smart Visibility & Hover Timing Engine
-            let remaining = 6000;
-            let lastTime = performance.now();
-            let isHovered = false;
-            let rafId;
+      const isPinnedOnly = settings.notifFilter === "pinned";
+      const pinnedList = getPinnedRepos();
+      const visibleNotifs = this.inbox.filter((i) => {
+        if (!isPinnedOnly) return true;
+        return (i.repoNames || []).some((r) =>
+          pinnedList.includes(r.replace("Tolgee: ", "")),
+        );
+      });
 
-            toast.addEventListener('mouseenter', () => isHovered = true);
-            toast.addEventListener('mouseleave', () => {
-                isHovered = false;
-                if (remaining < 2000) remaining = 2000; // Give buffer after mouse leave
-            });
-
-            const animate = (time) => {
-                const delta = time - lastTime;
-                lastTime = time;
-
-                // Only tick down if document is fully visible and user isn't hovering
-                if (!document.hidden && !isHovered) {
-                    remaining -= delta;
-                }
-
-                if (remaining <= 0) {
-                    toast.style.transform = 'translateX(120%)';
-                    toast.style.opacity = '0';
-                    setTimeout(() => { toast.remove(); this.manageToastStack(); }, 400);
-                } else {
-                    rafId = requestAnimationFrame(animate);
-                }
-            };
-            rafId = requestAnimationFrame(animate);
-        },
-        renderInbox() {
-            const list = document.getElementById('rgs-inbox-list');
-            if (!list) return;
-
-            const isPinnedOnly = settings.notifFilter === 'pinned';
-            const pinnedList = getPinnedRepos();
-            const visibleNotifs = this.inbox.filter(i => {
-                if (!isPinnedOnly) return true;
-                return (i.repoNames || []).some(r => pinnedList.includes(r.replace('Tolgee: ', '')));
-            });
-
-            if (visibleNotifs.length === 0) {
-                list.innerHTML = `<div style="padding: 20px; text-align: center; color: #94a3b8;">No notifications match filter.</div>`;
-                return;
-            }
-            list.innerHTML = visibleNotifs.map(i => `
-                <div class="rgs-inbox-item ${i.read ? '' : 'unread'}" data-nid="${i.id}" data-wfid="${i.wfId}">
-                    <span class="rgs-inbox-status" style="position: absolute; top: 10px; right: 10px; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: bold; line-height: 1; ${getStatusStyle(i.status)}">${i.status || 'UNKNOWN'}</span>
+      if (visibleNotifs.length === 0) {
+        list.innerHTML = `<div style="padding: 20px; text-align: center; color: #94a3b8;">No notifications match filter.</div>`;
+        return;
+      }
+      list.innerHTML = visibleNotifs
+        .map(
+          (i) => `
+                <div class="rgs-inbox-item ${i.read ? "" : "unread"}" data-nid="${i.id}" data-wfid="${i.wfId}">
+                    <span class="rgs-inbox-status" style="position: absolute; top: 10px; right: 10px; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: bold; line-height: 1; ${getStatusStyle(i.status)}">${i.status || "UNKNOWN"}</span>
                     <div class="rgs-inbox-item-title">${i.title} <span class="rgs-inbox-time">${i.time}</span></div>
                     <div class="rgs-inbox-item-msg">${i.message}</div>
                 </div>
-            `).join('');
+            `,
+        )
+        .join("");
 
-            list.querySelectorAll('.rgs-inbox-item').forEach(el => {
-                el.addEventListener('mouseenter', () => this.markAsRead(parseInt(el.dataset.nid, 10)));
-                el.addEventListener('click', () => {
-                    if (typeof OverviewManager !== 'undefined') OverviewManager.openAndHighlight(el.dataset.wfid);
-                });
-            });
+      list.querySelectorAll(".rgs-inbox-item").forEach((el) => {
+        el.addEventListener("mouseenter", () =>
+          this.markAsRead(parseInt(el.dataset.nid, 10)),
+        );
+        el.addEventListener("click", () => {
+          if (typeof OverviewManager !== "undefined")
+            OverviewManager.openAndHighlight(el.dataset.wfid);
+        });
+      });
+    },
+  };
+
+  // --- Enterprise IndexedDB Engine ---
+  const IDB = {
+    db: null,
+    init() {
+      return new Promise((resolve, reject) => {
+        if (this.db) return resolve();
+        const req = indexedDB.open("EnvDashboard_Uncapped", 3);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (e.oldVersion < 3 && db.objectStoreNames.contains("workflows")) {
+            db.deleteObjectStore("workflows");
+          }
+          if (!db.objectStoreNames.contains("workflows")) {
+            db.createObjectStore("workflows", { keyPath: "id" });
+          }
+        };
+        req.onsuccess = (e) => {
+          this.db = e.target.result;
+          resolve();
+        };
+        req.onerror = (e) => reject(e);
+      });
+    },
+    async putBatch(items) {
+      await this.init();
+      return new Promise((resolve) => {
+        if (items.length === 0) return resolve();
+        const tx = this.db.transaction("workflows", "readwrite");
+        const store = tx.objectStore("workflows");
+        items.forEach((item) => store.put(item));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    },
+    async deleteBatch(ids) {
+      await this.init();
+      return new Promise((resolve) => {
+        if (ids.length === 0) return resolve();
+        const tx = this.db.transaction("workflows", "readwrite");
+        const store = tx.objectStore("workflows");
+        ids.forEach((id) => store.delete(id));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    },
+    async getAllMap() {
+      await this.init();
+      return new Promise((resolve) => {
+        const tx = this.db.transaction("workflows", "readonly");
+        const req = tx.objectStore("workflows").getAll();
+        req.onsuccess = () => {
+          const map = {};
+          (req.result || []).forEach((item) => (map[item.id] = item));
+          resolve(map);
+        };
+        req.onerror = () => resolve({});
+      });
+    },
+  };
+
+  async function pruneOldWorkflows() {
+    try {
+      const dbMap = await IDB.getAllMap();
+      const now = Date.now();
+      const FIFTEEN_DAYS = 15 * 24 * 60 * 60 * 1000;
+      const toDelete = [];
+
+      Object.values(dbMap).forEach((wf) => {
+        if (wf.created_at) {
+          const age = now - new Date(wf.created_at).getTime();
+          if (age > FIFTEEN_DAYS) {
+            toDelete.push(wf.id);
+          }
         }
-    };
+      });
 
-    // --- Enterprise IndexedDB Engine ---
-    const IDB = {
-        db: null,
-        init() {
-            return new Promise((resolve, reject) => {
-                if (this.db) return resolve();
-                const req = indexedDB.open('EnvDashboard_Uncapped', 3);
-                req.onupgradeneeded = e => {
-                    const db = e.target.result;
-                    if (e.oldVersion < 3 && db.objectStoreNames.contains('workflows')) {
-                        db.deleteObjectStore('workflows');
-                    }
-                    if (!db.objectStoreNames.contains('workflows')) {
-                        db.createObjectStore('workflows', { keyPath: 'id' });
-                    }
-                };
-                req.onsuccess = e => { this.db = e.target.result; resolve(); };
-                req.onerror = e => reject(e);
-            });
-        },
-        async putBatch(items) {
-            await this.init();
-            return new Promise((resolve) => {
-                if (items.length === 0) return resolve();
-                const tx = this.db.transaction('workflows', 'readwrite');
-                const store = tx.objectStore('workflows');
-                items.forEach(item => store.put(item));
-                tx.oncomplete = () => resolve();
-                tx.onerror = () => resolve();
-            });
-        },
-        async deleteBatch(ids) {
-            await this.init();
-            return new Promise((resolve) => {
-                if (ids.length === 0) return resolve();
-                const tx = this.db.transaction('workflows', 'readwrite');
-                const store = tx.objectStore('workflows');
-                ids.forEach(id => store.delete(id));
-                tx.oncomplete = () => resolve();
-                tx.onerror = () => resolve();
-            });
-        },
-        async getAllMap() {
-            await this.init();
-            return new Promise((resolve) => {
-                const tx = this.db.transaction('workflows', 'readonly');
-                const req = tx.objectStore('workflows').getAll();
-                req.onsuccess = () => {
-                    const map = {}; (req.result || []).forEach(item => map[item.id] = item); resolve(map);
-                };
-                req.onerror = () => resolve({});
-            });
-        }
-    };
-
-    async function pruneOldWorkflows() {
-        try {
-            const dbMap = await IDB.getAllMap();
-            const now = Date.now();
-            const FIFTEEN_DAYS = 15 * 24 * 60 * 60 * 1000;
-            const toDelete = [];
-
-            Object.values(dbMap).forEach(wf => {
-                if (wf.created_at) {
-                    const age = now - new Date(wf.created_at).getTime();
-                    if (age > FIFTEEN_DAYS) {
-                        toDelete.push(wf.id);
-                    }
-                }
-            });
-
-            if (toDelete.length > 0) {
-                await IDB.deleteBatch(toDelete);
-                log(`Pruned ${toDelete.length} expired workflows from IDB cache.`);
-            }
-        } catch (e) {
-            log("Failed to prune old workflows.", e);
-        }
+      if (toDelete.length > 0) {
+        await IDB.deleteBatch(toDelete);
+        log(`Pruned ${toDelete.length} expired workflows from IDB cache.`);
+      }
+    } catch (e) {
+      log("Failed to prune old workflows.", e);
     }
+  }
 
-    // --- Fail-Safe Repo Scraper ---
-    function getPinnedRepos() {
-        let repos = [];
-        try {
-            const raw = localStorage.getItem('env_dashboard_pinned_repos');
-            if (raw) {
-                const parsed = JSON.parse(raw);
-                if (Array.isArray(parsed)) repos = parsed;
-            }
-        } catch (e) { }
+  // --- Fail-Safe Repo Scraper ---
+  function getPinnedRepos() {
+    let repos = [];
+    try {
+      const raw = localStorage.getItem("env_dashboard_pinned_repos");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) repos = parsed;
+      }
+    } catch (e) {}
 
-        if (repos.length === 0) {
-            document.querySelectorAll('tbody tr').forEach(row => {
-                const pNode = row.querySelector('th p');
-                if (pNode) repos.push(pNode.textContent.replace(/[()]/g, '').trim());
-            });
-        }
-        return [...new Set(repos)].filter(Boolean).sort();
+    if (repos.length === 0) {
+      document.querySelectorAll("tbody tr").forEach((row) => {
+        const pNode = row.querySelector("th p");
+        if (pNode) repos.push(pNode.textContent.replace(/[()]/g, "").trim());
+      });
     }
+    return [...new Set(repos)].filter(Boolean).sort();
+  }
 
-    // --- Settings & UI Utils ---
-    function updateSettingsCheckboxes() {
-        const statusContainer = document.getElementById('rgs-status-filters');
-        if (statusContainer) {
-            const baseStatuses = ['APPROVED', 'REJECTED', 'INPROGRESS'];
-            const fetchedStatuses = globalWorkflows.map(w => w.status || 'UNKNOWN');
-            const allStatuses = [...new Set([...baseStatuses, ...fetchedStatuses])].sort();
+  // --- Settings & UI Utils ---
+  function updateSettingsCheckboxes() {
+    const statusContainer = document.getElementById("rgs-status-filters");
+    if (statusContainer) {
+      const baseStatuses = ["APPROVED", "REJECTED", "INPROGRESS"];
+      const fetchedStatuses = globalWorkflows.map((w) => w.status || "UNKNOWN");
+      const allStatuses = [
+        ...new Set([...baseStatuses, ...fetchedStatuses]),
+      ].sort();
 
-            let settingsChanged = false;
-            allStatuses.forEach(st => {
-                if (settings.matrixStatuses[st] === undefined) {
-                    settings.matrixStatuses[st] = baseStatuses.includes(st);
-                    settingsChanged = true;
-                }
-            });
-            if (settingsChanged) saveSettings();
+      let settingsChanged = false;
+      allStatuses.forEach((st) => {
+        if (settings.matrixStatuses[st] === undefined) {
+          settings.matrixStatuses[st] = baseStatuses.includes(st);
+          settingsChanged = true;
+        }
+      });
+      if (settingsChanged) saveSettings();
 
-            const statusHash = allStatuses.map(s => s + ':' + !!settings.matrixStatuses[s]).join('|');
-            if (statusContainer.dataset.hash !== statusHash) {
-                statusContainer.dataset.hash = statusHash;
-                statusContainer.innerHTML = allStatuses.map(st => `
+      const statusHash = allStatuses
+        .map((s) => s + ":" + !!settings.matrixStatuses[s])
+        .join("|");
+      if (statusContainer.dataset.hash !== statusHash) {
+        statusContainer.dataset.hash = statusHash;
+        statusContainer.innerHTML = allStatuses
+          .map(
+            (st) => `
                     <label style="font-weight: normal; cursor: pointer; display: flex; align-items: center; gap: 3px; min-height: 20px;">
-                        <input type="checkbox" class="rgs-cb-status" value="${st}" ${settings.matrixStatuses[st] ? 'checked' : ''}> 
+                        <input type="checkbox" class="rgs-cb-status" value="${st}" ${settings.matrixStatuses[st] ? "checked" : ""}> 
                         ${st}
                     </label>
-                `).join('');
+                `,
+          )
+          .join("");
 
-                statusContainer.querySelectorAll('.rgs-cb-status').forEach(cb => {
-                    cb.addEventListener('change', (e) => {
-                        settings.matrixStatuses[e.target.value] = e.target.checked;
-                        saveSettings();
-                        updateVisuals();
-                    });
-                });
-            }
-        }
+        statusContainer.querySelectorAll(".rgs-cb-status").forEach((cb) => {
+          cb.addEventListener("change", (e) => {
+            settings.matrixStatuses[e.target.value] = e.target.checked;
+            saveSettings();
+            updateVisuals();
+          });
+        });
+      }
+    }
 
-        const repoContainer = document.getElementById('rgs-repo-filters');
-        if (repoContainer) {
-            const pinnedRepos = getPinnedRepos();
-            let allRepos = new Set();
+    const repoContainer = document.getElementById("rgs-repo-filters");
+    if (repoContainer) {
+      const pinnedRepos = getPinnedRepos();
+      let allRepos = new Set();
 
-            document.querySelectorAll('tbody tr th p').forEach(p => {
-                allRepos.add(p.textContent.replace(/[()]/g, '').trim());
-            });
+      document.querySelectorAll("tbody tr th p").forEach((p) => {
+        allRepos.add(p.textContent.replace(/[()]/g, "").trim());
+      });
 
-            globalWorkflows.forEach(w => {
-                const d = activeCacheMap[w.id];
-                if (d && d.repos_data) d.repos_data.forEach(r => {
-                    const cleanName = r.name.replace('Tolgee: ', '');
-                    allRepos.add(cleanName);
-                });
-            });
-            allRepos = [...allRepos].sort();
+      globalWorkflows.forEach((w) => {
+        const d = activeCacheMap[w.id];
+        if (d && d.repos_data)
+          d.repos_data.forEach((r) => {
+            const cleanName = r.name.replace("Tolgee: ", "");
+            allRepos.add(cleanName);
+          });
+      });
+      allRepos = [...allRepos].sort();
 
-            if (allRepos.length === 0 && Object.keys(settings.repoToggles).length > 0) {
-                allRepos = Object.keys(settings.repoToggles);
-            }
+      if (
+        allRepos.length === 0 &&
+        Object.keys(settings.repoToggles).length > 0
+      ) {
+        allRepos = Object.keys(settings.repoToggles);
+      }
 
-            pinnedRepos.forEach(r => { if (!allRepos.includes(r)) allRepos.push(r); });
-            allRepos.sort();
+      pinnedRepos.forEach((r) => {
+        if (!allRepos.includes(r)) allRepos.push(r);
+      });
+      allRepos.sort();
 
-            let repoSettingsChanged = false;
-            if (settings.repoMode === 'pinned') {
-                allRepos.forEach(repo => {
-                    const isPinned = pinnedRepos.includes(repo);
-                    if (settings.repoToggles[repo] !== isPinned) {
-                        settings.repoToggles[repo] = isPinned;
-                        repoSettingsChanged = true;
-                    }
-                });
-            } else if (settings.repoMode === 'all') {
-                allRepos.forEach(repo => {
-                    if (!settings.repoToggles[repo]) {
-                        settings.repoToggles[repo] = true;
-                        repoSettingsChanged = true;
-                    }
-                });
-            } else if (settings.repoMode === 'none') {
-                allRepos.forEach(repo => {
-                    if (settings.repoToggles[repo]) {
-                        settings.repoToggles[repo] = false;
-                        repoSettingsChanged = true;
-                    }
-                });
-            } else {
-                allRepos.forEach(repo => {
-                    if (settings.repoToggles[repo] === undefined) {
-                        settings.repoToggles[repo] = pinnedRepos.includes(repo);
-                        repoSettingsChanged = true;
-                    }
-                });
-            }
+      let repoSettingsChanged = false;
+      if (settings.repoMode === "pinned") {
+        allRepos.forEach((repo) => {
+          const isPinned = pinnedRepos.includes(repo);
+          if (settings.repoToggles[repo] !== isPinned) {
+            settings.repoToggles[repo] = isPinned;
+            repoSettingsChanged = true;
+          }
+        });
+      } else if (settings.repoMode === "all") {
+        allRepos.forEach((repo) => {
+          if (!settings.repoToggles[repo]) {
+            settings.repoToggles[repo] = true;
+            repoSettingsChanged = true;
+          }
+        });
+      } else if (settings.repoMode === "none") {
+        allRepos.forEach((repo) => {
+          if (settings.repoToggles[repo]) {
+            settings.repoToggles[repo] = false;
+            repoSettingsChanged = true;
+          }
+        });
+      } else {
+        allRepos.forEach((repo) => {
+          if (settings.repoToggles[repo] === undefined) {
+            settings.repoToggles[repo] = pinnedRepos.includes(repo);
+            repoSettingsChanged = true;
+          }
+        });
+      }
 
-            if (repoSettingsChanged) saveSettings();
+      if (repoSettingsChanged) saveSettings();
 
-            const repoBtnsContainer = document.querySelector('.rgs-repo-actions');
-            if (repoBtnsContainer) {
-                repoBtnsContainer.querySelectorAll('.rgs-repo-btn').forEach(b => b.classList.remove('active'));
-                if (settings.repoMode === 'all') document.getElementById('rgs-btn-sel-all').classList.add('active');
-                if (settings.repoMode === 'none') document.getElementById('rgs-btn-sel-none').classList.add('active');
-                if (settings.repoMode === 'pinned') document.getElementById('rgs-btn-sel-pinned').classList.add('active');
-            }
+      const repoBtnsContainer = document.querySelector(".rgs-repo-actions");
+      if (repoBtnsContainer) {
+        repoBtnsContainer
+          .querySelectorAll(".rgs-repo-btn")
+          .forEach((b) => b.classList.remove("active"));
+        if (settings.repoMode === "all")
+          document.getElementById("rgs-btn-sel-all").classList.add("active");
+        if (settings.repoMode === "none")
+          document.getElementById("rgs-btn-sel-none").classList.add("active");
+        if (settings.repoMode === "pinned")
+          document.getElementById("rgs-btn-sel-pinned").classList.add("active");
+      }
 
-            if (allRepos.length === 0) {
-                repoContainer.innerHTML = `<div style="color:#94a3b8; font-style:italic; text-align:center; padding: 10px;">No repos detected yet.</div>`;
-            } else {
-                repoContainer.innerHTML = allRepos.map(repo => `
+      if (allRepos.length === 0) {
+        repoContainer.innerHTML = `<div style="color:#94a3b8; font-style:italic; text-align:center; padding: 10px;">No repos detected yet.</div>`;
+      } else {
+        repoContainer.innerHTML = allRepos
+          .map(
+            (repo) => `
                     <label style="font-weight: normal; cursor: pointer; display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #334155; margin-bottom: 4px; min-height: 20px;" title="${repo}">
-                        <input type="checkbox" class="rgs-cb-repo" value="${repo}" ${settings.repoToggles[repo] ? 'checked' : ''}> 
-                        ${pinnedRepos.includes(repo) ? '📌 ' : ''}${repo}
+                        <input type="checkbox" class="rgs-cb-repo" value="${repo}" ${settings.repoToggles[repo] ? "checked" : ""}> 
+                        ${pinnedRepos.includes(repo) ? "📌 " : ""}${repo}
                     </label>
-                `).join('');
+                `,
+          )
+          .join("");
 
-                repoContainer.querySelectorAll('.rgs-cb-repo').forEach(cb => {
-                    cb.addEventListener('change', (e) => {
-                        settings.repoMode = 'custom';
-                        settings.repoToggles[e.target.value] = e.target.checked;
-                        saveSettings();
-                        updateSettingsCheckboxes();
-                        updateVisuals();
-                    });
-                });
-            }
-        }
+        repoContainer.querySelectorAll(".rgs-cb-repo").forEach((cb) => {
+          cb.addEventListener("change", (e) => {
+            settings.repoMode = "custom";
+            settings.repoToggles[e.target.value] = e.target.checked;
+            saveSettings();
+            updateSettingsCheckboxes();
+            updateVisuals();
+          });
+        });
+      }
     }
+  }
 
-    function updateVisuals() {
-        const root = document.documentElement;
-        root.style.setProperty('--rgs-font-size', `${settings.fontSize}px`); root.style.setProperty('--rgs-max-width', `${settings.maxWidth}px`); root.style.setProperty('--rgs-max-height', `${settings.maxHeight}px`);
-        document.body.classList.toggle('rgs-hide-year-active', settings.hideYear); document.body.classList.toggle('rgs-hide-time-active', settings.hideTime);
-        if (typeof window.rgsObserver !== 'undefined') window.rgsObserver.disconnect();
-        if (typeof renderMatrixUI !== 'undefined') renderMatrixUI();
-        if (typeof window.rgsObserver !== 'undefined') window.rgsObserver.observe(document.body, { childList: true, subtree: true });
+  function updateVisuals() {
+    const root = document.documentElement;
+    root.style.setProperty("--rgs-font-size", `${settings.fontSize}px`);
+    root.style.setProperty("--rgs-max-width", `${settings.maxWidth}px`);
+    root.style.setProperty("--rgs-max-height", `${settings.maxHeight}px`);
+    document.body.classList.toggle("rgs-hide-year-active", settings.hideYear);
+    document.body.classList.toggle("rgs-hide-time-active", settings.hideTime);
+    if (typeof window.rgsObserver !== "undefined")
+      window.rgsObserver.disconnect();
+    if (typeof renderMatrixUI !== "undefined") renderMatrixUI();
+    if (typeof window.rgsObserver !== "undefined")
+      window.rgsObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+  }
+
+  function saveSettings() {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }
+
+  function initGlobalTooltip() {
+    if (!document.getElementById("rgs-global-tooltip")) {
+      const t = document.createElement("div");
+      t.id = "rgs-global-tooltip";
+      document.body.appendChild(t);
     }
+  }
 
-    function saveSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
-
-    function initGlobalTooltip() {
-        if (!document.getElementById('rgs-global-tooltip')) {
-            const t = document.createElement('div');
-            t.id = 'rgs-global-tooltip';
-            document.body.appendChild(t);
-        }
-    }
-
-    // --- Inject Dynamic CSS ---
-    GM_addStyle(`
+  // --- Inject Dynamic CSS ---
+  GM_addStyle(`
         :root { --rgs-font-size: ${settings.fontSize}px; --rgs-max-width: ${settings.maxWidth}px; --rgs-max-height: ${settings.maxHeight}px; }
         .rgs-matrix-history { margin-top: 8px; padding: 6px; background-color: #fffbeb; border: 1px dashed #fcd34d; border-radius: 4px; font-weight: normal; }
         .rgs-matrix-history-title { font-weight: 800; margin-bottom: 4px; color: #b45309; border-bottom: 1px solid #fde68a; padding-bottom: 2px; text-transform: uppercase; font-size: 9px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; transition: color 0.2s; }
@@ -923,38 +1109,40 @@
         #rgs-timeline-content { padding: 16px; display: flex; justify-content: center; overflow: auto; }
     `);
 
-    // --- FAST TOOLTIP ENGINE ---
-    function initFastTooltip() {
-        if (!document.getElementById('rgs-fast-tooltip')) {
-            const ft = document.createElement('div');
-            ft.id = 'rgs-fast-tooltip';
-            document.body.appendChild(ft);
+  // --- FAST TOOLTIP ENGINE ---
+  function initFastTooltip() {
+    if (!document.getElementById("rgs-fast-tooltip")) {
+      const ft = document.createElement("div");
+      ft.id = "rgs-fast-tooltip";
+      document.body.appendChild(ft);
 
-            document.addEventListener('mouseover', (e) => {
-                const trigger = e.target.closest('.rgs-fast-tt-trigger');
-                if (trigger) {
-                    const tt = document.getElementById('rgs-fast-tooltip');
-                    tt.textContent = trigger.dataset.fastTt;
-                    const rect = trigger.getBoundingClientRect();
-                    // Position above the circle
-                    tt.style.left = (rect.left + rect.width / 2) + 'px';
-                    tt.style.top = (rect.top + 10) + 'px';
-                    tt.classList.add('show');
-                }
-            });
-
-            document.addEventListener('mouseout', (e) => {
-                if (e.target.closest('.rgs-fast-tt-trigger')) {
-                    document.getElementById('rgs-fast-tooltip').classList.remove('show');
-                }
-            });
+      document.addEventListener("mouseover", (e) => {
+        const trigger = e.target.closest(".rgs-fast-tt-trigger");
+        if (trigger) {
+          const tt = document.getElementById("rgs-fast-tooltip");
+          tt.textContent = trigger.dataset.fastTt;
+          const rect = trigger.getBoundingClientRect();
+          // Position above the circle
+          tt.style.left = rect.left + rect.width / 2 + "px";
+          tt.style.top = rect.top + 10 + "px";
+          tt.classList.add("show");
         }
-    }
+      });
 
-    // --- SMART UNIFIED TOOLTIP ENGINE ---
-    function initSmartTooltip() {
-        if (document.getElementById('rgs-smart-tooltip')) return;
-        document.body.insertAdjacentHTML('beforeend', `
+      document.addEventListener("mouseout", (e) => {
+        if (e.target.closest(".rgs-fast-tt-trigger")) {
+          document.getElementById("rgs-fast-tooltip").classList.remove("show");
+        }
+      });
+    }
+  }
+
+  // --- SMART UNIFIED TOOLTIP ENGINE ---
+  function initSmartTooltip() {
+    if (document.getElementById("rgs-smart-tooltip")) return;
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `
             <div id="rgs-smart-tooltip">
                 <div class="rgs-tooltip-header">
                     <div class="rgs-tooltip-title">Title</div>
@@ -966,93 +1154,108 @@
                     <div class="rgs-tooltip-summary">Summary</div>
                 </div>
             </div>
-        `);
+        `,
+    );
 
-        document.querySelector('#rgs-smart-tooltip .rgs-tooltip-close').addEventListener('click', (e) => {
-            e.stopPropagation();
-            closeSmartTooltip(true);
-        });
+    document
+      .querySelector("#rgs-smart-tooltip .rgs-tooltip-close")
+      .addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeSmartTooltip(true);
+      });
 
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && isTooltipLocked) closeSmartTooltip(true);
-        });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && isTooltipLocked) closeSmartTooltip(true);
+    });
 
-        document.addEventListener('click', (e) => {
-            if (isTooltipLocked && !e.target.closest('#rgs-smart-tooltip') && !e.target.closest('.rgs-tt-trigger')) {
-                closeSmartTooltip(true);
-            }
-        });
+    document.addEventListener("click", (e) => {
+      if (
+        isTooltipLocked &&
+        !e.target.closest("#rgs-smart-tooltip") &&
+        !e.target.closest(".rgs-tt-trigger")
+      ) {
+        closeSmartTooltip(true);
+      }
+    });
+  }
+
+  function openSmartTooltip(data, targetEl, isClick) {
+    if (isTooltipLocked && !isClick) return;
+
+    const tt = document.getElementById("rgs-smart-tooltip");
+    if (!tt) return;
+
+    tt.querySelector(".rgs-tooltip-title").innerHTML = highlightHTML(
+      data.title,
+      data.hlSet,
+    );
+    tt.querySelector(".rgs-tooltip-date").textContent = "Date: " + data.date;
+
+    const versionEl = tt.querySelector(".rgs-tooltip-version");
+    if (targetEl.closest("#rgs-ov-modal")) {
+      versionEl.style.display = "none";
+    } else {
+      versionEl.style.display = "block";
+      versionEl.innerHTML = "Version:<br>" + data.versionHTML;
     }
 
-    function openSmartTooltip(data, targetEl, isClick) {
-        if (isTooltipLocked && !isClick) return;
+    tt.querySelector(".rgs-tooltip-summary").innerHTML = highlightHTML(
+      (data.summary || "").replace(/\\n/g, "\n"),
+      data.hlSet,
+    );
 
-        const tt = document.getElementById('rgs-smart-tooltip');
-        if (!tt) return;
-
-        tt.querySelector('.rgs-tooltip-title').innerHTML = highlightHTML(data.title, data.hlSet);
-        tt.querySelector('.rgs-tooltip-date').textContent = 'Date: ' + data.date;
-
-        const versionEl = tt.querySelector('.rgs-tooltip-version');
-        if (targetEl.closest('#rgs-ov-modal')) {
-            versionEl.style.display = 'none';
-        } else {
-            versionEl.style.display = 'block';
-            versionEl.innerHTML = 'Version:<br>' + data.versionHTML;
-        }
-
-        tt.querySelector('.rgs-tooltip-summary').innerHTML = highlightHTML((data.summary || '').replace(/\\n/g, '\n'), data.hlSet);
-
-        if (isClick) {
-            isTooltipLocked = true;
-            tt.classList.add('locked');
-        } else {
-            tt.classList.remove('locked');
-        }
-
-        tt.classList.add('visible');
-
-        const rect = targetEl.getBoundingClientRect();
-        let topPos = rect.bottom + 8;
-        tt.classList.remove('flip-top', 'flip-bottom');
-
-        const minTop = 60;
-        if (topPos + tt.offsetHeight > window.innerHeight - 20) {
-            topPos = rect.top - tt.offsetHeight - 8;
-            if (topPos < minTop) topPos = minTop;
-            tt.classList.add('flip-top');
-        } else {
-            tt.classList.add('flip-bottom');
-        }
-
-        let leftPos = rect.left + (rect.width / 2);
-        const halfWidth = tt.offsetWidth / 2;
-
-        if (leftPos - halfWidth < 10) {
-            leftPos = halfWidth + 10;
-        } else if (leftPos + halfWidth > window.innerWidth - 10) {
-            leftPos = window.innerWidth - halfWidth - 10;
-        }
-
-        tt.style.left = leftPos + 'px';
-        tt.style.top = topPos + 'px';
+    if (isClick) {
+      isTooltipLocked = true;
+      tt.classList.add("locked");
+    } else {
+      tt.classList.remove("locked");
     }
 
-    function closeSmartTooltip(force) {
-        if (isTooltipLocked && !force) return;
-        isTooltipLocked = false;
-        const tt = document.getElementById('rgs-smart-tooltip');
-        if (tt) {
-            tt.classList.remove('visible', 'locked');
-        }
+    tt.classList.add("visible");
+
+    const rect = targetEl.getBoundingClientRect();
+    let topPos = rect.bottom + 8;
+    tt.classList.remove("flip-top", "flip-bottom");
+
+    const minTop = 60;
+    if (topPos + tt.offsetHeight > window.innerHeight - 20) {
+      topPos = rect.top - tt.offsetHeight - 8;
+      if (topPos < minTop) topPos = minTop;
+      tt.classList.add("flip-top");
+    } else {
+      tt.classList.add("flip-bottom");
     }
 
-    // --- TIMELINE WIDGET ---
-    const TimelineWidget = {
-        currentMonth: new Date(),
-        init() {
-            if (document.getElementById('rgs-timeline-fab')) return;
-            document.body.insertAdjacentHTML('beforeend', `
+    let leftPos = rect.left + rect.width / 2;
+    const halfWidth = tt.offsetWidth / 2;
+
+    if (leftPos - halfWidth < 10) {
+      leftPos = halfWidth + 10;
+    } else if (leftPos + halfWidth > window.innerWidth - 10) {
+      leftPos = window.innerWidth - halfWidth - 10;
+    }
+
+    tt.style.left = leftPos + "px";
+    tt.style.top = topPos + "px";
+  }
+
+  function closeSmartTooltip(force) {
+    if (isTooltipLocked && !force) return;
+    isTooltipLocked = false;
+    const tt = document.getElementById("rgs-smart-tooltip");
+    if (tt) {
+      tt.classList.remove("visible", "locked");
+    }
+  }
+
+  // --- TIMELINE WIDGET ---
+  const TimelineWidget = {
+    currentMonth: new Date(),
+    init() {
+      if (document.getElementById("rgs-timeline-fab")) return;
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        `
                 <div id="rgs-timeline-fab" class="rgs-timeline-fab" title="Timeline Overview">🗓️</div>
                 <div id="rgs-timeline-panel">
                      <div id="rgs-timeline-header">
@@ -1061,235 +1264,417 @@
                      </div>
                      <div id="rgs-timeline-content"></div>
                 </div>
-            `);
+            `,
+      );
 
-            document.getElementById('rgs-timeline-fab').addEventListener('click', () => {
-                this.currentMonth = new Date();
-                document.getElementById('rgs-timeline-panel').classList.toggle('active');
-                if (document.getElementById('rgs-timeline-panel').classList.contains('active')) {
-                    this.render();
-                }
-            });
+      document
+        .getElementById("rgs-timeline-fab")
+        .addEventListener("click", () => {
+          this.currentMonth = new Date();
+          document
+            .getElementById("rgs-timeline-panel")
+            .classList.toggle("active");
+          if (
+            document
+              .getElementById("rgs-timeline-panel")
+              .classList.contains("active")
+          ) {
+            this.render();
+          }
+        });
 
-            document.getElementById('rgs-timeline-close').addEventListener('click', () => {
-                document.getElementById('rgs-timeline-panel').classList.remove('active');
-            });
+      document
+        .getElementById("rgs-timeline-close")
+        .addEventListener("click", () => {
+          document
+            .getElementById("rgs-timeline-panel")
+            .classList.remove("active");
+        });
 
-            document.getElementById('rgs-timeline-content').addEventListener('click', (e) => {
-                const bounds = CalendarManager.getBounds();
-                const currM = new Date(this.currentMonth.getFullYear(), this.currentMonth.getMonth(), 1);
+      document
+        .getElementById("rgs-timeline-content")
+        .addEventListener("click", (e) => {
+          const bounds = CalendarManager.getBounds();
+          const currM = new Date(
+            this.currentMonth.getFullYear(),
+            this.currentMonth.getMonth(),
+            1,
+          );
 
-                if (e.target.closest('.prev')) {
-                    const minM = new Date(bounds.min.getFullYear(), bounds.min.getMonth(), 1);
-                    if (currM <= minM) CalendarManager.shakeEl(e.target.closest('.prev'), "No older logs!");
-                    else { this.currentMonth.setMonth(this.currentMonth.getMonth() - 1); this.render(); }
-                }
-                else if (e.target.closest('.next')) {
-                    const nextM = new Date(this.currentMonth.getFullYear(), this.currentMonth.getMonth() + 1, 1);
-                    const maxM = new Date(bounds.max.getFullYear(), bounds.max.getMonth(), 1);
-                    if (nextM >= maxM) CalendarManager.shakeEl(e.target.closest('.next'), "No newer logs!");
-                    else { this.currentMonth.setMonth(this.currentMonth.getMonth() + 1); this.render(); }
-                }
-                else if (e.target.closest('.rgs-cal-day:not(.empty):not(.disabled)')) {
-                    const el = e.target.closest('.rgs-cal-day');
-                    const dateStr = el.dataset.date;
-                    const d = parseLocalDate(dateStr);
-                    document.getElementById('rgs-timeline-panel').classList.remove('active');
-
-                    OverviewManager.open();
-
-                    CalendarManager.rangeStart = d;
-                    CalendarManager.rangeEnd = d;
-                    document.getElementById('ov-date-start').value = formatDateForInput(d);
-                    document.getElementById('ov-date-end').value = formatDateForInput(d);
-                    document.getElementById('ov-clear-start').style.display = 'block';
-                    document.getElementById('ov-clear-end').style.display = 'block';
-
-                    OverviewManager.triggerCrossFilter();
-                }
-            });
-        },
-        render() {
-            if (typeof OverviewManager !== 'undefined') {
-                if (!OverviewManager.isLoaded) {
-                    OverviewManager.syncMemoryData();
-                    OverviewManager.loadState();
-                }
-                const state = OverviewManager.getState();
-                const bms = JSON.parse(localStorage.getItem('env_dash_bms') || '[]');
-                const pinnedList = getPinnedRepos();
-
-                const dataForStats = OverviewManager.masterData.filter(d => OverviewManager.checkMatch(d, state, pinnedList, bms, 'dates'));
-                CalendarManager.calculateMetadataStats(dataForStats);
+          if (e.target.closest(".prev")) {
+            const minM = new Date(
+              bounds.min.getFullYear(),
+              bounds.min.getMonth(),
+              1,
+            );
+            if (currM <= minM)
+              CalendarManager.shakeEl(
+                e.target.closest(".prev"),
+                "No older logs!",
+              );
+            else {
+              this.currentMonth.setMonth(this.currentMonth.getMonth() - 1);
+              this.render();
             }
+          } else if (e.target.closest(".next")) {
+            const nextM = new Date(
+              this.currentMonth.getFullYear(),
+              this.currentMonth.getMonth() + 1,
+              1,
+            );
+            const maxM = new Date(
+              bounds.max.getFullYear(),
+              bounds.max.getMonth(),
+              1,
+            );
+            if (nextM >= maxM)
+              CalendarManager.shakeEl(
+                e.target.closest(".next"),
+                "No newer logs!",
+              );
+            else {
+              this.currentMonth.setMonth(this.currentMonth.getMonth() + 1);
+              this.render();
+            }
+          } else if (
+            e.target.closest(".rgs-cal-day:not(.empty):not(.disabled)")
+          ) {
+            const el = e.target.closest(".rgs-cal-day");
+            const dateStr = el.dataset.date;
+            const d = parseLocalDate(dateStr);
+            document
+              .getElementById("rgs-timeline-panel")
+              .classList.remove("active");
 
-            const y = this.currentMonth.getFullYear();
-            const m = this.currentMonth.getMonth();
-            const nextM = new Date(y, m + 1, 1);
+            OverviewManager.open();
 
-            const html = CalendarManager.buildMonth(y, m, true) +
-                CalendarManager.buildMonth(nextM.getFullYear(), nextM.getMonth(), false);
+            CalendarManager.rangeStart = d;
+            CalendarManager.rangeEnd = d;
+            document.getElementById("ov-date-start").value =
+              formatDateForInput(d);
+            document.getElementById("ov-date-end").value =
+              formatDateForInput(d);
+            document.getElementById("ov-clear-start").style.display = "block";
+            document.getElementById("ov-clear-end").style.display = "block";
 
-            const content = document.getElementById('rgs-timeline-content');
-            content.innerHTML = `<div class="rgs-cal-popup active" style="position:static; display:flex; box-shadow:none; padding:0; background:transparent;">${html}</div>`;
-
-            const st = CalendarManager.rangeStart ? CalendarManager.rangeStart.getTime() : null;
-            const et = CalendarManager.rangeEnd ? CalendarManager.rangeEnd.getTime() : null;
-            content.querySelectorAll('.rgs-cal-day:not(.empty)').forEach(el => {
-                const ct = parseLocalDate(el.dataset.date).getTime();
-                el.classList.remove('start-date', 'end-date', 'in-range');
-                if (st && ct === st) el.classList.add('start-date');
-                if (et && ct === et) el.classList.add('end-date');
-                if (st && et && ct > st && ct < et) el.classList.add('in-range');
-            });
+            OverviewManager.triggerCrossFilter();
+          }
+        });
+    },
+    render() {
+      if (typeof OverviewManager !== "undefined") {
+        if (!OverviewManager.isLoaded) {
+          OverviewManager.syncMemoryData();
+          OverviewManager.loadState();
         }
-    };
+        const state = OverviewManager.getState();
+        const bms = JSON.parse(localStorage.getItem("env_dash_bms") || "[]");
+        const pinnedList = getPinnedRepos();
 
-    // --- DUAL-INPUT CALENDAR SYSTEM ---
-    const CalendarManager = {
-        popup: null, startInput: null, endInput: null, startClear: null, endClear: null, currentMonth: new Date(), rangeStart: null, rangeEnd: null, activeTarget: null, currentStats: {},
-        init() {
-            this.startInput = document.getElementById('ov-date-start'); this.endInput = document.getElementById('ov-date-end');
-            this.startClear = document.getElementById('ov-clear-start'); this.endClear = document.getElementById('ov-clear-end');
-            this.popup = document.createElement('div'); this.popup.className = 'rgs-cal-popup';
-            this.startInput.closest('.rgs-cal-group').appendChild(this.popup);
+        const dataForStats = OverviewManager.masterData.filter((d) =>
+          OverviewManager.checkMatch(d, state, pinnedList, bms, "dates"),
+        );
+        CalendarManager.calculateMetadataStats(dataForStats);
+      }
 
-            document.addEventListener('click', (e) => {
-                if (!e.composedPath().includes(this.popup) && !e.composedPath().includes(this.startInput) && !e.composedPath().includes(this.endInput) && !e.composedPath().includes(this.startClear) && !e.composedPath().includes(this.endClear)) this.closePopup();
-            });
+      const y = this.currentMonth.getFullYear();
+      const m = this.currentMonth.getMonth();
+      const nextM = new Date(y, m + 1, 1);
 
-            this.startInput.addEventListener('click', (e) => { e.stopPropagation(); this.openPopup('start'); });
-            this.endInput.addEventListener('click', (e) => { e.stopPropagation(); this.openPopup('end'); });
+      const html =
+        CalendarManager.buildMonth(y, m, true) +
+        CalendarManager.buildMonth(
+          nextM.getFullYear(),
+          nextM.getMonth(),
+          false,
+        );
 
-            this.startClear.addEventListener('click', (e) => { e.stopPropagation(); this.rangeStart = null; this.startInput.value = ''; this.startClear.style.display = 'none'; if (typeof OverviewManager !== 'undefined') OverviewManager.triggerCrossFilter(); });
-            this.endClear.addEventListener('click', (e) => { e.stopPropagation(); this.rangeEnd = null; this.endInput.value = ''; this.endClear.style.display = 'none'; if (typeof OverviewManager !== 'undefined') OverviewManager.triggerCrossFilter(); });
+      const content = document.getElementById("rgs-timeline-content");
+      content.innerHTML = `<div class="rgs-cal-popup active" style="position:static; display:flex; box-shadow:none; padding:0; background:transparent;">${html}</div>`;
 
-            this.popup.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const bounds = this.getBounds();
-                const currM = new Date(this.currentMonth.getFullYear(), this.currentMonth.getMonth(), 1);
+      const st = CalendarManager.rangeStart
+        ? CalendarManager.rangeStart.getTime()
+        : null;
+      const et = CalendarManager.rangeEnd
+        ? CalendarManager.rangeEnd.getTime()
+        : null;
+      content.querySelectorAll(".rgs-cal-day:not(.empty)").forEach((el) => {
+        const ct = parseLocalDate(el.dataset.date).getTime();
+        el.classList.remove("start-date", "end-date", "in-range");
+        if (st && ct === st) el.classList.add("start-date");
+        if (et && ct === et) el.classList.add("end-date");
+        if (st && et && ct > st && ct < et) el.classList.add("in-range");
+      });
+    },
+  };
 
-                if (e.target.closest('.prev')) {
-                    const minM = new Date(bounds.min.getFullYear(), bounds.min.getMonth(), 1);
-                    if (currM <= minM) this.shakeEl(e.target.closest('.prev'), "No older logs!");
-                    else { this.currentMonth.setMonth(this.currentMonth.getMonth() - 1); this.render(); }
-                }
-                else if (e.target.closest('.next')) {
-                    const nextM = new Date(this.currentMonth.getFullYear(), this.currentMonth.getMonth() + 1, 1);
-                    const maxM = new Date(bounds.max.getFullYear(), bounds.max.getMonth(), 1);
-                    if (nextM >= maxM) this.shakeEl(e.target.closest('.next'), "No newer logs!");
-                    else { this.currentMonth.setMonth(this.currentMonth.getMonth() + 1); this.render(); }
-                }
-                else if (e.target.closest('.rgs-cal-day:not(.empty):not(.disabled)')) {
-                    const dayCell = e.target.closest('.rgs-cal-day');
-                    const selected = parseLocalDate(dayCell.dataset.date);
+  // --- DUAL-INPUT CALENDAR SYSTEM ---
+  const CalendarManager = {
+    popup: null,
+    startInput: null,
+    endInput: null,
+    startClear: null,
+    endClear: null,
+    currentMonth: new Date(),
+    rangeStart: null,
+    rangeEnd: null,
+    activeTarget: null,
+    currentStats: {},
+    init() {
+      this.startInput = document.getElementById("ov-date-start");
+      this.endInput = document.getElementById("ov-date-end");
+      this.startClear = document.getElementById("ov-clear-start");
+      this.endClear = document.getElementById("ov-clear-end");
+      this.popup = document.createElement("div");
+      this.popup.className = "rgs-cal-popup";
+      this.startInput.closest(".rgs-cal-group").appendChild(this.popup);
 
-                    if (this.activeTarget === 'start') {
-                        if (this.rangeEnd && selected > this.rangeEnd) {
-                            this.shakeEl(dayCell, "Start date cannot be after end date!"); return;
-                        }
-                        this.rangeStart = selected; this.startInput.value = formatDateForInput(selected); this.startClear.style.display = 'block';
-                        if (!this.rangeEnd) this.openPopup('end'); else this.closePopup();
-                    } else {
-                        if (this.rangeStart && selected < this.rangeStart) {
-                            this.shakeEl(dayCell, "End date cannot be before start date!"); return;
-                        }
-                        this.rangeEnd = selected; this.endInput.value = formatDateForInput(selected); this.endClear.style.display = 'block'; this.closePopup();
-                    }
-                    if (typeof OverviewManager !== 'undefined') OverviewManager.triggerCrossFilter();
-                }
-            });
-        },
-        getBounds() {
-            if (typeof OverviewManager === 'undefined' || !OverviewManager.masterData || OverviewManager.masterData.length === 0) return { min: new Date(), max: new Date() };
-            const times = OverviewManager.masterData.map(d => d.created_dateObj ? d.created_dateObj.getTime() : null).filter(Boolean);
-            if (!times.length) return { min: new Date(), max: new Date() };
-            return { min: new Date(Math.min(...times)), max: new Date(Math.max(...times)) };
-        },
-        shakeEl(el, msg) {
-            el.classList.add('rgs-shake');
-            let t = el.querySelector('.rgs-cal-tooltip');
-            if (!t) { t = document.createElement('div'); t.className = 'rgs-cal-tooltip'; el.appendChild(t); }
-            t.textContent = msg; t.classList.add('show');
-            setTimeout(() => { el.classList.remove('rgs-shake'); t.classList.remove('show'); }, 1500);
-        },
-        openPopup(target) {
-            this.activeTarget = target; this.startInput.classList.toggle('active', target === 'start'); this.endInput.classList.toggle('active', target === 'end');
-            this.currentMonth = target === 'start' && this.rangeStart ? new Date(this.rangeStart) : (target === 'end' && this.rangeEnd ? new Date(this.rangeEnd) : new Date());
-            this.render(); this.popup.classList.add('active');
-        },
-        closePopup() { this.popup.classList.remove('active'); this.startInput.classList.remove('active'); this.endInput.classList.remove('active'); },
-        calculateMetadataStats(dataContext) {
-            const stats = {};
-            if (dataContext) {
-                dataContext.forEach(d => {
-                    if (!d.created_dateObj) return;
-                    const y = d.created_dateObj.getFullYear(), m = String(d.created_dateObj.getMonth() + 1).padStart(2, '0'), day = String(d.created_dateObj.getDate()).padStart(2, '0');
-                    const key = `${y}-${m}-${day}`;
-                    if (!stats[key]) stats[key] = {};
-                    const st = d.status || 'UNKNOWN';
-                    if (!stats[key][st]) stats[key][st] = 0;
-                    stats[key][st]++;
-                });
+      document.addEventListener("click", (e) => {
+        if (
+          !e.composedPath().includes(this.popup) &&
+          !e.composedPath().includes(this.startInput) &&
+          !e.composedPath().includes(this.endInput) &&
+          !e.composedPath().includes(this.startClear) &&
+          !e.composedPath().includes(this.endClear)
+        )
+          this.closePopup();
+      });
+
+      this.startInput.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.openPopup("start");
+      });
+      this.endInput.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.openPopup("end");
+      });
+
+      this.startClear.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.rangeStart = null;
+        this.startInput.value = "";
+        this.startClear.style.display = "none";
+        if (typeof OverviewManager !== "undefined")
+          OverviewManager.triggerCrossFilter();
+      });
+      this.endClear.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.rangeEnd = null;
+        this.endInput.value = "";
+        this.endClear.style.display = "none";
+        if (typeof OverviewManager !== "undefined")
+          OverviewManager.triggerCrossFilter();
+      });
+
+      this.popup.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const bounds = this.getBounds();
+        const currM = new Date(
+          this.currentMonth.getFullYear(),
+          this.currentMonth.getMonth(),
+          1,
+        );
+
+        if (e.target.closest(".prev")) {
+          const minM = new Date(
+            bounds.min.getFullYear(),
+            bounds.min.getMonth(),
+            1,
+          );
+          if (currM <= minM)
+            this.shakeEl(e.target.closest(".prev"), "No older logs!");
+          else {
+            this.currentMonth.setMonth(this.currentMonth.getMonth() - 1);
+            this.render();
+          }
+        } else if (e.target.closest(".next")) {
+          const nextM = new Date(
+            this.currentMonth.getFullYear(),
+            this.currentMonth.getMonth() + 1,
+            1,
+          );
+          const maxM = new Date(
+            bounds.max.getFullYear(),
+            bounds.max.getMonth(),
+            1,
+          );
+          if (nextM >= maxM)
+            this.shakeEl(e.target.closest(".next"), "No newer logs!");
+          else {
+            this.currentMonth.setMonth(this.currentMonth.getMonth() + 1);
+            this.render();
+          }
+        } else if (
+          e.target.closest(".rgs-cal-day:not(.empty):not(.disabled)")
+        ) {
+          const dayCell = e.target.closest(".rgs-cal-day");
+          const selected = parseLocalDate(dayCell.dataset.date);
+
+          if (this.activeTarget === "start") {
+            if (this.rangeEnd && selected > this.rangeEnd) {
+              this.shakeEl(dayCell, "Start date cannot be after end date!");
+              return;
             }
-            this.currentStats = stats;
-        },
-        render() {
-            const y = this.currentMonth.getFullYear(), m = this.currentMonth.getMonth(), next = new Date(y, m + 1, 1);
-            this.popup.innerHTML = `${this.buildMonth(y, m, true)}${this.buildMonth(next.getFullYear(), next.getMonth(), false)}`;
-            this.updateSelectionUI();
-        },
-        buildMonth(year, month, isLeft) {
-            const firstDay = new Date(year, month, 1).getDay(), daysInMonth = new Date(year, month + 1, 0).getDate();
-            const today = new Date(); today.setHours(23, 59, 59, 999); let daysHtml = '';
-
-            for (let i = 0; i < firstDay; i++) daysHtml += `<div class="rgs-cal-day empty"></div>`;
-            for (let i = 1; i <= daysInMonth; i++) {
-                const c = new Date(year, month, i), dStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-
-                let metaHtml = '';
-                if (this.currentStats && this.currentStats[dStr]) {
-                    const s = this.currentStats[dStr]; let pills = '';
-                    Object.entries(s).forEach(([stName, count]) => {
-                        if (count > 0) {
-                            const textColor = getStatusDotColor(stName);
-                            pills += `<span style="color:${textColor};" title="${stName}">${count}</span>`;
-                        }
-                    });
-                    if (pills) metaHtml = `<div class="rgs-cal-meta">${pills}</div>`;
-                }
-
-                daysHtml += `<div class="rgs-cal-day ${c > today ? 'disabled' : ''}" data-date="${dStr}">${metaHtml}${i}</div>`;
+            this.rangeStart = selected;
+            this.startInput.value = formatDateForInput(selected);
+            this.startClear.style.display = "block";
+            if (!this.rangeEnd) this.openPopup("end");
+            else this.closePopup();
+          } else {
+            if (this.rangeStart && selected < this.rangeStart) {
+              this.shakeEl(dayCell, "End date cannot be before start date!");
+              return;
             }
+            this.rangeEnd = selected;
+            this.endInput.value = formatDateForInput(selected);
+            this.endClear.style.display = "block";
+            this.closePopup();
+          }
+          if (typeof OverviewManager !== "undefined")
+            OverviewManager.triggerCrossFilter();
+        }
+      });
+    },
+    getBounds() {
+      if (
+        typeof OverviewManager === "undefined" ||
+        !OverviewManager.masterData ||
+        OverviewManager.masterData.length === 0
+      )
+        return { min: new Date(), max: new Date() };
+      const times = OverviewManager.masterData
+        .map((d) => (d.created_dateObj ? d.created_dateObj.getTime() : null))
+        .filter(Boolean);
+      if (!times.length) return { min: new Date(), max: new Date() };
+      return {
+        min: new Date(Math.min(...times)),
+        max: new Date(Math.max(...times)),
+      };
+    },
+    shakeEl(el, msg) {
+      el.classList.add("rgs-shake");
+      let t = el.querySelector(".rgs-cal-tooltip");
+      if (!t) {
+        t = document.createElement("div");
+        t.className = "rgs-cal-tooltip";
+        el.appendChild(t);
+      }
+      t.textContent = msg;
+      t.classList.add("show");
+      setTimeout(() => {
+        el.classList.remove("rgs-shake");
+        t.classList.remove("show");
+      }, 1500);
+    },
+    openPopup(target) {
+      this.activeTarget = target;
+      this.startInput.classList.toggle("active", target === "start");
+      this.endInput.classList.toggle("active", target === "end");
+      this.currentMonth =
+        target === "start" && this.rangeStart
+          ? new Date(this.rangeStart)
+          : target === "end" && this.rangeEnd
+            ? new Date(this.rangeEnd)
+            : new Date();
+      this.render();
+      this.popup.classList.add("active");
+    },
+    closePopup() {
+      this.popup.classList.remove("active");
+      this.startInput.classList.remove("active");
+      this.endInput.classList.remove("active");
+    },
+    calculateMetadataStats(dataContext) {
+      const stats = {};
+      if (dataContext) {
+        dataContext.forEach((d) => {
+          if (!d.created_dateObj) return;
+          const y = d.created_dateObj.getFullYear(),
+            m = String(d.created_dateObj.getMonth() + 1).padStart(2, "0"),
+            day = String(d.created_dateObj.getDate()).padStart(2, "0");
+          const key = `${y}-${m}-${day}`;
+          if (!stats[key]) stats[key] = {};
+          const st = d.status || "UNKNOWN";
+          if (!stats[key][st]) stats[key][st] = 0;
+          stats[key][st]++;
+        });
+      }
+      this.currentStats = stats;
+    },
+    render() {
+      const y = this.currentMonth.getFullYear(),
+        m = this.currentMonth.getMonth(),
+        next = new Date(y, m + 1, 1);
+      this.popup.innerHTML = `${this.buildMonth(y, m, true)}${this.buildMonth(next.getFullYear(), next.getMonth(), false)}`;
+      this.updateSelectionUI();
+    },
+    buildMonth(year, month, isLeft) {
+      const firstDay = new Date(year, month, 1).getDay(),
+        daysInMonth = new Date(year, month + 1, 0).getDate();
+      const today = new Date();
+      today.setHours(23, 59, 59, 999);
+      let daysHtml = "";
 
-            const prevBtn = isLeft ? '<button class="rgs-cal-btn prev">❮</button>' : '<div class="rgs-cal-btn-placeholder"></div>';
-            const nextBtn = !isLeft ? '<button class="rgs-cal-btn next">❯</button>' : '<div class="rgs-cal-btn-placeholder"></div>';
+      for (let i = 0; i < firstDay; i++)
+        daysHtml += `<div class="rgs-cal-day empty"></div>`;
+      for (let i = 1; i <= daysInMonth; i++) {
+        const c = new Date(year, month, i),
+          dStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(i).padStart(2, "0")}`;
 
-            return `
+        let metaHtml = "";
+        if (this.currentStats && this.currentStats[dStr]) {
+          const s = this.currentStats[dStr];
+          let pills = "";
+          Object.entries(s).forEach(([stName, count]) => {
+            if (count > 0) {
+              const textColor = getStatusDotColor(stName);
+              pills += `<span style="color:${textColor};" title="${stName}">${count}</span>`;
+            }
+          });
+          if (pills) metaHtml = `<div class="rgs-cal-meta">${pills}</div>`;
+        }
+
+        daysHtml += `<div class="rgs-cal-day ${c > today ? "disabled" : ""}" data-date="${dStr}">${metaHtml}${i}</div>`;
+      }
+
+      const prevBtn = isLeft
+        ? '<button class="rgs-cal-btn prev">❮</button>'
+        : '<div class="rgs-cal-btn-placeholder"></div>';
+      const nextBtn = !isLeft
+        ? '<button class="rgs-cal-btn next">❯</button>'
+        : '<div class="rgs-cal-btn-placeholder"></div>';
+
+      return `
             <div class="rgs-cal-month">
                 <div class="rgs-cal-header">
                     ${prevBtn}
-                    <span class="rgs-cal-month-title">${year} / ${String(month + 1).padStart(2, '0')}</span>
+                    <span class="rgs-cal-month-title">${year} / ${String(month + 1).padStart(2, "0")}</span>
                     ${nextBtn}
                 </div>
                 <div class="rgs-cal-weekdays"><div>Su</div><div>Mo</div><div>Tu</div><div>We</div><div>Th</div><div>Fr</div><div>Sa</div></div>
                 <div class="rgs-cal-days">${daysHtml}</div>
             </div>`;
-        },
-        updateSelectionUI() {
-            const st = this.rangeStart ? this.rangeStart.getTime() : null, et = this.rangeEnd ? this.rangeEnd.getTime() : null;
-            this.popup.querySelectorAll('.rgs-cal-day:not(.empty)').forEach(el => {
-                const ct = parseLocalDate(el.dataset.date).getTime(); el.classList.remove('start-date', 'end-date', 'in-range');
-                if (st && ct === st) el.classList.add('start-date'); if (et && ct === et) el.classList.add('end-date'); if (st && et && ct > st && ct < et) el.classList.add('in-range');
-            });
-        },
-        getRange() { return { start: this.rangeStart, end: this.rangeEnd }; }
-    };
+    },
+    updateSelectionUI() {
+      const st = this.rangeStart ? this.rangeStart.getTime() : null,
+        et = this.rangeEnd ? this.rangeEnd.getTime() : null;
+      this.popup.querySelectorAll(".rgs-cal-day:not(.empty)").forEach((el) => {
+        const ct = parseLocalDate(el.dataset.date).getTime();
+        el.classList.remove("start-date", "end-date", "in-range");
+        if (st && ct === st) el.classList.add("start-date");
+        if (et && ct === et) el.classList.add("end-date");
+        if (st && et && ct > st && ct < et) el.classList.add("in-range");
+      });
+    },
+    getRange() {
+      return { start: this.rangeStart, end: this.rangeEnd };
+    },
+  };
 
-    // --- MULTI-SELECT BUILDER ---
-    function buildMultiSelectHTML(id, label) {
-        const plural = label === 'Status' ? 'Statuses' : label + 's';
-        return `
+  // --- MULTI-SELECT BUILDER ---
+  function buildMultiSelectHTML(id, label) {
+    const plural = label === "Status" ? "Statuses" : label + "s";
+    return `
         <div class="rgs-ms-container" id="ms-${id}" data-id="${id}" data-label="${label}">
             <div class="rgs-ms-display">All ${plural} <span style="font-size: 10px; color: #94a3b8;">▼</span></div>
             <div class="rgs-ms-panel">
@@ -1298,142 +1683,172 @@
                 <div class="rgs-ms-list" id="list-${id}"></div>
             </div>
         </div>`;
+  }
+
+  // --- Dynamic Size, Spaced SVG Progress Graph Generator ---
+  function generateFlowSVG(flow, history, currentStep) {
+    if (!flow || flow.length === 0)
+      return {
+        html: `<div style="color:#94a3b8; font-size:11px; font-style:italic;">No flow data</div>`,
+        scrollX: 0,
+      };
+    const histMap = {};
+    (history || []).forEach((h) => {
+      histMap[h.step] = h;
+    });
+
+    // Calculate dynamic height based on the maximum number of groups stacking vertically
+    let maxStackCount = 1;
+    flow.forEach((step) => {
+      if (
+        !histMap[step.step] &&
+        step.groups &&
+        step.groups.length > maxStackCount
+      ) {
+        maxStackCount = step.groups.length;
+      }
+    });
+
+    const r = 12;
+    const lineLen = settings.flowLineLen || 50;
+    const dx = r * 2 + lineLen;
+    const startX = 35;
+    const width = Math.max(300, startX * 2 + (flow.length - 1) * dx);
+
+    // Dynamically adjust canvas height so it centers perfectly in the table row
+    const height = 75 + maxStackCount * 12;
+    const fSize = settings.flowFontSize;
+
+    // Forced exact height to prevent the SVG from shrinking the circles
+    let svg = `<svg viewBox="0 0 ${width} ${height}" style="width:${width}px; min-width: ${width}px; height:${height}px; display:block;" xmlns="http://www.w3.org/2000/svg">`;
+
+    let currentIndex = 0;
+
+    for (let i = 0; i < flow.length - 1; i++) {
+      const step = flow[i];
+      const h1 = histMap[step.step];
+      const lineCol = h1 && h1.approve ? "#10b981" : "#cbd5e1";
+      const x1 = startX + i * dx + r + 4;
+      const x2 = startX + (i + 1) * dx - r - 4;
+      svg += `<line x1="${x1}" y1="20" x2="${x2}" y2="20" stroke="${lineCol}" stroke-width="3" stroke-linecap="round"/>`;
     }
 
-    // --- Dynamic Size, Spaced SVG Progress Graph Generator ---
-    function generateFlowSVG(flow, history, currentStep) {
-        if (!flow || flow.length === 0) return { html: `<div style="color:#94a3b8; font-size:11px; font-style:italic;">No flow data</div>`, scrollX: 0 };
-        const histMap = {};
-        (history || []).forEach(h => { histMap[h.step] = h; });
+    for (let i = 0; i < flow.length; i++) {
+      const step = flow[i];
+      if (step.step === currentStep) currentIndex = i;
+      const h = histMap[step.step];
+      const cx = startX + i * dx;
 
-        // Calculate dynamic height based on the maximum number of groups stacking vertically
-        let maxStackCount = 1;
-        flow.forEach(step => {
-            if (!histMap[step.step] && step.groups && step.groups.length > maxStackCount) {
-                maxStackCount = step.groups.length;
-            }
-        });
+      let col = "#cbd5e1";
+      let icon = "";
+      let appNames = []; // We now use an array to stack text vertically
+      let groupTooltip = "";
 
-        const r = 12;
-        const lineLen = settings.flowLineLen || 50;
-        const dx = (r * 2) + lineLen;
-        const startX = 35;
-        const width = Math.max(300, (startX * 2) + ((flow.length - 1) * dx));
+      // LOGIC: If history exists, it is DONE.
+      if (h) {
+        appNames = [h.approver];
+        col = h.approve ? "#10b981" : "#ef4444";
+        icon = h.approve
+          ? `<path d="M -4 1 L -1.5 4 L 4 -3" stroke="${col}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`
+          : `<path d="M -3 -3 L 3 3 M 3 -3 L -3 3" stroke="${col}" stroke-width="2.5" stroke-linecap="round" fill="none"/>`;
+      }
+      // LOGIC: If NO history exists, it is PENDING or CURRENT.
+      else {
+        if (step.groups && step.groups.length > 0) {
+          // Map groups to individual vertical rows. Clean up redundancy so they fit cleanly.
+          appNames = step.groups.map((g) => {
+            let clean = g.replace("_APPROVAL", "").replace("_LEAD", "");
+            if (clean.length > 12) clean = clean.substring(0, 10) + "..";
+            return `[${clean}]`;
+          });
 
-        // Dynamically adjust canvas height so it centers perfectly in the table row
-        const height = 75 + (maxStackCount * 12);
-        const fSize = settings.flowFontSize;
-
-        // Forced exact height to prevent the SVG from shrinking the circles
-        let svg = `<svg viewBox="0 0 ${width} ${height}" style="width:${width}px; min-width: ${width}px; height:${height}px; display:block;" xmlns="http://www.w3.org/2000/svg">`;
-
-        let currentIndex = 0;
-
-        for (let i = 0; i < flow.length - 1; i++) {
-            const step = flow[i];
-            const h1 = histMap[step.step];
-            const lineCol = (h1 && h1.approve) ? '#10b981' : '#cbd5e1';
-            const x1 = startX + i * dx + r + 4;
-            const x2 = startX + (i + 1) * dx - r - 4;
-            svg += `<line x1="${x1}" y1="20" x2="${x2}" y2="20" stroke="${lineCol}" stroke-width="3" stroke-linecap="round"/>`;
+          // Keep the horizontal tooltip improvement so it doesn't run off the top of the screen
+          groupTooltip = step.groups
+            .map((g) => {
+              const members = globalGroups[g];
+              return members ? `${g}:\n${members.join(", ")}` : g;
+            })
+            .join("\n\n");
         }
 
-        for (let i = 0; i < flow.length; i++) {
-            const step = flow[i];
-            if (step.step === currentStep) currentIndex = i;
-            const h = histMap[step.step];
-            const cx = startX + i * dx;
+        if (step.step === currentStep) {
+          col = "#f59e0b";
+          icon = `<circle cx="0" cy="0" r="4" fill="${col}" />`;
+        }
+      }
 
-            let col = '#cbd5e1';
-            let icon = '';
-            let appNames = []; // We now use an array to stack text vertically
-            let groupTooltip = '';
+      const words = step.step
+        .replace(/_APPROVAL/g, "")
+        .replace(/_/g, " ")
+        .split(" ");
+      let line1 = words[0] || "";
+      let line2 = words.slice(1).join(" ") || "";
+      if (line1.length > 15) line1 = line1.substring(0, 13) + "..";
+      if (line2.length > 15) line2 = line2.substring(0, 13) + "..";
 
-            // LOGIC: If history exists, it is DONE.
-            if (h) {
-                appNames = [h.approver];
-                col = h.approve ? '#10b981' : '#ef4444';
-                icon = h.approve
-                    ? `<path d="M -4 1 L -1.5 4 L 4 -3" stroke="${col}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`
-                    : `<path d="M -3 -3 L 3 3 M 3 -3 L -3 3" stroke="${col}" stroke-width="2.5" stroke-linecap="round" fill="none"/>`;
-            }
-            // LOGIC: If NO history exists, it is PENDING or CURRENT.
-            else {
-                if (step.groups && step.groups.length > 0) {
-                    // Map groups to individual vertical rows. Clean up redundancy so they fit cleanly.
-                    appNames = step.groups.map(g => {
-                        let clean = g.replace('_APPROVAL', '').replace('_LEAD', '');
-                        if (clean.length > 12) clean = clean.substring(0, 10) + '..';
-                        return `[${clean}]`;
-                    });
+      const textCol = h && h.approve ? "#16a34a" : "#64748b";
+      const appCol =
+        h && h.approve
+          ? "#0f172a"
+          : step.step === currentStep
+            ? "#b45309"
+            : "#94a3b8";
 
-                    // Keep the horizontal tooltip improvement so it doesn't run off the top of the screen
-                    groupTooltip = step.groups.map(g => {
-                        const members = globalGroups[g];
-                        return members ? `${g}:\n${members.join(', ')}` : g;
-                    }).join('\n\n');
-                }
+      const safeTooltip = groupTooltip ? escapeQuotes(groupTooltip) : "";
+      const hoverClass = groupTooltip ? "rgs-fast-tt-trigger" : "";
+      const cursorStyle = groupTooltip ? "cursor: help;" : "";
 
-                if (step.step === currentStep) {
-                    col = '#f59e0b';
-                    icon = `<circle cx="0" cy="0" r="4" fill="${col}" />`;
-                }
-            }
+      // Generate multi-line stacked SVG text elements
+      let appNameHtml = "";
+      appNames.forEach((name, idx) => {
+        const yPos = 58 + idx * 12; // Stack them 12px apart
+        appNameHtml += `<text x="0" y="${yPos}" font-size="10" font-weight="700" fill="${appCol}" text-anchor="middle">${name}</text>`;
+      });
 
-            const words = step.step.replace(/_APPROVAL/g, '').replace(/_/g, ' ').split(' ');
-            let line1 = words[0] || '';
-            let line2 = words.slice(1).join(' ') || '';
-            if (line1.length > 15) line1 = line1.substring(0, 13) + '..';
-            if (line2.length > 15) line2 = line2.substring(0, 13) + '..';
-
-            const textCol = (h && h.approve) ? '#16a34a' : '#64748b';
-            const appCol = (h && h.approve) ? '#0f172a' : (step.step === currentStep ? '#b45309' : '#94a3b8');
-
-            const safeTooltip = groupTooltip ? escapeQuotes(groupTooltip) : '';
-            const hoverClass = groupTooltip ? 'rgs-fast-tt-trigger' : '';
-            const cursorStyle = groupTooltip ? 'cursor: help;' : '';
-
-            // Generate multi-line stacked SVG text elements
-            let appNameHtml = '';
-            appNames.forEach((name, idx) => {
-                const yPos = 58 + (idx * 12); // Stack them 12px apart
-                appNameHtml += `<text x="0" y="${yPos}" font-size="10" font-weight="700" fill="${appCol}" text-anchor="middle">${name}</text>`;
-            });
-
-            svg += `
+      svg += `
             <g transform="translate(${cx}, 20)" class="${hoverClass}" data-fast-tt="${safeTooltip}" style="${cursorStyle}">
                 <rect x="-30" y="-15" width="60" height="${height - 10}" fill="transparent" />
                 
                 <circle cx="0" cy="0" r="${r}" fill="#ffffff" stroke="${col}" stroke-width="3" />
                 ${icon}
                 <text x="0" y="26" font-size="${fSize}" font-weight="800" fill="${textCol}" text-anchor="middle">${line1}</text>
-                ${line2 ? `<text x="0" y="40" font-size="${fSize}" font-weight="800" fill="${textCol}" text-anchor="middle">${line2}</text>` : ''}
+                ${line2 ? `<text x="0" y="40" font-size="${fSize}" font-weight="800" fill="${textCol}" text-anchor="middle">${line2}</text>` : ""}
                 ${appNameHtml}
             </g>`;
-        }
-
-        svg += `</svg>`;
-
-        let scrollX = 0;
-        if (currentIndex > 0) {
-            scrollX = Math.max(0, startX + (currentIndex - 1) * dx - 40);
-        }
-
-        return {
-            html: `<div class="rgs-flow-scroll" style="display:flex; align-items:center; width:100%; height: 100%; overflow-x: auto;">${svg}</div>`,
-            scrollX: scrollX
-        };
     }
 
-    // --- OVERVIEW SYSTEM ---
-    const OverviewManager = {
-        modal: null, tbody: null, streamInd: null, masterData: [], isLoaded: false,
-        myApprovalsOnly: false,
-        sortCol: 'date', sortDir: 'desc', lastBms: null, lastPinnedList: null, lastState: null,
+    svg += `</svg>`;
 
-        init() {
-            if (document.getElementById('rgs-ov-modal')) return;
-            document.body.insertAdjacentHTML('beforeend', `
+    let scrollX = 0;
+    if (currentIndex > 0) {
+      scrollX = Math.max(0, startX + (currentIndex - 1) * dx - 40);
+    }
+
+    return {
+      html: `<div class="rgs-flow-scroll" style="display:flex; align-items:center; width:100%; height: 100%; overflow-x: auto;">${svg}</div>`,
+      scrollX: scrollX,
+    };
+  }
+
+  // --- OVERVIEW SYSTEM ---
+  const OverviewManager = {
+    modal: null,
+    tbody: null,
+    streamInd: null,
+    masterData: [],
+    isLoaded: false,
+    myApprovalsOnly: false,
+    sortCol: "date",
+    sortDir: "desc",
+    lastBms: null,
+    lastPinnedList: null,
+    lastState: null,
+
+    init() {
+      if (document.getElementById("rgs-ov-modal")) return;
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        `
                 <div id="rgs-ov-modal">
                     <div class="rgs-ov-backdrop"></div>
                     <div class="rgs-ov-content">
@@ -1465,12 +1880,12 @@
                             <button id="ov-pinned-toggle" class="rgs-link-btn" title="Toggle Pinned Repos Only" data-mode="all">🌐 All Repos</button>
                             <button id="ov-clear-approvals" class="rgs-link-btn rgs-btn-urgent" style="display:none;" title="Clear Action Required filter">🚨 Action Required ✖</button>
                             
-                            ${buildMultiSelectHTML('repo', 'Repo')}
-                            ${buildMultiSelectHTML('version', 'Version')}
-                            ${buildMultiSelectHTML('env', 'Environment')}
-                            ${buildMultiSelectHTML('region', 'Region')}
-                            ${buildMultiSelectHTML('creator', 'Creator')}
-                            ${buildMultiSelectHTML('status', 'Status')}
+                            ${buildMultiSelectHTML("repo", "Repo")}
+                            ${buildMultiSelectHTML("version", "Version")}
+                            ${buildMultiSelectHTML("env", "Environment")}
+                            ${buildMultiSelectHTML("region", "Region")}
+                            ${buildMultiSelectHTML("creator", "Creator")}
+                            ${buildMultiSelectHTML("status", "Status")}
                             
                             <select id="ov-bookmark" class="rgs-ov-search" style="width:140px; padding: 6px 10px; background:#f8fafc;"><option value="">All Logs</option><option value="true">⭐ Bookmarked</option></select>
                         </div>
@@ -1483,673 +1898,938 @@
                         </div>
                     </div>
                 </div>
-            `);
+            `,
+      );
 
-            this.modal = document.getElementById('rgs-ov-modal'); this.tbody = document.getElementById('ov-table-body'); this.streamInd = document.getElementById('rgs-ov-stream-ind');
-            this.modal.querySelector('.rgs-ov-close').onclick = () => this.close(); this.modal.querySelector('.rgs-ov-backdrop').onclick = () => this.close();
+      this.modal = document.getElementById("rgs-ov-modal");
+      this.tbody = document.getElementById("ov-table-body");
+      this.streamInd = document.getElementById("rgs-ov-stream-ind");
+      this.modal.querySelector(".rgs-ov-close").onclick = () => this.close();
+      this.modal.querySelector(".rgs-ov-backdrop").onclick = () => this.close();
 
-            ['repo', 'version', 'env', 'region', 'creator', 'status'].forEach(id => {
-                const el = document.getElementById(`ms-${id}`);
-                const list = document.getElementById(`list-${id}`);
-                const display = el.querySelector('.rgs-ms-display');
-                const searchInput = el.querySelector('.rgs-ms-search');
+      ["repo", "version", "env", "region", "creator", "status"].forEach(
+        (id) => {
+          const el = document.getElementById(`ms-${id}`);
+          const list = document.getElementById(`list-${id}`);
+          const display = el.querySelector(".rgs-ms-display");
+          const searchInput = el.querySelector(".rgs-ms-search");
 
-                display.addEventListener('click', (e) => {
-                    document.querySelectorAll('.rgs-ms-container').forEach(c => { if (c !== el) c.classList.remove('open') });
-                    el.classList.toggle('open');
-                });
-
-                searchInput.addEventListener('input', (e) => {
-                    const term = e.target.value.toLowerCase();
-                    el.querySelectorAll('.rgs-ms-label').forEach(lbl => {
-                        lbl.style.display = lbl.textContent.toLowerCase().includes(term) ? 'flex' : 'none';
-                    });
-                });
-
-                searchInput.addEventListener('change', (e) => {
-                    const val = e.target.value.trim();
-                    if (val) {
-                        let hist = JSON.parse(localStorage.getItem(`env_dash_mshist_${id}`) || '[]');
-                        hist = hist.filter(x => x !== val); hist.unshift(val); if (hist.length > 5) hist.length = 5;
-                        localStorage.setItem(`env_dash_mshist_${id}`, JSON.stringify(hist));
-                        this.updateMultiSearchDatalist(id);
-                    }
-                });
-
-                list.addEventListener('change', (e) => {
-                    if (e.target.type === 'checkbox') {
-                        this.updateMultiSelectDisplay(id);
-                        this.triggerCrossFilter(id);
-                    }
-                });
-
-                this.updateMultiSearchDatalist(id);
+          display.addEventListener("click", (e) => {
+            document.querySelectorAll(".rgs-ms-container").forEach((c) => {
+              if (c !== el) c.classList.remove("open");
             });
+            el.classList.toggle("open");
+          });
 
-            document.addEventListener('click', e => {
-                if (!e.target.closest('.rgs-ms-container')) {
-                    document.querySelectorAll('.rgs-ms-container').forEach(c => c.classList.remove('open'));
-                }
+          searchInput.addEventListener("input", (e) => {
+            const term = e.target.value.toLowerCase();
+            el.querySelectorAll(".rgs-ms-label").forEach((lbl) => {
+              lbl.style.display = lbl.textContent.toLowerCase().includes(term)
+                ? "flex"
+                : "none";
             });
+          });
 
-            const pTog = document.getElementById('ov-pinned-toggle');
-            pTog.addEventListener('click', () => {
-                const isPinnedMode = pTog.dataset.mode === 'pinned';
-                const repoList = document.getElementById('list-repo');
-                const pinnedList = getPinnedRepos();
-
-                if (isPinnedMode) {
-                    pTog.dataset.mode = 'all';
-                    pTog.style.background = '#f8fafc';
-                    pTog.style.fontWeight = 'normal';
-                    pTog.textContent = '🌐 All Repos';
-                    repoList.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
-                } else {
-                    pTog.dataset.mode = 'pinned';
-                    pTog.style.background = '#e2e8f0';
-                    pTog.style.fontWeight = 'bold';
-                    pTog.textContent = '📌 Pinned';
-                    repoList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                        const cleanVal = cb.value.replace('Tolgee: ', '');
-                        cb.checked = pinnedList.includes(cleanVal);
-                    });
-                }
-                this.updateMultiSelectDisplay('repo');
-                this.triggerCrossFilter('repo');
-            });
-
-            document.getElementById('ov-clear-approvals').addEventListener('click', (e) => {
-                this.myApprovalsOnly = false;
-                e.target.style.display = 'none';
-                this.triggerCrossFilter();
-            });
-
-            document.getElementById('ov-bookmark').addEventListener('change', () => this.triggerCrossFilter());
-
-            const searchInput = document.getElementById('ov-search');
-            searchInput.addEventListener('input', debounce(() => this.triggerCrossFilter(), 300));
-            searchInput.addEventListener('change', (e) => {
-                const val = e.target.value.trim();
-                if (val) {
-                    let hist = JSON.parse(localStorage.getItem('env_dash_search_hist') || '[]');
-                    hist = hist.filter(x => x !== val); hist.unshift(val); if (hist.length > 10) hist.length = 10;
-                    localStorage.setItem('env_dash_search_hist', JSON.stringify(hist));
-                    this.updateSearchDatalist();
-                }
-            });
-
-            this.tbody.addEventListener('mouseover', (e) => {
-                const target = e.target.closest('.rgs-tt-trigger');
-                if (!target) return;
-                const d = this.masterData.find(w => String(w.id) === String(target.dataset.wfId));
-                if (!d) return;
-                const vLinks = d.repos_data.map(r => r.version ? `${r.name}: ${r.version}` : `${r.name}: -`).join('<br>');
-
-                openSmartTooltip({
-                    title: d.title,
-                    date: d.created_at_local || 'Unknown Date',
-                    versionHTML: vLinks,
-                    summary: d.summary,
-                    hlSet: d.hl
-                }, target, false);
-            });
-
-            this.tbody.addEventListener('mouseout', (e) => {
-                if (!e.target.closest('.rgs-tt-trigger')) return;
-                closeSmartTooltip(false);
-            });
-
-            this.tbody.addEventListener('click', (e) => {
-                const bmBtn = e.target.closest('.rgs-bm-btn');
-                if (bmBtn) {
-                    const id = bmBtn.dataset.id;
-                    let bms = JSON.parse(localStorage.getItem('env_dash_bms') || '[]');
-                    if (bms.includes(id)) bms = bms.filter(x => x !== id); else bms.push(id);
-                    localStorage.setItem('env_dash_bms', JSON.stringify(bms));
-
-                    bmBtn.classList.toggle('active');
-                    bmBtn.textContent = bms.includes(id) ? '⭐' : '☆';
-                    if (document.getElementById('ov-bookmark').value === 'true') this.triggerCrossFilter();
-                    return;
-                }
-
-                const target = e.target.closest('.rgs-tt-trigger');
-                if (target) {
-                    e.stopPropagation();
-                    const d = this.masterData.find(w => String(w.id) === String(target.dataset.wfId));
-                    if (!d) return;
-                    const vLinks = d.repos_data.map(r => {
-                        const rNameClean = r.name.replace('Tolgee: ', '');
-                        return r.version ? `${r.name}: <a href="https://github.com/Ikigaians/${rNameClean}/releases/tag/${r.version}" target="_blank" style="color:#60a5fa;">${r.version}</a>` : `${r.name}: -`;
-                    }).join('<br>');
-
-                    openSmartTooltip({
-                        title: d.title,
-                        date: d.created_at_local || 'Unknown Date',
-                        versionHTML: vLinks,
-                        summary: d.summary,
-                        hlSet: d.hl
-                    }, target, true);
-                }
-            });
-
-            CalendarManager.init();
-            this.updateSearchDatalist();
-        },
-
-        resetFilters() {
-            document.getElementById('ov-search').value = '';
-            document.getElementById('ov-pinned-toggle').dataset.mode = 'all';
-            document.querySelectorAll('.rgs-ms-list input').forEach(cb => cb.checked = false);
-            document.getElementById('ov-bookmark').value = '';
-            CalendarManager.rangeStart = null;
-            CalendarManager.rangeEnd = null;
-            document.getElementById('ov-clear-start').style.display = 'none';
-            document.getElementById('ov-clear-end').style.display = 'none';
-            document.getElementById('ov-date-start').value = '';
-            document.getElementById('ov-date-end').value = '';
-        },
-
-        openAndHighlight(wfId) {
-            this.open();
-            this.resetFilters();
-            this.triggerCrossFilter();
-
-            setTimeout(() => {
-                const trigger = this.tbody.querySelector(`.rgs-tt-trigger[data-wf-id="${wfId}"]`);
-                if (trigger) {
-                    const row = trigger.closest('tr');
-                    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    row.classList.add('rgs-highlight-row');
-                    setTimeout(() => row.classList.remove('rgs-highlight-row'), 3000);
-                }
-            }, 100);
-        },
-
-        renderHeaders() {
-            const head = document.getElementById('ov-table-head');
-            if (!head) return;
-
-            const thDefs = {
-                id: { label: 'ID', sort: true, resizer: true },
-                date: { label: 'Date & Time', sort: true, resizer: true },
-                creator: { label: 'Creator', sort: true, resizer: true },
-                repo: { label: 'Repository', sort: true, resizer: true },
-                version: { label: 'Version', sort: true, resizer: true },
-                env: { label: 'Env', sort: true, resizer: true },
-                region: { label: 'Region', sort: true, resizer: true },
-                title: { label: 'Summary / Title', sort: true, resizer: true, class: 'ov-title-col' },
-                flow: { label: 'Progress Pipeline', sort: false, resizer: true },
-                status: { label: 'Status', sort: true, resizer: true },
-                action: { label: 'Actions', sort: false, resizer: true }
-            };
-
-            let html = `<tr>`;
-            settings.colOrder.forEach(col => {
-                const def = thDefs[col];
-                if (!def) return;
-                const widthStyle = settings.colWidths[col] ? `style="width:${settings.colWidths[col]}px"` : '';
-                const cls = def.class ? `class="rgs-draggable-th ${def.class}"` : `class="rgs-draggable-th"`;
-                const sortIcon = def.sort ? `<span class="rgs-sort-icon">${this.sortCol === col ? (this.sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>` : '';
-                const resizer = def.resizer ? `<div class="rgs-resizer"></div>` : '';
-                html += `<th data-col="${col}" draggable="true" ${cls} ${widthStyle}>${def.label}${sortIcon}${resizer}</th>`;
-            });
-            html += `</tr>`;
-            head.innerHTML = html;
-
-            this.bindHeaderEvents();
-        },
-
-        bindHeaderEvents() {
-            const head = document.getElementById('ov-table-head');
-            if (!head) return;
-
-            head.querySelectorAll('th[data-col]').forEach(th => {
-                th.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('rgs-resizer')) return;
-                    const col = th.dataset.col;
-                    const thDefs = { flow: false, action: false };
-                    if (thDefs[col] === false) return;
-
-                    if (this.sortCol === col) {
-                        this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
-                    } else {
-                        this.sortCol = col;
-                        this.sortDir = 'asc';
-                    }
-                    this.renderHeaders();
-                    if (this.lastState) this.renderTable(this.lastState, this.lastBms, this.lastPinnedList);
-                });
-            });
-
-            let currentTh, startX, startW, colName;
-            const onMove = e => { if (currentTh) currentTh.style.width = currentTh.style.minWidth = currentTh.style.maxWidth = `${Math.max(50, startW + (e.pageX - startX))}px`; };
-            const onUp = () => { if (!currentTh) return; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); settings.colWidths[colName] = parseInt(currentTh.style.width, 10); saveSettings(); currentTh = null; };
-            head.querySelectorAll('.rgs-resizer').forEach(r => r.addEventListener('mousedown', e => { currentTh = e.target.parentNode; colName = currentTh.dataset.col; startX = e.pageX; startW = currentTh.offsetWidth; document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp); e.preventDefault(); e.stopPropagation(); }));
-
-            let draggedCol = null;
-            head.addEventListener('dragstart', (e) => {
-                if (e.target.tagName === 'TH') {
-                    draggedCol = e.target.dataset.col;
-                    e.target.classList.add('rgs-dragging');
-                }
-            });
-            head.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                const th = e.target.closest('th');
-                if (th && th.dataset.col !== draggedCol) {
-                    th.classList.add('rgs-drag-over');
-                }
-            });
-            head.addEventListener('dragleave', (e) => {
-                const th = e.target.closest('th');
-                if (th) th.classList.remove('rgs-drag-over');
-            });
-            head.addEventListener('drop', (e) => {
-                e.preventDefault();
-                const th = e.target.closest('th');
-                if (th && draggedCol) {
-                    th.classList.remove('rgs-drag-over');
-                    const targetCol = th.dataset.col;
-                    if (draggedCol !== targetCol) {
-                        const fromIdx = settings.colOrder.indexOf(draggedCol);
-                        const toIdx = settings.colOrder.indexOf(targetCol);
-                        settings.colOrder.splice(fromIdx, 1);
-                        settings.colOrder.splice(toIdx, 0, draggedCol);
-                        saveSettings();
-                        this.renderHeaders();
-                        if (this.lastState) this.renderTable(this.lastState, this.lastBms, this.lastPinnedList);
-                    }
-                }
-                draggedCol = null;
-                head.querySelectorAll('th').forEach(t => t.classList.remove('rgs-dragging'));
-            });
-        },
-
-        getMultiSelectValues(id) {
-            return Array.from(document.querySelectorAll(`#list-${id} input:checked`)).map(cb => cb.value);
-        },
-
-        updateMultiSelectDisplay(id) {
-            const el = document.getElementById(`ms-${id}`);
-            if (!el) return;
-            const label = el.dataset.label;
-            const checkedBoxes = Array.from(document.querySelectorAll(`#list-${id} input:checked`));
-            const display = el.querySelector('.rgs-ms-display');
-
-            const plural = label === 'Status' ? 'Statuses' : label + 's';
-
-            if (checkedBoxes.length === 0) {
-                display.innerHTML = `All ${plural} <span style="font-size: 10px; color: #94a3b8;">▼</span>`;
-            } else if (checkedBoxes.length === 1) {
-                display.innerHTML = `${checkedBoxes[0].value} <span style="font-size: 10px; color: #94a3b8;">▼</span>`;
-            } else {
-                display.innerHTML = `${checkedBoxes.length} selected <span style="font-size: 10px; color: #94a3b8;">▼</span>`;
+          searchInput.addEventListener("change", (e) => {
+            const val = e.target.value.trim();
+            if (val) {
+              let hist = JSON.parse(
+                localStorage.getItem(`env_dash_mshist_${id}`) || "[]",
+              );
+              hist = hist.filter((x) => x !== val);
+              hist.unshift(val);
+              if (hist.length > 5) hist.length = 5;
+              localStorage.setItem(
+                `env_dash_mshist_${id}`,
+                JSON.stringify(hist),
+              );
+              this.updateMultiSearchDatalist(id);
             }
-        },
+          });
 
-        updateSearchDatalist() {
-            const hist = JSON.parse(localStorage.getItem('env_dash_search_hist') || '[]');
-            const dl = document.getElementById('rgs-search-list');
-            if (dl) dl.innerHTML = hist.map(h => `<option value="${h}">`).join('');
-        },
+          list.addEventListener("change", (e) => {
+            if (e.target.type === "checkbox") {
+              this.updateMultiSelectDisplay(id);
+              this.triggerCrossFilter(id);
+            }
+          });
 
-        updateMultiSearchDatalist(id) {
-            const hist = JSON.parse(localStorage.getItem(`env_dash_mshist_${id}`) || '[]');
-            const dl = document.getElementById(`ms-hist-${id}`);
-            if (dl) dl.innerHTML = hist.map(h => `<option value="${h}">`).join('');
+          this.updateMultiSearchDatalist(id);
         },
+      );
 
-        syncMemoryData() {
-            this.masterData = globalWorkflows.map(wf => {
-                const d = activeCacheMap[wf.id] || {}; const lt = formatLocalTime(wf.created_at);
-                return {
-                    id: wf.id, created_at: wf.created_at, created_at_local: lt ? lt.full : '', created_dateObj: lt ? lt.dateObj : null,
-                    environment: wf.environment || '', status: wf.status || '', regions: d.regions || [],
-                    title: d.title || wf.name, summary: d.summary || '', creator: d.creator || 'Unknown',
-                    flow: d.flow || [], history: d.history || [], current_step: d.current_step || '',
-                    repos_data: d.repos_data || [], repo_names: d.repo_names || []
-                };
+      document.addEventListener("click", (e) => {
+        if (!e.target.closest(".rgs-ms-container")) {
+          document
+            .querySelectorAll(".rgs-ms-container")
+            .forEach((c) => c.classList.remove("open"));
+        }
+      });
+
+      const pTog = document.getElementById("ov-pinned-toggle");
+      pTog.addEventListener("click", () => {
+        const isPinnedMode = pTog.dataset.mode === "pinned";
+        const repoList = document.getElementById("list-repo");
+        const pinnedList = getPinnedRepos();
+
+        if (isPinnedMode) {
+          pTog.dataset.mode = "all";
+          pTog.style.background = "#f8fafc";
+          pTog.style.fontWeight = "normal";
+          pTog.textContent = "🌐 All Repos";
+          repoList
+            .querySelectorAll('input[type="checkbox"]')
+            .forEach((cb) => (cb.checked = false));
+        } else {
+          pTog.dataset.mode = "pinned";
+          pTog.style.background = "#e2e8f0";
+          pTog.style.fontWeight = "bold";
+          pTog.textContent = "📌 Pinned";
+          repoList.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+            const cleanVal = cb.value.replace("Tolgee: ", "");
+            cb.checked = pinnedList.includes(cleanVal);
+          });
+        }
+        this.updateMultiSelectDisplay("repo");
+        this.triggerCrossFilter("repo");
+      });
+
+      document
+        .getElementById("ov-clear-approvals")
+        .addEventListener("click", (e) => {
+          this.myApprovalsOnly = false;
+          e.target.style.display = "none";
+          this.triggerCrossFilter();
+        });
+
+      document
+        .getElementById("ov-bookmark")
+        .addEventListener("change", () => this.triggerCrossFilter());
+
+      const searchInput = document.getElementById("ov-search");
+      searchInput.addEventListener(
+        "input",
+        debounce(() => this.triggerCrossFilter(), 300),
+      );
+      searchInput.addEventListener("change", (e) => {
+        const val = e.target.value.trim();
+        if (val) {
+          let hist = JSON.parse(
+            localStorage.getItem("env_dash_search_hist") || "[]",
+          );
+          hist = hist.filter((x) => x !== val);
+          hist.unshift(val);
+          if (hist.length > 10) hist.length = 10;
+          localStorage.setItem("env_dash_search_hist", JSON.stringify(hist));
+          this.updateSearchDatalist();
+        }
+      });
+
+      this.tbody.addEventListener("mouseover", (e) => {
+        const target = e.target.closest(".rgs-tt-trigger");
+        if (!target) return;
+        const d = this.masterData.find(
+          (w) => String(w.id) === String(target.dataset.wfId),
+        );
+        if (!d) return;
+        const vLinks = d.repos_data
+          .map((r) => (r.version ? `${r.name}: ${r.version}` : `${r.name}: -`))
+          .join("<br>");
+
+        openSmartTooltip(
+          {
+            title: d.title,
+            date: d.created_at_local || "Unknown Date",
+            versionHTML: vLinks,
+            summary: d.summary,
+            hlSet: d.hl,
+          },
+          target,
+          false,
+        );
+      });
+
+      this.tbody.addEventListener("mouseout", (e) => {
+        if (!e.target.closest(".rgs-tt-trigger")) return;
+        closeSmartTooltip(false);
+      });
+
+      this.tbody.addEventListener("click", (e) => {
+        const bmBtn = e.target.closest(".rgs-bm-btn");
+        if (bmBtn) {
+          const id = bmBtn.dataset.id;
+          let bms = JSON.parse(localStorage.getItem("env_dash_bms") || "[]");
+          if (bms.includes(id)) bms = bms.filter((x) => x !== id);
+          else bms.push(id);
+          localStorage.setItem("env_dash_bms", JSON.stringify(bms));
+
+          bmBtn.classList.toggle("active");
+          bmBtn.textContent = bms.includes(id) ? "⭐" : "☆";
+          if (document.getElementById("ov-bookmark").value === "true")
+            this.triggerCrossFilter();
+          return;
+        }
+
+        const target = e.target.closest(".rgs-tt-trigger");
+        if (target) {
+          e.stopPropagation();
+          const d = this.masterData.find(
+            (w) => String(w.id) === String(target.dataset.wfId),
+          );
+          if (!d) return;
+          const vLinks = d.repos_data
+            .map((r) => {
+              const rNameClean = r.name.replace("Tolgee: ", "");
+              return r.version
+                ? `${r.name}: <a href="https://github.com/Ikigaians/${rNameClean}/releases/tag/${r.version}" target="_blank" style="color:#60a5fa;">${r.version}</a>`
+                : `${r.name}: -`;
+            })
+            .join("<br>");
+
+          openSmartTooltip(
+            {
+              title: d.title,
+              date: d.created_at_local || "Unknown Date",
+              versionHTML: vLinks,
+              summary: d.summary,
+              hlSet: d.hl,
+            },
+            target,
+            true,
+          );
+        }
+      });
+
+      CalendarManager.init();
+      this.updateSearchDatalist();
+    },
+
+    resetFilters() {
+      document.getElementById("ov-search").value = "";
+      document.getElementById("ov-pinned-toggle").dataset.mode = "all";
+      document
+        .querySelectorAll(".rgs-ms-list input")
+        .forEach((cb) => (cb.checked = false));
+      document.getElementById("ov-bookmark").value = "";
+      CalendarManager.rangeStart = null;
+      CalendarManager.rangeEnd = null;
+      document.getElementById("ov-clear-start").style.display = "none";
+      document.getElementById("ov-clear-end").style.display = "none";
+      document.getElementById("ov-date-start").value = "";
+      document.getElementById("ov-date-end").value = "";
+    },
+
+    openAndHighlight(wfId) {
+      this.open();
+      this.resetFilters();
+      this.triggerCrossFilter();
+
+      setTimeout(() => {
+        const trigger = this.tbody.querySelector(
+          `.rgs-tt-trigger[data-wf-id="${wfId}"]`,
+        );
+        if (trigger) {
+          const row = trigger.closest("tr");
+          row.scrollIntoView({ behavior: "smooth", block: "center" });
+          row.classList.add("rgs-highlight-row");
+          setTimeout(() => row.classList.remove("rgs-highlight-row"), 3000);
+        }
+      }, 100);
+    },
+
+    renderHeaders() {
+      const head = document.getElementById("ov-table-head");
+      if (!head) return;
+
+      const thDefs = {
+        id: { label: "ID", sort: true, resizer: true },
+        date: { label: "Date & Time", sort: true, resizer: true },
+        creator: { label: "Creator", sort: true, resizer: true },
+        repo: { label: "Repository", sort: true, resizer: true },
+        version: { label: "Version", sort: true, resizer: true },
+        env: { label: "Env", sort: true, resizer: true },
+        region: { label: "Region", sort: true, resizer: true },
+        title: {
+          label: "Summary / Title",
+          sort: true,
+          resizer: true,
+          class: "ov-title-col",
+        },
+        flow: { label: "Progress Pipeline", sort: false, resizer: true },
+        status: { label: "Status", sort: true, resizer: true },
+        action: { label: "Actions", sort: false, resizer: true },
+      };
+
+      let html = `<tr>`;
+      settings.colOrder.forEach((col) => {
+        const def = thDefs[col];
+        if (!def) return;
+        const widthStyle = settings.colWidths[col]
+          ? `style="width:${settings.colWidths[col]}px"`
+          : "";
+        const cls = def.class
+          ? `class="rgs-draggable-th ${def.class}"`
+          : `class="rgs-draggable-th"`;
+        const sortIcon = def.sort
+          ? `<span class="rgs-sort-icon">${this.sortCol === col ? (this.sortDir === "asc" ? "▲" : "▼") : "↕"}</span>`
+          : "";
+        const resizer = def.resizer ? `<div class="rgs-resizer"></div>` : "";
+        html += `<th data-col="${col}" draggable="true" ${cls} ${widthStyle}>${def.label}${sortIcon}${resizer}</th>`;
+      });
+      html += `</tr>`;
+      head.innerHTML = html;
+
+      this.bindHeaderEvents();
+    },
+
+    bindHeaderEvents() {
+      const head = document.getElementById("ov-table-head");
+      if (!head) return;
+
+      head.querySelectorAll("th[data-col]").forEach((th) => {
+        th.addEventListener("click", (e) => {
+          if (e.target.classList.contains("rgs-resizer")) return;
+          const col = th.dataset.col;
+          const thDefs = { flow: false, action: false };
+          if (thDefs[col] === false) return;
+
+          if (this.sortCol === col) {
+            this.sortDir = this.sortDir === "asc" ? "desc" : "asc";
+          } else {
+            this.sortCol = col;
+            this.sortDir = "asc";
+          }
+          this.renderHeaders();
+          if (this.lastState)
+            this.renderTable(this.lastState, this.lastBms, this.lastPinnedList);
+        });
+      });
+
+      let currentTh, startX, startW, colName;
+      const onMove = (e) => {
+        if (currentTh)
+          currentTh.style.width =
+            currentTh.style.minWidth =
+            currentTh.style.maxWidth =
+              `${Math.max(50, startW + (e.pageX - startX))}px`;
+      };
+      const onUp = () => {
+        if (!currentTh) return;
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        settings.colWidths[colName] = parseInt(currentTh.style.width, 10);
+        saveSettings();
+        currentTh = null;
+      };
+      head.querySelectorAll(".rgs-resizer").forEach((r) =>
+        r.addEventListener("mousedown", (e) => {
+          currentTh = e.target.parentNode;
+          colName = currentTh.dataset.col;
+          startX = e.pageX;
+          startW = currentTh.offsetWidth;
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+          e.preventDefault();
+          e.stopPropagation();
+        }),
+      );
+
+      let draggedCol = null;
+      head.addEventListener("dragstart", (e) => {
+        if (e.target.tagName === "TH") {
+          draggedCol = e.target.dataset.col;
+          e.target.classList.add("rgs-dragging");
+        }
+      });
+      head.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        const th = e.target.closest("th");
+        if (th && th.dataset.col !== draggedCol) {
+          th.classList.add("rgs-drag-over");
+        }
+      });
+      head.addEventListener("dragleave", (e) => {
+        const th = e.target.closest("th");
+        if (th) th.classList.remove("rgs-drag-over");
+      });
+      head.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const th = e.target.closest("th");
+        if (th && draggedCol) {
+          th.classList.remove("rgs-drag-over");
+          const targetCol = th.dataset.col;
+          if (draggedCol !== targetCol) {
+            const fromIdx = settings.colOrder.indexOf(draggedCol);
+            const toIdx = settings.colOrder.indexOf(targetCol);
+            settings.colOrder.splice(fromIdx, 1);
+            settings.colOrder.splice(toIdx, 0, draggedCol);
+            saveSettings();
+            this.renderHeaders();
+            if (this.lastState)
+              this.renderTable(
+                this.lastState,
+                this.lastBms,
+                this.lastPinnedList,
+              );
+          }
+        }
+        draggedCol = null;
+        head
+          .querySelectorAll("th")
+          .forEach((t) => t.classList.remove("rgs-dragging"));
+      });
+    },
+
+    getMultiSelectValues(id) {
+      return Array.from(
+        document.querySelectorAll(`#list-${id} input:checked`),
+      ).map((cb) => cb.value);
+    },
+
+    updateMultiSelectDisplay(id) {
+      const el = document.getElementById(`ms-${id}`);
+      if (!el) return;
+      const label = el.dataset.label;
+      const checkedBoxes = Array.from(
+        document.querySelectorAll(`#list-${id} input:checked`),
+      );
+      const display = el.querySelector(".rgs-ms-display");
+
+      const plural = label === "Status" ? "Statuses" : label + "s";
+
+      if (checkedBoxes.length === 0) {
+        display.innerHTML = `All ${plural} <span style="font-size: 10px; color: #94a3b8;">▼</span>`;
+      } else if (checkedBoxes.length === 1) {
+        display.innerHTML = `${checkedBoxes[0].value} <span style="font-size: 10px; color: #94a3b8;">▼</span>`;
+      } else {
+        display.innerHTML = `${checkedBoxes.length} selected <span style="font-size: 10px; color: #94a3b8;">▼</span>`;
+      }
+    },
+
+    updateSearchDatalist() {
+      const hist = JSON.parse(
+        localStorage.getItem("env_dash_search_hist") || "[]",
+      );
+      const dl = document.getElementById("rgs-search-list");
+      if (dl) dl.innerHTML = hist.map((h) => `<option value="${h}">`).join("");
+    },
+
+    updateMultiSearchDatalist(id) {
+      const hist = JSON.parse(
+        localStorage.getItem(`env_dash_mshist_${id}`) || "[]",
+      );
+      const dl = document.getElementById(`ms-hist-${id}`);
+      if (dl) dl.innerHTML = hist.map((h) => `<option value="${h}">`).join("");
+    },
+
+    syncMemoryData() {
+      this.masterData = globalWorkflows.map((wf) => {
+        const d = activeCacheMap[wf.id] || {};
+        const lt = formatLocalTime(wf.created_at);
+        return {
+          id: wf.id,
+          created_at: wf.created_at,
+          created_at_local: lt ? lt.full : "",
+          created_dateObj: lt ? lt.dateObj : null,
+          environment: wf.environment || "",
+          status: wf.status || "",
+          regions: d.regions || [],
+          title: d.title || wf.name,
+          summary: d.summary || "",
+          creator: d.creator || "Unknown",
+          flow: d.flow || [],
+          history: d.history || [],
+          current_step: d.current_step || "",
+          repos_data: d.repos_data || [],
+          repo_names: d.repo_names || [],
+        };
+      });
+      this.isLoaded = true;
+    },
+
+    rebuildLists(sourceId) {
+      const msDropdowns = [
+        { id: "repo", dk: "repo_names", arr: true },
+        { id: "version", dk: "version", arr: false },
+        { id: "env", dk: "environment", arr: false },
+        { id: "region", dk: "regions", arr: true },
+        { id: "creator", dk: "creator", arr: false },
+        { id: "status", dk: "status", arr: false },
+      ];
+
+      const state = this.getState();
+
+      msDropdowns.forEach((dd) => {
+        if (dd.id === sourceId) return;
+        const list = document.getElementById(`list-${dd.id}`);
+        if (!list) return;
+
+        const validData = this.masterData.filter((d) =>
+          this.checkMatch(
+            d,
+            state,
+            getPinnedRepos(),
+            JSON.parse(localStorage.getItem("env_dash_bms") || "[]"),
+            dd.id,
+          ),
+        );
+
+        let vals = new Set();
+        validData.forEach((d) => {
+          if (dd.id === "version") {
+            d.repos_data.forEach((r) => {
+              if (r.version) vals.add(r.version);
             });
-            this.isLoaded = true;
-        },
+          } else if (dd.arr) {
+            d[dd.dk].forEach((v) => vals.add(v));
+          } else {
+            vals.add(d[dd.dk]);
+          }
+        });
 
-        rebuildLists(sourceId) {
-            const msDropdowns = [
-                { id: 'repo', dk: 'repo_names', arr: true },
-                { id: 'version', dk: 'version', arr: false },
-                { id: 'env', dk: 'environment', arr: false },
-                { id: 'region', dk: 'regions', arr: true },
-                { id: 'creator', dk: 'creator', arr: false },
-                { id: 'status', dk: 'status', arr: false }
-            ];
+        const checked = this.getMultiSelectValues(dd.id);
+        checked.forEach((c) => vals.add(c));
 
-            const state = this.getState();
+        let valArr = [...vals].filter(Boolean);
 
-            msDropdowns.forEach(dd => {
-                if (dd.id === sourceId) return;
-                const list = document.getElementById(`list-${dd.id}`);
-                if (!list) return;
+        valArr.sort((a, b) => {
+          const aC = checked.includes(a);
+          const bC = checked.includes(b);
+          if (aC && !bC) return -1;
+          if (!aC && bC) return 1;
+          return a.localeCompare(b);
+        });
 
-                const validData = this.masterData.filter(d => this.checkMatch(d, state, getPinnedRepos(), JSON.parse(localStorage.getItem('env_dash_bms') || '[]'), dd.id));
-
-                let vals = new Set();
-                validData.forEach(d => {
-                    if (dd.id === 'version') {
-                        d.repos_data.forEach(r => { if (r.version) vals.add(r.version); });
-                    } else if (dd.arr) {
-                        d[dd.dk].forEach(v => vals.add(v));
-                    } else {
-                        vals.add(d[dd.dk]);
-                    }
-                });
-
-                const checked = this.getMultiSelectValues(dd.id);
-                checked.forEach(c => vals.add(c));
-
-                let valArr = [...vals].filter(Boolean);
-
-                valArr.sort((a, b) => {
-                    const aC = checked.includes(a);
-                    const bC = checked.includes(b);
-                    if (aC && !bC) return -1;
-                    if (!aC && bC) return 1;
-                    return a.localeCompare(b);
-                });
-
-                list.innerHTML = valArr.map(v => `
+        list.innerHTML = valArr
+          .map(
+            (v) => `
                     <label class="rgs-ms-label">
-                        <input type="checkbox" value="${v}" ${checked.includes(v) ? 'checked' : ''}>
+                        <input type="checkbox" value="${v}" ${checked.includes(v) ? "checked" : ""}>
                         ${v}
                     </label>
-                `).join('');
+                `,
+          )
+          .join("");
 
-                this.updateMultiSelectDisplay(dd.id);
-            });
-        },
+        this.updateMultiSelectDisplay(dd.id);
+      });
+    },
 
-        getState() {
-            return {
-                repo: this.getMultiSelectValues('repo'),
-                env: this.getMultiSelectValues('env'),
-                region: this.getMultiSelectValues('region'),
-                creator: this.getMultiSelectValues('creator'),
-                version: this.getMultiSelectValues('version'),
-                status: this.getMultiSelectValues('status'),
-                bookmark: document.getElementById('ov-bookmark').value,
-                dates: CalendarManager.getRange(),
-                search: document.getElementById('ov-search').value.trim().toLowerCase().split(/\s+/).filter(Boolean),
-                ovRepoMode: document.getElementById('ov-pinned-toggle').dataset.mode
-            };
-        },
+    getState() {
+      return {
+        repo: this.getMultiSelectValues("repo"),
+        env: this.getMultiSelectValues("env"),
+        region: this.getMultiSelectValues("region"),
+        creator: this.getMultiSelectValues("creator"),
+        version: this.getMultiSelectValues("version"),
+        status: this.getMultiSelectValues("status"),
+        bookmark: document.getElementById("ov-bookmark").value,
+        dates: CalendarManager.getRange(),
+        search: document
+          .getElementById("ov-search")
+          .value.trim()
+          .toLowerCase()
+          .split(/\s+/)
+          .filter(Boolean),
+        ovRepoMode: document.getElementById("ov-pinned-toggle").dataset.mode,
+      };
+    },
 
-        loadState() {
-            if (!settings.saveFilters) return;
+    loadState() {
+      if (!settings.saveFilters) return;
 
-            try {
-                const s = JSON.parse(localStorage.getItem('env_dash_filters'));
-                if (s) {
-                    if (s.search && s.search.length) document.getElementById('ov-search').value = s.search.join(' ');
-                    if (s.bookmark) document.getElementById('ov-bookmark').value = s.bookmark;
+      try {
+        const s = JSON.parse(localStorage.getItem("env_dash_filters"));
+        if (s) {
+          if (s.search && s.search.length)
+            document.getElementById("ov-search").value = s.search.join(" ");
+          if (s.bookmark)
+            document.getElementById("ov-bookmark").value = s.bookmark;
 
-                    if (s.dates) {
-                        CalendarManager.rangeStart = s.dates.start ? new Date(s.dates.start) : null;
-                        CalendarManager.rangeEnd = s.dates.end ? new Date(s.dates.end) : null;
-                        if (CalendarManager.rangeStart) { document.getElementById('ov-date-start').value = formatDateForInput(CalendarManager.rangeStart); document.getElementById('ov-clear-start').style.display = 'block'; }
-                        if (CalendarManager.rangeEnd) { document.getElementById('ov-date-end').value = formatDateForInput(CalendarManager.rangeEnd); document.getElementById('ov-clear-end').style.display = 'block'; }
-                    }
-
-                    if (s.ovRepoMode) {
-                        const pTog = document.getElementById('ov-pinned-toggle');
-                        pTog.dataset.mode = s.ovRepoMode;
-                        if (s.ovRepoMode === 'pinned') {
-                            pTog.style.background = '#e2e8f0';
-                            pTog.style.fontWeight = 'bold';
-                            pTog.textContent = '📌 Pinned';
-                        } else {
-                            pTog.style.background = '#f8fafc';
-                            pTog.style.fontWeight = 'normal';
-                            pTog.textContent = '🌐 All Repos';
-                        }
-                    }
-
-                    ['repo', 'version', 'env', 'region', 'creator', 'status'].forEach(id => {
-                        if (s[id] && s[id].length > 0) {
-                            const list = document.getElementById(`list-${id}`);
-                            list.innerHTML = s[id].map(v => `<label class="rgs-ms-label"><input type="checkbox" value="${v}" checked>${v}</label>`).join('');
-                            this.updateMultiSelectDisplay(id);
-                        }
-                    });
-                }
-            } catch (e) { }
-        },
-
-        checkMatch(d, state, pinnedList, bms, ignoreKey) {
-            if (this.myApprovalsOnly && !myPendingApprovals.has(d.id)) return false;
-
-            if (ignoreKey !== 'repo' && state.repo.length > 0 && !d.repo_names.some(r => state.repo.includes(r))) return false;
-
-            const pTog = document.getElementById('ov-pinned-toggle');
-            if (pTog && pTog.dataset.mode === 'pinned') {
-                const hasMatch = d.repo_names.some(r => {
-                    return pinnedList.includes(r.replace('Tolgee: ', ''));
-                });
-                if (!hasMatch) return false;
+          if (s.dates) {
+            CalendarManager.rangeStart = s.dates.start
+              ? new Date(s.dates.start)
+              : null;
+            CalendarManager.rangeEnd = s.dates.end
+              ? new Date(s.dates.end)
+              : null;
+            if (CalendarManager.rangeStart) {
+              document.getElementById("ov-date-start").value =
+                formatDateForInput(CalendarManager.rangeStart);
+              document.getElementById("ov-clear-start").style.display = "block";
             }
-
-            if (ignoreKey !== 'version' && state.version.length > 0 && !d.repos_data.some(r => state.version.includes(r.version))) return false;
-            if (ignoreKey !== 'env' && state.env.length > 0 && !state.env.includes(d.environment)) return false;
-            if (ignoreKey !== 'region' && state.region.length > 0 && !d.regions.some(r => state.region.includes(r))) return false;
-            if (ignoreKey !== 'creator' && state.creator.length > 0 && !state.creator.includes(d.creator)) return false;
-            if (ignoreKey !== 'status' && state.status.length > 0 && !state.status.includes(d.status)) return false;
-            if (ignoreKey !== 'bookmark' && state.bookmark === 'true' && !bms.includes(String(d.id))) return false;
-
-            if (ignoreKey !== 'dates' && (state.dates.start || state.dates.end)) {
-                if (!d.created_dateObj) return false;
-                if (state.dates.start && d.created_dateObj < state.dates.start) return false;
-                if (state.dates.end) { const eb = new Date(state.dates.end); eb.setDate(eb.getDate() + 1); if (d.created_dateObj >= eb) return false; }
+            if (CalendarManager.rangeEnd) {
+              document.getElementById("ov-date-end").value = formatDateForInput(
+                CalendarManager.rangeEnd,
+              );
+              document.getElementById("ov-clear-end").style.display = "block";
             }
-            if (ignoreKey !== 'search' && state.search.length > 0) {
-                const text = `${d.creator} ${d.repo_names.join(' ')} ${d.environment} ${d.regions.join(' ')} ${d.repos_data.map(x => x.version).join(' ')} ${d.title} ${d.summary} ${d.status}`.toLowerCase();
-                const words = text.split(/[^a-z0-9.-]/).filter(Boolean);
-                for (const term of state.search) {
-                    let matched = false;
-                    if (/\d/.test(term) && text.includes(term)) matched = true;
-                    else if (text.includes(term)) matched = true;
-                    else { const tol = term.length <= 3 ? 0 : (term.length <= 5 ? 1 : 2); if (tol > 0) for (const w of words) if (Math.abs(w.length - term.length) <= tol && levenshtein(term, w) <= tol) { matched = true; break; } }
-                    if (!matched) return false;
-                }
+          }
+
+          if (s.ovRepoMode) {
+            const pTog = document.getElementById("ov-pinned-toggle");
+            pTog.dataset.mode = s.ovRepoMode;
+            if (s.ovRepoMode === "pinned") {
+              pTog.style.background = "#e2e8f0";
+              pTog.style.fontWeight = "bold";
+              pTog.textContent = "📌 Pinned";
+            } else {
+              pTog.style.background = "#f8fafc";
+              pTog.style.fontWeight = "normal";
+              pTog.textContent = "🌐 All Repos";
             }
-            return true;
-        },
+          }
 
-        async open() {
-            this.init(); this.modal.classList.add('active'); this.syncMemoryData();
-
-            this.loadState();
-            this.renderHeaders();
-
-            const clrBtn = document.getElementById('ov-clear-approvals');
-            if (this.myApprovalsOnly && clrBtn) {
-                clrBtn.style.display = 'inline-flex';
-                clrBtn.textContent = `🚨 Action Required (${myPendingApprovals.size}) ✖`;
-            } else if (clrBtn) {
-                clrBtn.style.display = 'none';
-            }
-
-            const pTog = document.getElementById('ov-pinned-toggle');
-            if (pTog.dataset.mode === 'pinned') {
-                const repoList = document.getElementById('list-repo');
-                const pinnedList = getPinnedRepos();
-                repoList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                    const cleanVal = cb.value.replace('Tolgee: ', '');
-                    cb.checked = pinnedList.includes(cleanVal);
-                });
-                this.updateMultiSelectDisplay('repo');
-            }
-
-            this.triggerCrossFilter();
-        },
-        close() { if (this.modal) this.modal.classList.remove('active'); },
-
-        triggerCrossFilter(sourceId) {
-            if (!this.isLoaded) return;
-            const state = this.getState();
-
-            if (settings.saveFilters) {
-                localStorage.setItem('env_dash_filters', JSON.stringify(state));
-            }
-
-            const bms = JSON.parse(localStorage.getItem('env_dash_bms') || '[]');
-            const pinnedList = getPinnedRepos();
-
-            const pTog = document.getElementById('ov-pinned-toggle');
-            if (pTog && pTog.dataset.mode === 'pinned') {
-                const rVals = state.repo.map(r => r.replace('Tolgee: ', ''));
-                let fullyMatched = rVals.length === pinnedList.length && rVals.every(r => pinnedList.includes(r));
-                if (!fullyMatched && state.repo.length > 0) {
-                    pTog.dataset.mode = 'all';
-                    pTog.style.background = '#f8fafc';
-                    pTog.style.fontWeight = 'normal';
-                    pTog.textContent = '🌐 All Repos';
-                }
-            }
-
-            this.rebuildLists(sourceId);
-
-            const dataForCalendar = this.masterData.filter(d => this.checkMatch(d, state, pinnedList, bms, 'dates'));
-            CalendarManager.calculateMetadataStats(dataForCalendar);
-            if (CalendarManager.popup && CalendarManager.popup.classList.contains('active')) {
-                CalendarManager.render();
-            }
-
-            this.lastState = state;
-            this.lastBms = bms;
-            this.lastPinnedList = pinnedList;
-            this.renderTable(state, bms, pinnedList);
-        },
-
-        renderTable(state, bms, pinnedList) {
-            const filtered = this.masterData.filter(d => this.checkMatch(d, state, pinnedList, bms, null));
-
-            const countEl = document.getElementById('rgs-ov-count');
-            if (countEl) countEl.textContent = `(${filtered.length} results)`;
-
-            filtered.sort((a, b) => {
-                let vA, vB;
-                if (this.sortCol === 'id') { vA = a.id; vB = b.id; }
-                else if (this.sortCol === 'date') { vA = a.created_at; vB = b.created_at; }
-                else if (this.sortCol === 'repo') { vA = a.repo_names; vB = b.repo_names; }
-                else if (this.sortCol === 'version') { vA = a.repos_data.map(x => x.version); vB = b.repos_data.map(x => x.version); }
-                else if (this.sortCol === 'env') { vA = a.environment; vB = b.environment; }
-                else if (this.sortCol === 'region') { vA = a.regions; vB = b.regions; }
-                else { vA = a[this.sortCol]; vB = b[this.sortCol]; }
-
-                if (Array.isArray(vA)) vA = vA.join(',');
-                if (Array.isArray(vB)) vB = vB.join(',');
-
-                vA = String(vA || '').toLowerCase();
-                vB = String(vB || '').toLowerCase();
-
-                if (this.sortCol === 'id') {
-                    return this.sortDir === 'asc' ? (a.id - b.id) : (b.id - a.id);
-                }
-
-                if (vA < vB) return this.sortDir === 'asc' ? -1 : 1;
-                if (vA > vB) return this.sortDir === 'asc' ? 1 : -1;
-                return 0;
-            });
-
-            if (filtered.length === 0) { this.tbody.innerHTML = `<tr><td colspan="${settings.colOrder.length}" style="text-align:center; padding: 40px; color:#ef4444; font-weight:600;">No deployments match the current filters.</td></tr>`; return; }
-
-            let htmlStr = '';
-            const bgColors = ['#ffffff', '#eef2f6'];
-            let bgIndex = 0;
-            let lastRepoStr = null;
-
-            const searchTerms = new Set(state.search);
-
-            filtered.forEach(d => {
-                const currentRepoStr = d.repo_names.join(',');
-                if (currentRepoStr !== lastRepoStr) {
-                    if (lastRepoStr !== null) bgIndex = 1 - bgIndex;
-                    lastRepoStr = currentRepoStr;
-                }
-                const rowBg = bgColors[bgIndex];
-                const bStyle = getStatusStyle(d.status);
-                const isBm = bms.includes(String(d.id));
-
-                d.hl = searchTerms;
-
-                const regionHtml = d.regions.length > 0 ? d.regions.map(r => `<span style="white-space:nowrap;">${highlightHTML(r, d.hl)}</span>`).join(', ') : highlightHTML('All', d.hl);
-
-                const repoHtml = `<div style="display:flex; flex-direction:column; gap:6px;">${d.repos_data.map(r => {
-                    const isTolgee = r.name.startsWith('Tolgee: ');
-                    return isTolgee ? `<span style="color:#d946ef; font-weight:bold;">${highlightHTML(r.name, d.hl)}</span>` : `<span>${highlightHTML(r.name, d.hl)}</span>`;
-                }).join('')}</div>`;
-
-                const verHtml = `<div style="display:flex; flex-direction:column; gap:6px; font-family:monospace; font-weight:600; color:#2563eb;">${d.repos_data.map(r => {
-                    const isTolgee = r.name.startsWith('Tolgee: ');
-                    const rNameClean = r.name.replace('Tolgee: ', '');
-                    return r.version ? `<a href="https://github.com/Ikigaians/${rNameClean}/releases/tag/${r.version}" target="_blank" ${isTolgee ? 'style="color:#d946ef;"' : ''}>${highlightHTML(r.version, d.hl)}</a>` : '-';
-                }).join('')}</div>`;
-
-                const flowData = generateFlowSVG(d.flow, d.history, d.current_step);
-
-                const colDefs = {
-                    id: `<td style="font-family:monospace; font-weight:bold;"><a href="https://lab.iki-utl.cc/dashboard/workflow/${d.id}" target="_blank" style="color:#64748b; text-decoration:none;">#${d.id}</a></td>`,
-                    date: `<td style="font-family:monospace; color:#64748b;">${d.created_at_local ? d.created_at_local.substring(0, 16) : ''}</td>`,
-                    creator: `<td style="font-weight:600; color:#3b82f6;">${highlightHTML(d.creator, d.hl)}</td>`,
-                    repo: `<td style="font-weight:600;">${repoHtml}</td>`,
-                    version: `<td>${verHtml}</td>`,
-                    env: `<td>${highlightHTML(d.environment, d.hl)}</td>`,
-                    region: `<td class="ov-region-cell">${regionHtml}</td>`,
-                    title: `<td class="rgs-tt-trigger ov-title-cell" data-wf-id="${d.id}">${highlightHTML(d.title, d.hl)}</td>`,
-                    flow: `<td class="ov-flow-cell" data-scroll-x="${flowData.scrollX}">${flowData.html}</td>`,
-                    status: `<td class="ov-status-cell"><span class="rgs-badge" style="${bStyle}">${d.status || 'UNKNOWN'}</span></td>`,
-                    action: `<td style="text-align:center;"><div class="rgs-action-col"><button class="rgs-bm-btn ${isBm ? 'active' : ''}" data-id="${d.id}" title="Bookmark this deployment">${isBm ? '⭐' : '☆'}</button><a class="rgs-link-btn" href="https://lab.iki-utl.cc/dashboard/workflow/${d.id}" target="_blank" title="View Details">↗️</a></div></td>`
-                };
-
-                let rowHtml = '';
-                settings.colOrder.forEach(col => {
-                    if (colDefs[col]) rowHtml += colDefs[col];
-                });
-
-                htmlStr += `<tr style="background: ${rowBg}">${rowHtml}</tr>`;
-            });
-            this.tbody.innerHTML = htmlStr;
-
-            setTimeout(() => {
-                this.tbody.querySelectorAll('.ov-flow-cell').forEach(cell => {
-                    const sx = parseFloat(cell.dataset.scrollX);
-                    if (sx > 0) {
-                        const scrollDiv = cell.querySelector('.rgs-flow-scroll');
-                        if (scrollDiv) scrollDiv.scrollLeft = sx;
-                    }
-                });
-            }, 50);
+          ["repo", "version", "env", "region", "creator", "status"].forEach(
+            (id) => {
+              if (s[id] && s[id].length > 0) {
+                const list = document.getElementById(`list-${id}`);
+                list.innerHTML = s[id]
+                  .map(
+                    (v) =>
+                      `<label class="rgs-ms-label"><input type="checkbox" value="${v}" checked>${v}</label>`,
+                  )
+                  .join("");
+                this.updateMultiSelectDisplay(id);
+              }
+            },
+          );
         }
-    };
+      } catch (e) {}
+    },
 
-    // --- MATRIX INJECTION ---
-    function injectUIButtons() {
-        if (document.getElementById('rgs-settings-wrapper')) return;
-        const displayBtn = Array.from(document.querySelectorAll('header button')).find(b => b.textContent.includes('Display'));
+    checkMatch(d, state, pinnedList, bms, ignoreKey) {
+      if (this.myApprovalsOnly && !myPendingApprovals.has(d.id)) return false;
 
-        if (displayBtn) {
-            const wrapper = document.createElement('div'); wrapper.id = 'rgs-settings-wrapper'; wrapper.className = 'rgs-settings-container';
-            const toggleBtn = document.createElement('button'); toggleBtn.className = displayBtn.className; toggleBtn.innerHTML = `⚙️ Settings`;
+      if (
+        ignoreKey !== "repo" &&
+        state.repo.length > 0 &&
+        !d.repo_names.some((r) => state.repo.includes(r))
+      )
+        return false;
 
-            const panel = document.createElement('div'); panel.className = 'rgs-settings-panel';
-            panel.innerHTML = `
-                <button class="rgs-global-action-btn" id="rgs-btn-expand-collapse" style="margin-bottom: 8px;">${settings.isExpanded ? 'Collapse Matrix' : 'Expand Matrix'}</button>
+      const pTog = document.getElementById("ov-pinned-toggle");
+      if (pTog && pTog.dataset.mode === "pinned") {
+        const hasMatch = d.repo_names.some((r) => {
+          return pinnedList.includes(r.replace("Tolgee: ", ""));
+        });
+        if (!hasMatch) return false;
+      }
+
+      if (
+        ignoreKey !== "version" &&
+        state.version.length > 0 &&
+        !d.repos_data.some((r) => state.version.includes(r.version))
+      )
+        return false;
+      if (
+        ignoreKey !== "env" &&
+        state.env.length > 0 &&
+        !state.env.includes(d.environment)
+      )
+        return false;
+      if (
+        ignoreKey !== "region" &&
+        state.region.length > 0 &&
+        !d.regions.some((r) => state.region.includes(r))
+      )
+        return false;
+      if (
+        ignoreKey !== "creator" &&
+        state.creator.length > 0 &&
+        !state.creator.includes(d.creator)
+      )
+        return false;
+      if (
+        ignoreKey !== "status" &&
+        state.status.length > 0 &&
+        !state.status.includes(d.status)
+      )
+        return false;
+      if (
+        ignoreKey !== "bookmark" &&
+        state.bookmark === "true" &&
+        !bms.includes(String(d.id))
+      )
+        return false;
+
+      if (ignoreKey !== "dates" && (state.dates.start || state.dates.end)) {
+        if (!d.created_dateObj) return false;
+        if (state.dates.start && d.created_dateObj < state.dates.start)
+          return false;
+        if (state.dates.end) {
+          const eb = new Date(state.dates.end);
+          eb.setDate(eb.getDate() + 1);
+          if (d.created_dateObj >= eb) return false;
+        }
+      }
+      if (ignoreKey !== "search" && state.search.length > 0) {
+        const text =
+          `${d.creator} ${d.repo_names.join(" ")} ${d.environment} ${d.regions.join(" ")} ${d.repos_data.map((x) => x.version).join(" ")} ${d.title} ${d.summary} ${d.status}`.toLowerCase();
+        const words = text.split(/[^a-z0-9.-]/).filter(Boolean);
+        for (const term of state.search) {
+          let matched = false;
+          if (/\d/.test(term) && text.includes(term)) matched = true;
+          else if (text.includes(term)) matched = true;
+          else {
+            const tol = term.length <= 3 ? 0 : term.length <= 5 ? 1 : 2;
+            if (tol > 0)
+              for (const w of words)
+                if (
+                  Math.abs(w.length - term.length) <= tol &&
+                  levenshtein(term, w) <= tol
+                ) {
+                  matched = true;
+                  break;
+                }
+          }
+          if (!matched) return false;
+        }
+      }
+      return true;
+    },
+
+    async open() {
+      this.init();
+      this.modal.classList.add("active");
+      this.syncMemoryData();
+
+      this.loadState();
+      this.renderHeaders();
+
+      const clrBtn = document.getElementById("ov-clear-approvals");
+      if (this.myApprovalsOnly && clrBtn) {
+        clrBtn.style.display = "inline-flex";
+        clrBtn.textContent = `🚨 Action Required (${myPendingApprovals.size}) ✖`;
+      } else if (clrBtn) {
+        clrBtn.style.display = "none";
+      }
+
+      const pTog = document.getElementById("ov-pinned-toggle");
+      if (pTog.dataset.mode === "pinned") {
+        const repoList = document.getElementById("list-repo");
+        const pinnedList = getPinnedRepos();
+        repoList.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+          const cleanVal = cb.value.replace("Tolgee: ", "");
+          cb.checked = pinnedList.includes(cleanVal);
+        });
+        this.updateMultiSelectDisplay("repo");
+      }
+
+      this.triggerCrossFilter();
+    },
+    close() {
+      if (this.modal) this.modal.classList.remove("active");
+    },
+
+    triggerCrossFilter(sourceId) {
+      if (!this.isLoaded) return;
+      const state = this.getState();
+
+      if (settings.saveFilters) {
+        localStorage.setItem("env_dash_filters", JSON.stringify(state));
+      }
+
+      const bms = JSON.parse(localStorage.getItem("env_dash_bms") || "[]");
+      const pinnedList = getPinnedRepos();
+
+      const pTog = document.getElementById("ov-pinned-toggle");
+      if (pTog && pTog.dataset.mode === "pinned") {
+        const rVals = state.repo.map((r) => r.replace("Tolgee: ", ""));
+        let fullyMatched =
+          rVals.length === pinnedList.length &&
+          rVals.every((r) => pinnedList.includes(r));
+        if (!fullyMatched && state.repo.length > 0) {
+          pTog.dataset.mode = "all";
+          pTog.style.background = "#f8fafc";
+          pTog.style.fontWeight = "normal";
+          pTog.textContent = "🌐 All Repos";
+        }
+      }
+
+      this.rebuildLists(sourceId);
+
+      const dataForCalendar = this.masterData.filter((d) =>
+        this.checkMatch(d, state, pinnedList, bms, "dates"),
+      );
+      CalendarManager.calculateMetadataStats(dataForCalendar);
+      if (
+        CalendarManager.popup &&
+        CalendarManager.popup.classList.contains("active")
+      ) {
+        CalendarManager.render();
+      }
+
+      this.lastState = state;
+      this.lastBms = bms;
+      this.lastPinnedList = pinnedList;
+      this.renderTable(state, bms, pinnedList);
+    },
+
+    renderTable(state, bms, pinnedList) {
+      const filtered = this.masterData.filter((d) =>
+        this.checkMatch(d, state, pinnedList, bms, null),
+      );
+
+      const countEl = document.getElementById("rgs-ov-count");
+      if (countEl) countEl.textContent = `(${filtered.length} results)`;
+
+      filtered.sort((a, b) => {
+        let vA, vB;
+        if (this.sortCol === "id") {
+          vA = a.id;
+          vB = b.id;
+        } else if (this.sortCol === "date") {
+          vA = a.created_at;
+          vB = b.created_at;
+        } else if (this.sortCol === "repo") {
+          vA = a.repo_names;
+          vB = b.repo_names;
+        } else if (this.sortCol === "version") {
+          vA = a.repos_data.map((x) => x.version);
+          vB = b.repos_data.map((x) => x.version);
+        } else if (this.sortCol === "env") {
+          vA = a.environment;
+          vB = b.environment;
+        } else if (this.sortCol === "region") {
+          vA = a.regions;
+          vB = b.regions;
+        } else {
+          vA = a[this.sortCol];
+          vB = b[this.sortCol];
+        }
+
+        if (Array.isArray(vA)) vA = vA.join(",");
+        if (Array.isArray(vB)) vB = vB.join(",");
+
+        vA = String(vA || "").toLowerCase();
+        vB = String(vB || "").toLowerCase();
+
+        if (this.sortCol === "id") {
+          return this.sortDir === "asc" ? a.id - b.id : b.id - a.id;
+        }
+
+        if (vA < vB) return this.sortDir === "asc" ? -1 : 1;
+        if (vA > vB) return this.sortDir === "asc" ? 1 : -1;
+        return 0;
+      });
+
+      if (filtered.length === 0) {
+        this.tbody.innerHTML = `<tr><td colspan="${settings.colOrder.length}" style="text-align:center; padding: 40px; color:#ef4444; font-weight:600;">No deployments match the current filters.</td></tr>`;
+        return;
+      }
+
+      let htmlStr = "";
+      const bgColors = ["#ffffff", "#eef2f6"];
+      let bgIndex = 0;
+      let lastRepoStr = null;
+
+      const searchTerms = new Set(state.search);
+
+      filtered.forEach((d) => {
+        const currentRepoStr = d.repo_names.join(",");
+        if (currentRepoStr !== lastRepoStr) {
+          if (lastRepoStr !== null) bgIndex = 1 - bgIndex;
+          lastRepoStr = currentRepoStr;
+        }
+        const rowBg = bgColors[bgIndex];
+        const bStyle = getStatusStyle(d.status);
+        const isBm = bms.includes(String(d.id));
+
+        d.hl = searchTerms;
+
+        const regionHtml =
+          d.regions.length > 0
+            ? d.regions
+                .map(
+                  (r) =>
+                    `<span style="white-space:nowrap;">${highlightHTML(r, d.hl)}</span>`,
+                )
+                .join(", ")
+            : highlightHTML("All", d.hl);
+
+        const repoHtml = `<div style="display:flex; flex-direction:column; gap:6px;">${d.repos_data
+          .map((r) => {
+            const isTolgee = r.name.startsWith("Tolgee: ");
+            return isTolgee
+              ? `<span style="color:#d946ef; font-weight:bold;">${highlightHTML(r.name, d.hl)}</span>`
+              : `<span>${highlightHTML(r.name, d.hl)}</span>`;
+          })
+          .join("")}</div>`;
+
+        const verHtml = `<div style="display:flex; flex-direction:column; gap:6px; font-family:monospace; font-weight:600; color:#2563eb;">${d.repos_data
+          .map((r) => {
+            const isTolgee = r.name.startsWith("Tolgee: ");
+            const rNameClean = r.name.replace("Tolgee: ", "");
+            return r.version
+              ? `<a href="https://github.com/Ikigaians/${rNameClean}/releases/tag/${r.version}" target="_blank" ${isTolgee ? 'style="color:#d946ef;"' : ""}>${highlightHTML(r.version, d.hl)}</a>`
+              : "-";
+          })
+          .join("")}</div>`;
+
+        const flowData = generateFlowSVG(d.flow, d.history, d.current_step);
+
+        const colDefs = {
+          id: `<td style="font-family:monospace; font-weight:bold;"><a href="https://lab.iki-utl.cc/dashboard/workflow/${d.id}" target="_blank" style="color:#64748b; text-decoration:none;">#${d.id}</a></td>`,
+          date: `<td style="font-family:monospace; color:#64748b;">${d.created_at_local ? d.created_at_local.substring(0, 16) : ""}</td>`,
+          creator: `<td style="font-weight:600; color:#3b82f6;">${highlightHTML(d.creator, d.hl)}</td>`,
+          repo: `<td style="font-weight:600;">${repoHtml}</td>`,
+          version: `<td>${verHtml}</td>`,
+          env: `<td>${highlightHTML(d.environment, d.hl)}</td>`,
+          region: `<td class="ov-region-cell">${regionHtml}</td>`,
+          title: `<td class="rgs-tt-trigger ov-title-cell" data-wf-id="${d.id}">${highlightHTML(d.title, d.hl)}</td>`,
+          flow: `<td class="ov-flow-cell" data-scroll-x="${flowData.scrollX}">${flowData.html}</td>`,
+          status: `<td class="ov-status-cell"><span class="rgs-badge" style="${bStyle}">${d.status || "UNKNOWN"}</span></td>`,
+          action: `<td style="text-align:center;"><div class="rgs-action-col"><button class="rgs-bm-btn ${isBm ? "active" : ""}" data-id="${d.id}" title="Bookmark this deployment">${isBm ? "⭐" : "☆"}</button><a class="rgs-link-btn" href="https://lab.iki-utl.cc/dashboard/workflow/${d.id}" target="_blank" title="View Details">↗️</a></div></td>`,
+        };
+
+        let rowHtml = "";
+        settings.colOrder.forEach((col) => {
+          if (colDefs[col]) rowHtml += colDefs[col];
+        });
+
+        htmlStr += `<tr style="background: ${rowBg}">${rowHtml}</tr>`;
+      });
+      this.tbody.innerHTML = htmlStr;
+
+      setTimeout(() => {
+        this.tbody.querySelectorAll(".ov-flow-cell").forEach((cell) => {
+          const sx = parseFloat(cell.dataset.scrollX);
+          if (sx > 0) {
+            const scrollDiv = cell.querySelector(".rgs-flow-scroll");
+            if (scrollDiv) scrollDiv.scrollLeft = sx;
+          }
+        });
+      }, 50);
+    },
+  };
+
+  // --- MATRIX INJECTION ---
+  function injectUIButtons() {
+    if (document.getElementById("rgs-settings-wrapper")) return;
+    const displayBtn = Array.from(
+      document.querySelectorAll("header button"),
+    ).find((b) => b.textContent.includes("Display"));
+
+    if (displayBtn) {
+      const wrapper = document.createElement("div");
+      wrapper.id = "rgs-settings-wrapper";
+      wrapper.className = "rgs-settings-container";
+      const toggleBtn = document.createElement("button");
+      toggleBtn.className = displayBtn.className;
+      toggleBtn.innerHTML = `⚙️ Settings`;
+
+      const panel = document.createElement("div");
+      panel.className = "rgs-settings-panel";
+      panel.innerHTML = `
+                <button class="rgs-global-action-btn" id="rgs-btn-expand-collapse" style="margin-bottom: 8px;">${settings.isExpanded ? "Collapse Matrix" : "Expand Matrix"}</button>
                 <div style="display: flex; gap: 8px; margin-bottom: 10px;">
                     <button class="rgs-global-action-btn" id="rgs-btn-reset-settings" style="margin: 0; flex: 1; font-size: 11px; background: #fee2e2; border-color: #f87171; color: #991b1b;" title="Reset Sliders & UI">↺ Settings</button>
                     <button class="rgs-global-action-btn" id="rgs-btn-reset-db" style="margin: 0; flex: 1; font-size: 11px; background: #fee2e2; border-color: #f87171; color: #991b1b;" title="Clear Cache Data">↺ DB Cache</button>
                 </div>
-                <div class="rgs-setting-row-inline"><label for="rgs-hide-year">Hide Year</label><input type="checkbox" id="rgs-hide-year" ${settings.hideYear ? 'checked' : ''}></div>
-                <div class="rgs-setting-row-inline" style="margin-bottom: 12px;"><label for="rgs-hide-time">Hide Time</label><input type="checkbox" id="rgs-hide-time" ${settings.hideTime ? 'checked' : ''}></div>
-                <div class="rgs-setting-row-inline" style="margin-bottom: 12px;"><label for="rgs-save-filters" title="Save Overview window filters between sessions">Save Filters</label><input type="checkbox" id="rgs-save-filters" ${settings.saveFilters ? 'checked' : ''}></div>
+                <div class="rgs-setting-row-inline"><label for="rgs-hide-year">Hide Year</label><input type="checkbox" id="rgs-hide-year" ${settings.hideYear ? "checked" : ""}></div>
+                <div class="rgs-setting-row-inline" style="margin-bottom: 12px;"><label for="rgs-hide-time">Hide Time</label><input type="checkbox" id="rgs-hide-time" ${settings.hideTime ? "checked" : ""}></div>
+                <div class="rgs-setting-row-inline" style="margin-bottom: 12px;"><label for="rgs-save-filters" title="Save Overview window filters between sessions">Save Filters</label><input type="checkbox" id="rgs-save-filters" ${settings.saveFilters ? "checked" : ""}></div>
                 <hr style="margin: 0 0 10px 0; border-color: #e2e8f0;">
                 
                 <div class="rgs-setting-row" style="margin-bottom: 10px;">
@@ -2177,284 +2857,450 @@
                 <div class="rgs-setting-row"><label>Max Height <span id="rgs-lbl-height">${settings.maxHeight}px</span></label><input type="range" id="rgs-rng-height" min="60" max="300" step="10" value="${settings.maxHeight}"></div>
             `;
 
-            wrapper.appendChild(toggleBtn); wrapper.appendChild(panel); displayBtn.parentNode.insertBefore(wrapper, displayBtn.nextSibling);
-            const ovBtn = document.createElement('button'); ovBtn.className = displayBtn.className; ovBtn.innerHTML = `📊 Overview`; ovBtn.style.marginLeft = '8px';
-            wrapper.parentNode.insertBefore(ovBtn, wrapper.nextSibling);
+      wrapper.appendChild(toggleBtn);
+      wrapper.appendChild(panel);
+      displayBtn.parentNode.insertBefore(wrapper, displayBtn.nextSibling);
+      const ovBtn = document.createElement("button");
+      ovBtn.className = displayBtn.className;
+      ovBtn.innerHTML = `📊 Overview`;
+      ovBtn.style.marginLeft = "8px";
+      wrapper.parentNode.insertBefore(ovBtn, wrapper.nextSibling);
 
-            ovBtn.addEventListener('click', () => OverviewManager.open());
+      ovBtn.addEventListener("click", () => OverviewManager.open());
 
-            toggleBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                updateSettingsCheckboxes();
-                panel.classList.toggle('active');
-            });
+      toggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        updateSettingsCheckboxes();
+        panel.classList.toggle("active");
+      });
 
-            document.addEventListener('click', (e) => { if (!wrapper.contains(e.target)) panel.classList.remove('active'); });
+      document.addEventListener("click", (e) => {
+        if (!wrapper.contains(e.target)) panel.classList.remove("active");
+      });
 
-            const actionBtn = panel.querySelector('#rgs-btn-expand-collapse');
-            actionBtn.addEventListener('click', () => {
-                settings.isExpanded = !settings.isExpanded;
-                actionBtn.textContent = settings.isExpanded ? 'Collapse Matrix' : 'Expand Matrix';
-                saveSettings();
-                document.querySelectorAll('.rgs-matrix-list').forEach(list => {
-                    const caret = list.previousElementSibling.querySelector('.rgs-caret');
-                    if (settings.isExpanded) { list.classList.remove('rgs-collapsed'); if (caret) caret.textContent = '▲'; }
-                    else { list.classList.add('rgs-collapsed'); if (caret) caret.textContent = '▼'; }
-                });
-            });
+      const actionBtn = panel.querySelector("#rgs-btn-expand-collapse");
+      actionBtn.addEventListener("click", () => {
+        settings.isExpanded = !settings.isExpanded;
+        actionBtn.textContent = settings.isExpanded
+          ? "Collapse Matrix"
+          : "Expand Matrix";
+        saveSettings();
+        document.querySelectorAll(".rgs-matrix-list").forEach((list) => {
+          const caret = list.previousElementSibling.querySelector(".rgs-caret");
+          if (settings.isExpanded) {
+            list.classList.remove("rgs-collapsed");
+            if (caret) caret.textContent = "▲";
+          } else {
+            list.classList.add("rgs-collapsed");
+            if (caret) caret.textContent = "▼";
+          }
+        });
+      });
 
-            panel.querySelector('#rgs-btn-reset-settings').addEventListener('click', () => {
-                if (confirm('Are you sure you want to reset all display settings and column widths to default?')) {
-                    localStorage.removeItem(SETTINGS_KEY);
-                    location.reload();
-                }
-            });
-            panel.querySelector('#rgs-btn-reset-db').addEventListener('click', () => {
-                if (confirm('Clear local database cache? This forces a fresh fetch of all history.')) {
-                    indexedDB.deleteDatabase('EnvDashboard_Uncapped');
-                    location.reload();
-                }
-            });
-
-            panel.querySelector('#rgs-hide-year').addEventListener('change', (e) => { settings.hideYear = e.target.checked; updateVisuals(); saveSettings(); });
-            panel.querySelector('#rgs-hide-time').addEventListener('change', (e) => { settings.hideTime = e.target.checked; updateVisuals(); saveSettings(); });
-
-            panel.querySelector('#rgs-save-filters').addEventListener('change', (e) => {
-                settings.saveFilters = e.target.checked;
-                saveSettings();
-                if (!settings.saveFilters) localStorage.removeItem('env_dash_filters');
-            });
-
-            panel.querySelector('#rgs-btn-sel-all').addEventListener('click', () => {
-                settings.repoMode = 'all';
-                saveSettings(); updateSettingsCheckboxes(); updateVisuals();
-            });
-            panel.querySelector('#rgs-btn-sel-none').addEventListener('click', () => {
-                settings.repoMode = 'none';
-                saveSettings(); updateSettingsCheckboxes(); updateVisuals();
-            });
-            panel.querySelector('#rgs-btn-sel-pinned').addEventListener('click', () => {
-                settings.repoMode = 'pinned';
-                saveSettings(); updateSettingsCheckboxes(); updateVisuals();
-            });
-
-            ['items', 'font', 'flowFontSize', 'flowLineLen', 'width', 'height'].forEach(type => {
-                const input = panel.querySelector(`#rgs-rng-${type}`); const label = panel.querySelector(`#rgs-lbl-${type}`);
-                input.addEventListener('input', (e) => {
-                    const val = e.target.value; label.textContent = type === 'items' ? val : `${val}px`;
-                    if (type === 'font') settings.fontSize = parseInt(val, 10);
-                    if (type === 'flowFontSize') settings.flowFontSize = parseInt(val, 10);
-                    if (type === 'flowLineLen') settings.flowLineLen = parseInt(val, 10);
-                    if (type === 'items') settings.maxItems = parseInt(val, 10);
-                    if (type === 'width') settings.maxWidth = parseInt(val, 10);
-                    if (type === 'height') settings.maxHeight = parseInt(val, 10);
-                    updateVisuals(); clearTimeout(saveTimeout); saveTimeout = setTimeout(saveSettings, 300);
-                });
-            });
-            updateSettingsCheckboxes();
-            updateVisuals();
+      panel
+        .querySelector("#rgs-btn-reset-settings")
+        .addEventListener("click", () => {
+          if (
+            confirm(
+              "Are you sure you want to reset all display settings and column widths to default?",
+            )
+          ) {
+            localStorage.removeItem(SETTINGS_KEY);
+            location.reload();
+          }
+        });
+      panel.querySelector("#rgs-btn-reset-db").addEventListener("click", () => {
+        if (
+          confirm(
+            "Clear local database cache? This forces a fresh fetch of all history.",
+          )
+        ) {
+          indexedDB.deleteDatabase("EnvDashboard_Uncapped");
+          location.reload();
         }
-    }
+      });
 
-    // --- PROGRESSIVE STREAMING ENGINE (WITH RETRY & DIFF) ---
-    async function safeFetchJSON(url, opts = {}) {
-        const res = await fetch(url, opts);
-        if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
-        const text = await res.text();
-        try {
-            return JSON.parse(text);
-        } catch (e) {
-            throw new Error(`Invalid JSON format.`);
-        }
-    }
+      panel.querySelector("#rgs-hide-year").addEventListener("change", (e) => {
+        settings.hideYear = e.target.checked;
+        updateVisuals();
+        saveSettings();
+      });
+      panel.querySelector("#rgs-hide-time").addEventListener("change", (e) => {
+        settings.hideTime = e.target.checked;
+        updateVisuals();
+        saveSettings();
+      });
 
-    async function processAndRenderChunk(workflowsChunk) {
-        let reqQ = [];
-        const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
-
-        workflowsChunk.forEach(wf => {
-            const cached = activeCacheMap[wf.id];
-            const sStatus = (wf.status || '').toUpperCase().replace('STATUS.', '');
-
-            if (!globalWfIds.has(wf.id)) {
-                globalWorkflows.push(wf);
-                globalWfIds.add(wf.id);
-            } else {
-                const idx = globalWorkflows.findIndex(w => w.id === wf.id);
-                if (idx > -1) globalWorkflows[idx] = wf;
-            }
-
-            const isTerminal = ['APPROVED', 'SUCCESS', 'REJECTED', 'FAILED', 'FAILURE', 'CANCELED', 'CANCELLED'].includes(sStatus);
-            const isRecent = wf.created_at ? (Date.now() - new Date(wf.created_at).getTime()) < TWENTY_FOUR_HOURS : false;
-
-            if (!cached || !cached.flow || cached.status !== wf.status || !isTerminal || isRecent) {
-                reqQ.push(wf);
-            } else if (currentUser && cached) {
-                let needsAction = false;
-                const curStepObj = cached.flow?.find(s => s.step === cached.current_step);
-                if (curStepObj && curStepObj.groups) {
-                    needsAction = curStepObj.groups.some(g => (globalGroups[g] || []).includes(currentUser.username));
-                }
-
-                if (needsAction) myPendingApprovals.add(wf.id);
-                else myPendingApprovals.delete(wf.id);
-            } else {
-                myPendingApprovals.delete(wf.id);
-            }
+      panel
+        .querySelector("#rgs-save-filters")
+        .addEventListener("change", (e) => {
+          settings.saveFilters = e.target.checked;
+          saveSettings();
+          if (!settings.saveFilters)
+            localStorage.removeItem("env_dash_filters");
         });
 
-        let newItemsForIDB = [];
-
-        if (reqQ.length > 0) {
-            const BATCH_LIMIT = 20;
-            for (let i = 0; i < reqQ.length; i += BATCH_LIMIT) {
-                const b = reqQ.slice(i, i + BATCH_LIMIT);
-                await Promise.all(b.map(async (wf) => {
-                    try {
-                        const dData = await safeFetchJSON(`https://lab.iki-utl.cc/dashboard/workflow-api/workflow/${wf.id}`);
-
-                        let reposParsed = [];
-                        if (dData.content?.normal_version && dData.content.normal_version.length > 0) {
-                            reposParsed = dData.content.normal_version.map(r => ({ name: r.repo_name, version: r.git_tag }));
-                        } else if (dData.checked_version && Object.keys(dData.checked_version).length > 0) {
-                            const firstRepo = Object.keys(dData.checked_version)[0].split('(')[0];
-                            reposParsed = [{ name: firstRepo, version: dData.checked_version[Object.keys(dData.checked_version)[0]]?.expected_version || '' }];
-                        }
-
-                        if (dData.content?.tolgee_version && dData.content.tolgee_version.length > 0) {
-                            dData.content.tolgee_version.forEach(tv => {
-                                reposParsed.push({ name: 'Tolgee: ' + tv.repo_name, version: tv.version });
-                            });
-                        }
-
-                        if (reposParsed.length === 0) {
-                            reposParsed = [{ name: 'unknown', version: '-' }];
-                        }
-
-                        const repoNames = reposParsed.map(r => r.name);
-
-                        let regs = dData.content?.regions || [];
-                        if (regs.length === 0 && dData.checked_version && Object.keys(dData.checked_version).length > 0) {
-                            regs = Object.keys(dData.checked_version).map(k => { const m = k.match(/\((.+)\)/); return m ? m[1] : null; }).filter(Boolean);
-                        }
-
-                        const itemObj = {
-                            id: wf.id, repos_data: reposParsed, repo_names: repoNames, regions: [...new Set(regs)],
-                            summary: dData.content?.summary || 'No details.', title: dData.content?.title || wf.name,
-                            creator: dData.creator || 'Unknown', flow: dData.flow || [], history: dData.history || [],
-                            current_step: dData.current_step || ''
-                        };
-
-                        const finalObj = { ...itemObj, status: wf.status };
-                        newItemsForIDB.push(finalObj);
-
-                        const cached = activeCacheMap[wf.id];
-                        activeCacheMap[wf.id] = finalObj;
-
-                        // Ensure globally synced status updates for existing active notifications
-                        if (cached && cached.status !== wf.status) {
-                            NotificationManager.updateStatus(wf.id, wf.status);
-                        }
-
-                        if (notificationsActive) {
-                            let notify = false, title = '', msg = '';
-
-                            const rawSum = dData.content?.summary || dData.content?.title || wf.name || '';
-                            const truncSum = truncateMiddle(rawSum, 20);
-                            const envStr = wf.environment || 'UNKNOWN';
-                            const creatorStr = dData.creator || 'Unknown';
-
-                            const baseMsg = `[${envStr}] #${wf.id}: ${truncSum} by ${creatorStr}`;
-
-                            if (!cached) {
-                                notify = true;
-                                title = 'New Deployment';
-                                msg = `${baseMsg} started.`;
-                            } else if (cached.status !== wf.status) {
-                                notify = true;
-                                title = 'Status Update';
-                                msg = `${baseMsg} is now ${wf.status.replace('Status.', '')}.`;
-                            } else if (cached.current_step !== dData.current_step && dData.current_step) {
-                                notify = true;
-                                title = 'Pipeline Progress';
-                                msg = `${baseMsg} moved to ${dData.current_step}.`;
-                            }
-
-                            if (notify) NotificationManager.add(title, msg, wf.id, repoNames, wf.status);
-                        }
-
-                        const sStatus = (wf.status || '').toUpperCase().replace('STATUS.', '');
-                        if (currentUser && !['APPROVED', 'SUCCESS', 'REJECTED', 'FAILED', 'FAILURE', 'CANCELED', 'CANCELLED'].includes(sStatus)) {
-                            let needsAction = false;
-                            const curStepObj = dData.flow?.find(s => s.step === dData.current_step);
-                            if (curStepObj && curStepObj.groups) {
-                                needsAction = curStepObj.groups.some(g => (globalGroups[g] || []).includes(currentUser.username));
-                            }
-
-                            if (needsAction) {
-                                myPendingApprovals.add(wf.id);
-                            } else {
-                                myPendingApprovals.delete(wf.id);
-                            }
-                        } else {
-                            myPendingApprovals.delete(wf.id);
-                        }
-
-                    } catch (err) {
-                        log(`Failed processing workflow ${wf.id}: `, err);
-                    }
-                }));
-            }
-            if (newItemsForIDB.length > 0) IDB.putBatch(newItemsForIDB);
-        }
-
-        updateActionFab();
-
-        if (typeof window.rgsObserver !== 'undefined') window.rgsObserver.disconnect();
+      panel.querySelector("#rgs-btn-sel-all").addEventListener("click", () => {
+        settings.repoMode = "all";
+        saveSettings();
         updateSettingsCheckboxes();
-        renderMatrixUI();
-        if (typeof window.rgsObserver !== 'undefined') window.rgsObserver.observe(document.body, { childList: true, subtree: true });
+        updateVisuals();
+      });
+      panel.querySelector("#rgs-btn-sel-none").addEventListener("click", () => {
+        settings.repoMode = "none";
+        saveSettings();
+        updateSettingsCheckboxes();
+        updateVisuals();
+      });
+      panel
+        .querySelector("#rgs-btn-sel-pinned")
+        .addEventListener("click", () => {
+          settings.repoMode = "pinned";
+          saveSettings();
+          updateSettingsCheckboxes();
+          updateVisuals();
+        });
 
-        if (typeof OverviewManager !== 'undefined' && OverviewManager.modal && OverviewManager.modal.classList.contains('active')) {
-            OverviewManager.syncMemoryData(); OverviewManager.triggerCrossFilter();
+      [
+        "items",
+        "font",
+        "flowFontSize",
+        "flowLineLen",
+        "width",
+        "height",
+      ].forEach((type) => {
+        const input = panel.querySelector(`#rgs-rng-${type}`);
+        const label = panel.querySelector(`#rgs-lbl-${type}`);
+        input.addEventListener("input", (e) => {
+          const val = e.target.value;
+          label.textContent = type === "items" ? val : `${val}px`;
+          if (type === "font") settings.fontSize = parseInt(val, 10);
+          if (type === "flowFontSize")
+            settings.flowFontSize = parseInt(val, 10);
+          if (type === "flowLineLen") settings.flowLineLen = parseInt(val, 10);
+          if (type === "items") settings.maxItems = parseInt(val, 10);
+          if (type === "width") settings.maxWidth = parseInt(val, 10);
+          if (type === "height") settings.maxHeight = parseInt(val, 10);
+          updateVisuals();
+          clearTimeout(saveTimeout);
+          saveTimeout = setTimeout(saveSettings, 300);
+        });
+      });
+      updateSettingsCheckboxes();
+      updateVisuals();
+    }
+  }
+
+  // --- PROGRESSIVE STREAMING ENGINE (WITH RETRY & DIFF) ---
+  async function safeFetchJSON(url, opts = {}) {
+    const res = await fetch(url, opts);
+    if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      throw new Error(`Invalid JSON format.`);
+    }
+  }
+
+  async function processAndRenderChunk(workflowsChunk) {
+    let reqQ = [];
+    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+
+    workflowsChunk.forEach((wf) => {
+      const cached = activeCacheMap[wf.id];
+      const sStatus = (wf.status || "").toUpperCase().replace("STATUS.", "");
+
+      if (!globalWfIds.has(wf.id)) {
+        globalWorkflows.push(wf);
+        globalWfIds.add(wf.id);
+      } else {
+        const idx = globalWorkflows.findIndex((w) => w.id === wf.id);
+        if (idx > -1) globalWorkflows[idx] = wf;
+      }
+
+      const isTerminal = [
+        "APPROVED",
+        "SUCCESS",
+        "REJECTED",
+        "FAILED",
+        "FAILURE",
+        "CANCELED",
+        "CANCELLED",
+      ].includes(sStatus);
+      const isRecent = wf.created_at
+        ? Date.now() - new Date(wf.created_at).getTime() < TWENTY_FOUR_HOURS
+        : false;
+
+      if (
+        !cached ||
+        !cached.flow ||
+        cached.status !== wf.status ||
+        !isTerminal ||
+        isRecent
+      ) {
+        reqQ.push(wf);
+      } else if (currentUser && cached) {
+        let needsAction = false;
+        const curStepObj = cached.flow?.find(
+          (s) => s.step === cached.current_step,
+        );
+        if (curStepObj && curStepObj.groups) {
+          needsAction = curStepObj.groups.some((g) =>
+            (globalGroups[g] || []).includes(currentUser.username),
+          );
         }
+
+        if (needsAction) myPendingApprovals.add(wf.id);
+        else myPendingApprovals.delete(wf.id);
+      } else {
+        myPendingApprovals.delete(wf.id);
+      }
+    });
+
+    let newItemsForIDB = [];
+
+    if (reqQ.length > 0) {
+      const BATCH_LIMIT = 20;
+      for (let i = 0; i < reqQ.length; i += BATCH_LIMIT) {
+        const b = reqQ.slice(i, i + BATCH_LIMIT);
+        await Promise.all(
+          b.map(async (wf) => {
+            try {
+              const dData = await safeFetchJSON(
+                `https://lab.iki-utl.cc/dashboard/workflow-api/workflow/${wf.id}`,
+              );
+
+              let reposParsed = [];
+              if (
+                dData.content?.normal_version &&
+                dData.content.normal_version.length > 0
+              ) {
+                reposParsed = dData.content.normal_version.map((r) => ({
+                  name: r.repo_name,
+                  version: r.git_tag,
+                }));
+              } else if (
+                dData.checked_version &&
+                Object.keys(dData.checked_version).length > 0
+              ) {
+                const firstRepo = Object.keys(dData.checked_version)[0].split(
+                  "(",
+                )[0];
+                reposParsed = [
+                  {
+                    name: firstRepo,
+                    version:
+                      dData.checked_version[
+                        Object.keys(dData.checked_version)[0]
+                      ]?.expected_version || "",
+                  },
+                ];
+              }
+
+              if (
+                dData.content?.tolgee_version &&
+                dData.content.tolgee_version.length > 0
+              ) {
+                dData.content.tolgee_version.forEach((tv) => {
+                  reposParsed.push({
+                    name: "Tolgee: " + tv.repo_name,
+                    version: tv.version,
+                  });
+                });
+              }
+
+              if (reposParsed.length === 0) {
+                reposParsed = [{ name: "unknown", version: "-" }];
+              }
+
+              const repoNames = reposParsed.map((r) => r.name);
+
+              let regs = dData.content?.regions || [];
+              if (
+                regs.length === 0 &&
+                dData.checked_version &&
+                Object.keys(dData.checked_version).length > 0
+              ) {
+                regs = Object.keys(dData.checked_version)
+                  .map((k) => {
+                    const m = k.match(/\((.+)\)/);
+                    return m ? m[1] : null;
+                  })
+                  .filter(Boolean);
+              }
+
+              const itemObj = {
+                id: wf.id,
+                repos_data: reposParsed,
+                repo_names: repoNames,
+                regions: [...new Set(regs)],
+                summary: dData.content?.summary || "No details.",
+                title: dData.content?.title || wf.name,
+                creator: dData.creator || "Unknown",
+                flow: dData.flow || [],
+                history: dData.history || [],
+                current_step: dData.current_step || "",
+              };
+
+              const finalObj = { ...itemObj, status: wf.status };
+              newItemsForIDB.push(finalObj);
+
+              const cached = activeCacheMap[wf.id];
+              activeCacheMap[wf.id] = finalObj;
+
+              // Ensure globally synced status updates for existing active notifications
+              if (cached && cached.status !== wf.status) {
+                NotificationManager.updateStatus(wf.id, wf.status);
+              }
+
+              if (notificationsActive) {
+                let notify = false,
+                  title = "",
+                  msg = "";
+
+                const rawSum =
+                  dData.content?.summary ||
+                  dData.content?.title ||
+                  wf.name ||
+                  "";
+                const truncSum = truncateMiddle(rawSum, 20);
+                const envStr = wf.environment || "UNKNOWN";
+                const creatorStr = dData.creator || "Unknown";
+
+                const baseMsg = `[${envStr}] #${wf.id}: ${truncSum} by ${creatorStr}`;
+
+                if (!cached) {
+                  notify = true;
+                  title = "New Deployment";
+                  msg = `${baseMsg} started.`;
+                } else if (cached.status !== wf.status) {
+                  notify = true;
+                  title = "Status Update";
+                  msg = `${baseMsg} is now ${wf.status.replace("Status.", "")}.`;
+                } else if (
+                  cached.current_step !== dData.current_step &&
+                  dData.current_step
+                ) {
+                  notify = true;
+                  title = "Pipeline Progress";
+                  msg = `${baseMsg} moved to ${dData.current_step}.`;
+                }
+
+                if (notify)
+                  NotificationManager.add(
+                    title,
+                    msg,
+                    wf.id,
+                    repoNames,
+                    wf.status,
+                  );
+              }
+
+              const sStatus = (wf.status || "")
+                .toUpperCase()
+                .replace("STATUS.", "");
+              if (
+                currentUser &&
+                ![
+                  "APPROVED",
+                  "SUCCESS",
+                  "REJECTED",
+                  "FAILED",
+                  "FAILURE",
+                  "CANCELED",
+                  "CANCELLED",
+                ].includes(sStatus)
+              ) {
+                let needsAction = false;
+                const curStepObj = dData.flow?.find(
+                  (s) => s.step === dData.current_step,
+                );
+                if (curStepObj && curStepObj.groups) {
+                  needsAction = curStepObj.groups.some((g) =>
+                    (globalGroups[g] || []).includes(currentUser.username),
+                  );
+                }
+
+                if (needsAction) {
+                  myPendingApprovals.add(wf.id);
+                } else {
+                  myPendingApprovals.delete(wf.id);
+                }
+              } else {
+                myPendingApprovals.delete(wf.id);
+              }
+            } catch (err) {
+              log(`Failed processing workflow ${wf.id}: `, err);
+            }
+          }),
+        );
+      }
+      if (newItemsForIDB.length > 0) IDB.putBatch(newItemsForIDB);
     }
 
-    // --- INFINITE NOTES DATABASE ---
-    const NotesDB = {
-        db: null,
-        init() {
-            return new Promise((resolve, reject) => {
-                if (this.db) return resolve();
-                const req = indexedDB.open('EnvDashboard_Notes', 1);
-                req.onupgradeneeded = e => {
-                    e.target.result.createObjectStore('data');
-                };
-                req.onsuccess = e => { this.db = e.target.result; resolve(); };
-                req.onerror = e => reject(e);
-            });
-        },
-        async save(text) {
-            await this.init();
-            const tx = this.db.transaction('data', 'readwrite');
-            tx.objectStore('data').put(text, 'user_notes');
-        },
-        async load() {
-            await this.init();
-            return new Promise((resolve) => {
-                const tx = this.db.transaction('data', 'readonly');
-                const req = tx.objectStore('data').get('user_notes');
-                req.onsuccess = () => resolve(req.result || '');
-                req.onerror = () => resolve('');
-            });
-        }
-    };
+    updateActionFab();
 
-    // --- NOTES SYSTEM ---
-    const NotesManager = {
-        init() {
-            if (document.getElementById('rgs-notes-fab')) return;
-            document.body.insertAdjacentHTML('beforeend', `
+    if (typeof window.rgsObserver !== "undefined")
+      window.rgsObserver.disconnect();
+    updateSettingsCheckboxes();
+    renderMatrixUI();
+    if (typeof window.rgsObserver !== "undefined")
+      window.rgsObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+
+    if (
+      typeof OverviewManager !== "undefined" &&
+      OverviewManager.modal &&
+      OverviewManager.modal.classList.contains("active")
+    ) {
+      OverviewManager.syncMemoryData();
+      OverviewManager.triggerCrossFilter();
+    }
+  }
+
+  // --- INFINITE NOTES DATABASE ---
+  const NotesDB = {
+    db: null,
+    init() {
+      return new Promise((resolve, reject) => {
+        if (this.db) return resolve();
+        const req = indexedDB.open("EnvDashboard_Notes", 1);
+        req.onupgradeneeded = (e) => {
+          e.target.result.createObjectStore("data");
+        };
+        req.onsuccess = (e) => {
+          this.db = e.target.result;
+          resolve();
+        };
+        req.onerror = (e) => reject(e);
+      });
+    },
+    async save(text) {
+      await this.init();
+      const tx = this.db.transaction("data", "readwrite");
+      tx.objectStore("data").put(text, "user_notes");
+    },
+    async load() {
+      await this.init();
+      return new Promise((resolve) => {
+        const tx = this.db.transaction("data", "readonly");
+        const req = tx.objectStore("data").get("user_notes");
+        req.onsuccess = () => resolve(req.result || "");
+        req.onerror = () => resolve("");
+      });
+    },
+  };
+
+  // --- NOTES SYSTEM ---
+  const NotesManager = {
+    init() {
+      if (document.getElementById("rgs-notes-fab")) return;
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        `
                 <div id="rgs-notes-fab" class="rgs-notes-fab" title="Quick Notes">📝</div>
                 <div id="rgs-notes-panel">
                      <div class="rgs-notes-header">
@@ -2468,372 +3314,487 @@
                      <textarea id="rgs-notes-raw" placeholder="Type here... \nSupports **bold**, *italic*, [Link](url), \`\`\`code blocks\`\`\`. \n\nPRO TIP: Double-click any URL in this raw text view to open it instantly!"></textarea>
                      <div id="rgs-notes-md"></div>
                 </div>
-            `);
+            `,
+      );
 
-            const panel = document.getElementById('rgs-notes-panel');
-            const rawEl = document.getElementById('rgs-notes-raw');
-            const mdEl = document.getElementById('rgs-notes-md');
-            const modeBtn = document.getElementById('rgs-notes-mode-btn');
+      const panel = document.getElementById("rgs-notes-panel");
+      const rawEl = document.getElementById("rgs-notes-raw");
+      const mdEl = document.getElementById("rgs-notes-md");
+      const modeBtn = document.getElementById("rgs-notes-mode-btn");
 
-            // Load saved notes from IndexedDB (Handles 10MB+ easily)
-            NotesDB.load().then(text => {
-                // Also pull from localStorage once just in case you already wrote notes there!
-                const legacyNotes = localStorage.getItem('env_dash_notes');
-                if (legacyNotes && !text) {
-                    text = legacyNotes;
-                    NotesDB.save(text);
-                    localStorage.removeItem('env_dash_notes'); // Clean up old storage
-                }
-                rawEl.value = text;
-            });
-
-            // Auto-Save to IndexedDB
-            rawEl.addEventListener('input', debounce(() => {
-                NotesDB.save(rawEl.value);
-            }, 500));
-
-            // Clever trick: Double-click to open raw URLs inside the textarea without switching to Markdown
-            rawEl.addEventListener('dblclick', (e) => {
-                const val = e.target.value;
-                const pos = e.target.selectionStart;
-                const urlRegex = /https?:\/\/[^\s)\]"']+/g;
-                let match;
-                while ((match = urlRegex.exec(val)) !== null) {
-                    if (pos >= match.index && pos <= match.index + match[0].length) {
-                        window.open(match[0], '_blank');
-                        break;
-                    }
-                }
-            });
-
-            document.getElementById('rgs-notes-fab').addEventListener('click', () => {
-                panel.classList.toggle('active');
-            });
-
-            document.getElementById('rgs-notes-close').addEventListener('click', () => {
-                panel.classList.remove('active');
-            });
-
-            document.getElementById('rgs-notes-expand-btn').addEventListener('click', () => {
-                panel.classList.toggle('expanded');
-            });
-
-            // Toggle Raw vs Markdown
-            modeBtn.addEventListener('click', () => {
-                if (rawEl.style.display === 'none') {
-                    rawEl.style.display = 'block';
-                    mdEl.style.display = 'none';
-                    modeBtn.textContent = '👁️ Preview';
-                } else {
-                    rawEl.style.display = 'none';
-                    mdEl.style.display = 'block';
-                    modeBtn.textContent = '✏️ Edit Notes';
-                    mdEl.innerHTML = this.parseMD(rawEl.value);
-                }
-            });
-        },
-
-        parseMD(text) {
-            let t = text.replace(/</g, "&lt;").replace(/>/g, "&gt;"); // Escape HTML
-
-            // Basic Markdown Parsing
-            t = t.replace(/```([\s\S]*?)```/g, '<pre>$1</pre>'); // Code blocks
-            t = t.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'); // Bold
-            t = t.replace(/\*(.*?)\*/g, '<em>$1</em>'); // Italic
-
-            // Named Links: [Google](https://google.com)
-            t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-            // Raw floating URLs
-            t = t.replace(/(^|\s)(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank">$2</a>');
-
-            // Linebreaks outside of code blocks
-            const parts = t.split(/(<pre>[\s\S]*?<\/pre>)/);
-            for (let i = 0; i < parts.length; i++) {
-                if (!parts[i].startsWith('<pre>')) {
-                    parts[i] = parts[i].replace(/\n/g, '<br>');
-                }
-            }
-            return parts.join('');
+      // Load saved notes from IndexedDB (Handles 10MB+ easily)
+      NotesDB.load().then((text) => {
+        // Also pull from localStorage once just in case you already wrote notes there!
+        const legacyNotes = localStorage.getItem("env_dash_notes");
+        if (legacyNotes && !text) {
+          text = legacyNotes;
+          NotesDB.save(text);
+          localStorage.removeItem("env_dash_notes"); // Clean up old storage
         }
+        rawEl.value = text;
+      });
+
+      // Auto-Save to IndexedDB
+      rawEl.addEventListener(
+        "input",
+        debounce(() => {
+          NotesDB.save(rawEl.value);
+        }, 500),
+      );
+
+      // Clever trick: Double-click to open raw URLs inside the textarea without switching to Markdown
+      rawEl.addEventListener("dblclick", (e) => {
+        const val = e.target.value;
+        const pos = e.target.selectionStart;
+        const urlRegex = /https?:\/\/[^\s)\]"']+/g;
+        let match;
+        while ((match = urlRegex.exec(val)) !== null) {
+          if (pos >= match.index && pos <= match.index + match[0].length) {
+            window.open(match[0], "_blank");
+            break;
+          }
+        }
+      });
+
+      document.getElementById("rgs-notes-fab").addEventListener("click", () => {
+        panel.classList.toggle("active");
+      });
+
+      document
+        .getElementById("rgs-notes-close")
+        .addEventListener("click", () => {
+          panel.classList.remove("active");
+        });
+
+      document
+        .getElementById("rgs-notes-expand-btn")
+        .addEventListener("click", () => {
+          panel.classList.toggle("expanded");
+        });
+
+      // Toggle Raw vs Markdown
+      modeBtn.addEventListener("click", () => {
+        if (rawEl.style.display === "none") {
+          rawEl.style.display = "block";
+          mdEl.style.display = "none";
+          modeBtn.textContent = "👁️ Preview";
+        } else {
+          rawEl.style.display = "none";
+          mdEl.style.display = "block";
+          modeBtn.textContent = "✏️ Edit Notes";
+          mdEl.innerHTML = this.parseMD(rawEl.value);
+        }
+      });
+    },
+
+    parseMD(text) {
+      let t = text.replace(/</g, "&lt;").replace(/>/g, "&gt;"); // Escape HTML
+
+      // Basic Markdown Parsing
+      t = t.replace(/```([\s\S]*?)```/g, "<pre>$1</pre>"); // Code blocks
+      t = t.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>"); // Bold
+      t = t.replace(/\*(.*?)\*/g, "<em>$1</em>"); // Italic
+
+      // Named Links: [Google](https://google.com)
+      t = t.replace(
+        /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        '<a href="$2" target="_blank">$1</a>',
+      );
+      // Raw floating URLs
+      t = t.replace(
+        /(^|\s)(https?:\/\/[^\s<)]+)/g,
+        '$1<a href="$2" target="_blank">$2</a>',
+      );
+
+      // Linebreaks outside of code blocks
+      const parts = t.split(/(<pre>[\s\S]*?<\/pre>)/);
+      for (let i = 0; i < parts.length; i++) {
+        if (!parts[i].startsWith("<pre>")) {
+          parts[i] = parts[i].replace(/\n/g, "<br>");
+        }
+      }
+      return parts.join("");
+    },
+  };
+
+  async function startStreamingEngine() {
+    log("Engine Start: Loading IDB to RAM...");
+
+    await Promise.all([fetchCurrentUser(), fetchGroups()]);
+
+    activeCacheMap = await IDB.getAllMap();
+    await pruneOldWorkflows();
+
+    TimelineWidget.init();
+    NotificationManager.init();
+    initGlobalTooltip();
+    initSmartTooltip();
+    initFastTooltip(); // <--- ADD THIS LINE HERE
+    NotesManager.init(); // <--- ADD THIS HERE
+
+    if (typeof OverviewManager !== "undefined" && OverviewManager.streamInd)
+      OverviewManager.streamInd.classList.add("active");
+
+    let initData;
+    try {
+      initData = await safeFetchJSON(
+        `https://lab.iki-utl.cc/dashboard/workflow-api/workflows?page=1&per_page=100`,
+      );
+    } catch (e) {
+      log(
+        "Engine paused (Waiting for App Auth)... Retrying next DOM update.",
+        e.message,
+      );
+      engineStarted = false;
+      return;
+    }
+
+    const totalPages = initData.pages || 1;
+    log(`Found ${totalPages} pages. Streaming Page 1...`);
+    await processAndRenderChunk(initData.workflows || []);
+
+    notificationsActive = true;
+
+    if (totalPages > 1) {
+      const fetchQ = [];
+      for (let p = 2; p <= totalPages; p++)
+        fetchQ.push(
+          `https://lab.iki-utl.cc/dashboard/workflow-api/workflows?page=${p}&per_page=100`,
+        );
+      const chunkSize = 5;
+      for (let i = 0; i < fetchQ.length; i += chunkSize) {
+        const chunk = fetchQ.slice(i, i + chunkSize);
+        log(
+          `Streaming chunk pages ${i + 2} to ${Math.min(i + 1 + chunkSize, totalPages)}...`,
+        );
+        const results = await Promise.all(
+          chunk.map((url) => safeFetchJSON(url).catch(() => ({}))),
+        );
+
+        let aggregatedWorkflows = [];
+        results.forEach((d) => {
+          if (d.workflows)
+            aggregatedWorkflows = aggregatedWorkflows.concat(d.workflows);
+        });
+        await processAndRenderChunk(aggregatedWorkflows);
+      }
+    }
+    log("Engine Stream Complete.");
+    if (typeof OverviewManager !== "undefined" && OverviewManager.streamInd)
+      OverviewManager.streamInd.classList.remove("active");
+
+    setInterval(pollForUpdates, 30000);
+  }
+
+  function getGridColumnName(env, region) {
+    const map = {
+      "us-east-1": "BILL",
+      "us-east-2": "GS1",
+      "us-west-2": "GS0",
+      "eu-central-1": "GS2",
+      "ap-northeast-1": "GS3",
+      "sa-east-1": "GS4",
+      "ap-northeast-2": "GS5",
     };
+    return map[region] && env
+      ? `${env.split("-")[0]}-${map[region]}`.toUpperCase()
+      : null;
+  }
 
-    async function startStreamingEngine() {
-        log("Engine Start: Loading IDB to RAM...");
+  // --- Smart DOM Limiter Render Engine ---
+  function renderMatrixUI() {
+    if (!activeCacheMap || Object.keys(activeCacheMap).length === 0) return;
 
-        await Promise.all([fetchCurrentUser(), fetchGroups()]);
+    const thead = document.querySelector("thead tr");
+    if (!thead) return;
+    const headers = Array.from(thead.querySelectorAll("th")).map((th) =>
+      th.textContent.trim(),
+    );
+    if (headers.length === 0) return;
 
-        activeCacheMap = await IDB.getAllMap();
-        await pruneOldWorkflows();
+    const pinnedRepos = getPinnedRepos();
+    const rows = document.querySelectorAll("tbody tr");
+    const rowMap = {};
 
-        TimelineWidget.init();
-        NotificationManager.init();
-        initGlobalTooltip();
-        initSmartTooltip();
-        initFastTooltip(); // <--- ADD THIS LINE HERE
-        NotesManager.init(); // <--- ADD THIS HERE
+    rows.forEach((row) => {
+      const pNode = row.querySelector("th p");
+      if (pNode) {
+        const repoName = pNode.textContent.replace(/[()]/g, "").trim();
+        rowMap[repoName] = row;
 
-        if (typeof OverviewManager !== 'undefined' && OverviewManager.streamInd) OverviewManager.streamInd.classList.add('active');
+        const isToggled =
+          settings.repoToggles[repoName] !== undefined
+            ? settings.repoToggles[repoName]
+            : pinnedRepos.includes(repoName);
+        if (!isToggled) {
+          row
+            .querySelectorAll(".rgs-matrix-history")
+            .forEach((el) => el.remove());
+        } else {
+          row
+            .querySelectorAll(".rgs-matrix-history")
+            .forEach((el) => (el.innerHTML = ""));
+        }
+      }
+    });
 
-        let initData;
-        try {
-            initData = await safeFetchJSON(`https://lab.iki-utl.cc/dashboard/workflow-api/workflows?page=1&per_page=100`);
-        } catch (e) {
-            log("Engine paused (Waiting for App Auth)... Retrying next DOM update.", e.message);
-            engineStarted = false;
-            return;
+    const renderQueue = {};
+
+    globalWorkflows.forEach((wf) => {
+      const detail = activeCacheMap[wf.id];
+      if (!detail || !detail.repos_data) return;
+
+      detail.repos_data.forEach((repoObj) => {
+        const rNameClean = repoObj.name.replace("Tolgee: ", "");
+        const isToggled =
+          settings.repoToggles[rNameClean] !== undefined
+            ? settings.repoToggles[rNameClean]
+            : pinnedRepos.includes(rNameClean);
+        if (!isToggled) return;
+
+        const row = rowMap[rNameClean];
+        if (!row) return;
+
+        detail.regions.forEach((region) => {
+          const colName = getGridColumnName(wf.environment, region);
+          if (!colName) return;
+          const colIndex = headers.findIndex(
+            (h) => h && h.toUpperCase() === colName,
+          );
+          if (colIndex === -1) return;
+
+          const key = `${rNameClean}||${colIndex}`;
+          if (!renderQueue[key])
+            renderQueue[key] = { td: row.children[colIndex], items: [] };
+          renderQueue[key].items.push({
+            ...detail,
+            context_repo: repoObj.name,
+            context_version: repoObj.version,
+            id: wf.id,
+            created_at: wf.created_at,
+            status: wf.status,
+          });
+        });
+      });
+    });
+
+    const renderLimit = settings.maxItems;
+    const dayChars = ["日", "一", "二", "三", "四", "五", "六"];
+
+    Object.values(renderQueue).forEach((queue) => {
+      const { td, items } = queue;
+      const flex = td.querySelector(".flex.gap-3 > .flex-1") || td;
+
+      // Extract the original cell text (ignoring our injected matrix div)
+      let baseText = "";
+      Array.from(flex.childNodes).forEach((n) => {
+        if (n.nodeType === Node.TEXT_NODE) {
+          baseText += n.textContent;
+        } else if (
+          n.nodeType === Node.ELEMENT_NODE &&
+          !n.classList.contains("rgs-matrix-history")
+        ) {
+          baseText += n.textContent;
+        }
+      });
+
+      // Strip ALL whitespace and newlines to guarantee a perfect match
+      const cleanText = baseText.replace(/\s+/g, "").toUpperCase();
+
+      // Check if the cell indicates N/A or a dash
+      const isUnavailable = ["N/A", "-", "—", "–"].includes(cleanText);
+
+      let container = td.querySelector(".rgs-matrix-history");
+
+      // If unavailable, clear the matrix (if it exists) and skip rendering
+      if (isUnavailable) {
+        if (container) container.remove();
+        return;
+      }
+
+      let savedScroll = 0;
+
+      if (!container) {
+        container = document.createElement("div");
+        container.className = "rgs-matrix-history";
+        flex.appendChild(container);
+      } else {
+        const list = container.querySelector(".rgs-matrix-list");
+        if (list) savedScroll = list.scrollTop;
+      }
+
+      let filteredItems = items.filter(
+        (wf) => settings.matrixStatuses[wf.status || "UNKNOWN"],
+      );
+      filteredItems.sort(
+        (a, b) => new Date(b.created_at) - new Date(a.created_at),
+      );
+
+      let listHtml = "";
+      const slicedItems = filteredItems.slice(0, renderLimit);
+
+      slicedItems.forEach((wf) => {
+        let yHtml = "",
+          dHtml = "Unknown",
+          dyHtml = "",
+          tHtml = "",
+          fDate = "Unknown Date";
+        const lt = formatLocalTime(wf.created_at);
+        if (lt) {
+          fDate = lt.full;
+          yHtml = lt.year;
+          dHtml = lt.date;
+          tHtml = " " + lt.time;
+          dyHtml = ` <span class="rgs-history-day">${dayChars[lt.dayIndex]}</span>`;
         }
 
-        const totalPages = initData.pages || 1;
-        log(`Found ${totalPages} pages. Streaming Page 1...`);
-        await processAndRenderChunk(initData.workflows || []);
+        const isTolgee = wf.context_repo.startsWith("Tolgee: ");
+        const cleanRepoName = wf.context_repo.replace("Tolgee: ", "");
 
-        notificationsActive = true;
+        const vText = wf.context_version
+          ? `<a class="rgs-history-version" href="https://github.com/Ikigaians/${cleanRepoName}/releases/tag/${wf.context_version}" target="_blank" onclick="event.stopPropagation();" ${isTolgee ? 'style="color:#d946ef;"' : ""}>[${wf.context_version}]</a>`
+          : "";
 
-        if (totalPages > 1) {
-            const fetchQ = []; for (let p = 2; p <= totalPages; p++) fetchQ.push(`https://lab.iki-utl.cc/dashboard/workflow-api/workflows?page=${p}&per_page=100`);
-            const chunkSize = 5;
-            for (let i = 0; i < fetchQ.length; i += chunkSize) {
-                const chunk = fetchQ.slice(i, i + chunkSize);
-                log(`Streaming chunk pages ${i + 2} to ${Math.min(i + 1 + chunkSize, totalPages)}...`);
-                const results = await Promise.all(chunk.map(url => safeFetchJSON(url).catch(() => ({}))));
+        const titleHtml = isTolgee
+          ? `<span class="rgs-tolgee-tag">${wf.title}</span>`
+          : wf.title;
+        const sColor = getStatusDotColor(wf.status);
+        const sDot = `<span style="color:${sColor}; margin-right:4px; font-size:12px; display:inline-block;" title="${wf.status || "Unknown"}">●</span>`;
 
-                let aggregatedWorkflows = [];
-                results.forEach(d => { if (d.workflows) aggregatedWorkflows = aggregatedWorkflows.concat(d.workflows); });
-                await processAndRenderChunk(aggregatedWorkflows);
-            }
-        }
-        log("Engine Stream Complete.");
-        if (typeof OverviewManager !== 'undefined' && OverviewManager.streamInd) OverviewManager.streamInd.classList.remove('active');
-
-        setInterval(pollForUpdates, 30000);
-    }
-
-    function getGridColumnName(env, region) {
-        const map = { "us-east-1": "BILL", "us-east-2": "GS1", "us-west-2": "GS0", "eu-central-1": "GS2", "ap-northeast-1": "GS3", "sa-east-1": "GS4", "ap-northeast-2": "GS5" }; return map[region] && env ? `${env.split('-')[0]}-${map[region]}`.toUpperCase() : null;
-    }
-
-    // --- Smart DOM Limiter Render Engine ---
-    function renderMatrixUI() {
-        if (!activeCacheMap || Object.keys(activeCacheMap).length === 0) return;
-
-        const thead = document.querySelector('thead tr'); if (!thead) return;
-        const headers = Array.from(thead.querySelectorAll('th')).map(th => th.textContent.trim()); if (headers.length === 0) return;
-
-        const pinnedRepos = getPinnedRepos();
-        const rows = document.querySelectorAll('tbody tr'); const rowMap = {};
-
-        rows.forEach(row => {
-            const pNode = row.querySelector('th p');
-            if (pNode) {
-                const repoName = pNode.textContent.replace(/[()]/g, '').trim();
-                rowMap[repoName] = row;
-
-                const isToggled = settings.repoToggles[repoName] !== undefined ? settings.repoToggles[repoName] : pinnedRepos.includes(repoName);
-                if (!isToggled) {
-                    row.querySelectorAll('.rgs-matrix-history').forEach(el => el.remove());
-                } else {
-                    row.querySelectorAll('.rgs-matrix-history').forEach(el => el.innerHTML = '');
-                }
-            }
-        });
-
-        const renderQueue = {};
-
-        globalWorkflows.forEach(wf => {
-            const detail = activeCacheMap[wf.id];
-            if (!detail || !detail.repos_data) return;
-
-            detail.repos_data.forEach(repoObj => {
-                const rNameClean = repoObj.name.replace('Tolgee: ', '');
-                const isToggled = settings.repoToggles[rNameClean] !== undefined ? settings.repoToggles[rNameClean] : pinnedRepos.includes(rNameClean);
-                if (!isToggled) return;
-
-                const row = rowMap[rNameClean]; if (!row) return;
-
-                detail.regions.forEach(region => {
-                    const colName = getGridColumnName(wf.environment, region); if (!colName) return;
-                    const colIndex = headers.findIndex(h => h && h.toUpperCase() === colName); if (colIndex === -1) return;
-
-                    const key = `${rNameClean}||${colIndex}`;
-                    if (!renderQueue[key]) renderQueue[key] = { td: row.children[colIndex], items: [] };
-                    renderQueue[key].items.push({ ...detail, context_repo: repoObj.name, context_version: repoObj.version, id: wf.id, created_at: wf.created_at, status: wf.status });
-                });
-            });
-        });
-
-        const renderLimit = settings.maxItems;
-        const dayChars = ['日', '一', '二', '三', '四', '五', '六'];
-
-        Object.values(renderQueue).forEach(queue => {
-            const { td, items } = queue;
-            const flex = td.querySelector('.flex.gap-3 > .flex-1') || td;
-
-            // Extract the original cell text (ignoring our injected matrix div)
-            let baseText = '';
-            Array.from(flex.childNodes).forEach(n => {
-                if (n.nodeType === Node.TEXT_NODE) {
-                    baseText += n.textContent;
-                } else if (n.nodeType === Node.ELEMENT_NODE && !n.classList.contains('rgs-matrix-history')) {
-                    baseText += n.textContent;
-                }
-            });
-
-            // Strip ALL whitespace and newlines to guarantee a perfect match
-            const cleanText = baseText.replace(/\s+/g, '').toUpperCase();
-
-            // Check if the cell indicates N/A or a dash
-            const isUnavailable = ['N/A', '-', '—', '–'].includes(cleanText);
-
-            let container = td.querySelector('.rgs-matrix-history');
-
-            // If unavailable, clear the matrix (if it exists) and skip rendering
-            if (isUnavailable) {
-                if (container) container.remove();
-                return;
-            }
-
-            let savedScroll = 0;
-
-            if (!container) {
-                container = document.createElement('div'); container.className = 'rgs-matrix-history'; flex.appendChild(container);
-            } else {
-                const list = container.querySelector('.rgs-matrix-list');
-                if (list) savedScroll = list.scrollTop;
-            }
-
-            let filteredItems = items.filter(wf => settings.matrixStatuses[wf.status || 'UNKNOWN']);
-            filteredItems.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-            let listHtml = '';
-            const slicedItems = filteredItems.slice(0, renderLimit);
-
-            slicedItems.forEach(wf => {
-                let yHtml = '', dHtml = 'Unknown', dyHtml = '', tHtml = '', fDate = 'Unknown Date';
-                const lt = formatLocalTime(wf.created_at);
-                if (lt) { fDate = lt.full; yHtml = lt.year; dHtml = lt.date; tHtml = ' ' + lt.time; dyHtml = ` <span class="rgs-history-day">${dayChars[lt.dayIndex]}</span>`; }
-
-                const isTolgee = wf.context_repo.startsWith('Tolgee: ');
-                const cleanRepoName = wf.context_repo.replace('Tolgee: ', '');
-
-                const vText = wf.context_version ? `<a class="rgs-history-version" href="https://github.com/Ikigaians/${cleanRepoName}/releases/tag/${wf.context_version}" target="_blank" onclick="event.stopPropagation();" ${isTolgee ? 'style="color:#d946ef;"' : ''}>[${wf.context_version}]</a>` : '';
-
-                const titleHtml = isTolgee ? `<span class="rgs-tolgee-tag">${wf.title}</span>` : wf.title;
-                const sColor = getStatusDotColor(wf.status);
-                const sDot = `<span style="color:${sColor}; margin-right:4px; font-size:12px; display:inline-block;" title="${wf.status || 'Unknown'}">●</span>`;
-
-                listHtml += `
+        listHtml += `
                     <li class="rgs-matrix-item rgs-tt-trigger" data-wf-id="${wf.id}" data-title="${escapeQuotes(wf.title)}" data-sum="${escapeQuotes(wf.summary)}" data-ver="${escapeQuotes(wf.context_version)}" data-fdate="${fDate}">
                         <div class="rgs-history-link-wrapper">${sDot}<span class="rgs-history-date">[<span class="rgs-history-year">${yHtml}</span>${dHtml}${dyHtml}<span class="rgs-history-time">${tHtml}</span>]</span>${vText}<a class="rgs-history-link" href="https://lab.iki-utl.cc/dashboard/workflow/${wf.id}" target="_blank">${titleHtml}</a></div>
                     </li>
                 `;
-            });
+      });
 
-            container.innerHTML = `<div class="rgs-matrix-history-title"><span>Deployments (${filteredItems.length})</span><span class="rgs-caret">${settings.isExpanded ? '▲' : '▼'}</span></div><ul class="rgs-matrix-list ${settings.isExpanded ? '' : 'rgs-collapsed'}">${listHtml}</ul>`;
+      container.innerHTML = `<div class="rgs-matrix-history-title"><span>Deployments (${filteredItems.length})</span><span class="rgs-caret">${settings.isExpanded ? "▲" : "▼"}</span></div><ul class="rgs-matrix-list ${settings.isExpanded ? "" : "rgs-collapsed"}">${listHtml}</ul>`;
 
-            const newList = container.querySelector('.rgs-matrix-list');
-            if (savedScroll > 0 && newList) newList.scrollTop = savedScroll;
+      const newList = container.querySelector(".rgs-matrix-list");
+      if (savedScroll > 0 && newList) newList.scrollTop = savedScroll;
 
-            container.querySelector('.rgs-matrix-history-title').onclick = (e) => {
-                const list = container.querySelector('.rgs-matrix-list');
-                const isC = list.classList.toggle('rgs-collapsed');
-                e.currentTarget.querySelector('.rgs-caret').textContent = isC ? '▼' : '▲';
-            };
+      container.querySelector(".rgs-matrix-history-title").onclick = (e) => {
+        const list = container.querySelector(".rgs-matrix-list");
+        const isC = list.classList.toggle("rgs-collapsed");
+        e.currentTarget.querySelector(".rgs-caret").textContent = isC
+          ? "▼"
+          : "▲";
+      };
 
-            if (newList) {
-                newList.onmouseover = (e) => {
-                    const li = e.target.closest('.rgs-tt-trigger');
-                    if (!li) return;
-                    openSmartTooltip({
-                        title: li.dataset.title,
-                        date: li.dataset.fdate,
-                        versionHTML: li.dataset.ver || '-',
-                        summary: li.dataset.sum
-                    }, li, false);
-                };
-                newList.onmouseout = (e) => {
-                    if (!e.target.closest('.rgs-tt-trigger')) return;
-                    closeSmartTooltip(false);
-                };
-                newList.onclick = (e) => {
-                    if (e.target.closest('a') || e.target.closest('button')) return;
-                    const li = e.target.closest('.rgs-tt-trigger');
-                    if (!li) return;
-                    e.stopPropagation();
-                    e.preventDefault();
-                    openSmartTooltip({
-                        title: li.dataset.title,
-                        date: li.dataset.fdate,
-                        versionHTML: li.dataset.ver || '-',
-                        summary: li.dataset.sum
-                    }, li, true);
-                };
-            }
-        });
-    }
-
-    // --- BACKGROUND POLLING ENGINE ---
-    async function pollForUpdates() {
-        if (!engineStarted || !notificationsActive) return;
-
-        try {
-            const initData = await safeFetchJSON(`https://lab.iki-utl.cc/dashboard/workflow-api/workflows?page=1&per_page=100`);
-            if (initData && initData.workflows) {
-                await processAndRenderChunk(initData.workflows);
-            }
-        } catch (e) {
-            log("Polling Error:", e);
-        }
-    }
-    // ---------------------------------
-
-    const observer = new MutationObserver((mutations) => {
-        let isExternalMutation = false;
-        for (let m of mutations) {
-            const target = m.target.nodeType === Node.TEXT_NODE ? m.target.parentNode : m.target;
-            if (target && target.closest) {
-                if (target.closest('#rgs-smart-tooltip') ||
-                    target.closest('#rgs-ov-modal') ||
-                    target.closest('#rgs-settings-wrapper') ||
-                    target.closest('.rgs-matrix-history') ||
-                    target.closest('.rgs-cal-popup') ||
-                    target.closest('#rgs-timeline-fab') ||
-                    target.closest('#rgs-timeline-panel') ||
-                    target.closest('#rgs-inbox-fab') ||
-                    target.closest('#rgs-action-fab') ||
-                    target.closest('#rgs-toast-container') ||
-                    target.closest('#rgs-inbox-panel')) {
-                    continue;
-                }
-            }
-            isExternalMutation = true;
-            break;
-        }
-
-        if (!isExternalMutation) return;
-
-        if (typeof initGlobalTooltip !== 'undefined') initGlobalTooltip();
-        if (typeof initSmartTooltip !== 'undefined') initSmartTooltip();
-        if (typeof initFastTooltip !== 'undefined') initFastTooltip(); // <--- ADD THIS LINE HERE
-        if (typeof NotesManager !== 'undefined') NotesManager.init(); // <--- ADD THIS HERE
-        if (typeof injectUIButtons !== 'undefined') injectUIButtons();
-
-        clearTimeout(renderTimeout);
-        renderTimeout = setTimeout(() => {
-            if (typeof window.rgsObserver !== 'undefined') window.rgsObserver.disconnect();
-
-            if (!engineStarted) {
-                engineStarted = true;
-                if (typeof startStreamingEngine !== 'undefined') startStreamingEngine();
-            }
-            if (typeof updateSettingsCheckboxes !== 'undefined') updateSettingsCheckboxes();
-            if (typeof renderMatrixUI !== 'undefined') renderMatrixUI();
-
-            if (typeof OverviewManager !== 'undefined') OverviewManager.init();
-
-            if (typeof window.rgsObserver !== 'undefined') window.rgsObserver.observe(document.body, { childList: true, subtree: true });
-        }, 250);
+      if (newList) {
+        newList.onmouseover = (e) => {
+          const li = e.target.closest(".rgs-tt-trigger");
+          if (!li) return;
+          openSmartTooltip(
+            {
+              title: li.dataset.title,
+              date: li.dataset.fdate,
+              versionHTML: li.dataset.ver || "-",
+              summary: li.dataset.sum,
+            },
+            li,
+            false,
+          );
+        };
+        newList.onmouseout = (e) => {
+          if (!e.target.closest(".rgs-tt-trigger")) return;
+          closeSmartTooltip(false);
+        };
+        newList.onclick = (e) => {
+          if (e.target.closest("a") || e.target.closest("button")) return;
+          const li = e.target.closest(".rgs-tt-trigger");
+          if (!li) return;
+          e.stopPropagation();
+          e.preventDefault();
+          openSmartTooltip(
+            {
+              title: li.dataset.title,
+              date: li.dataset.fdate,
+              versionHTML: li.dataset.ver || "-",
+              summary: li.dataset.sum,
+            },
+            li,
+            true,
+          );
+        };
+      }
     });
+  }
 
-    window.rgsObserver = observer;
-    window.rgsObserver.observe(document.body, { childList: true, subtree: true });
+  // --- BACKGROUND POLLING ENGINE ---
+  async function pollForUpdates() {
+    if (!engineStarted || !notificationsActive) return;
+
+    try {
+      const initData = await safeFetchJSON(
+        `https://lab.iki-utl.cc/dashboard/workflow-api/workflows?page=1&per_page=100`,
+      );
+      if (initData && initData.workflows) {
+        await processAndRenderChunk(initData.workflows);
+      }
+    } catch (e) {
+      log("Polling Error:", e);
+    }
+  }
+  // ---------------------------------
+
+  const observer = new MutationObserver((mutations) => {
+    let isExternalMutation = false;
+    for (let m of mutations) {
+      const target =
+        m.target.nodeType === Node.TEXT_NODE ? m.target.parentNode : m.target;
+      if (target && target.closest) {
+        if (
+          target.closest("#rgs-smart-tooltip") ||
+          target.closest("#rgs-ov-modal") ||
+          target.closest("#rgs-settings-wrapper") ||
+          target.closest(".rgs-matrix-history") ||
+          target.closest(".rgs-cal-popup") ||
+          target.closest("#rgs-timeline-fab") ||
+          target.closest("#rgs-timeline-panel") ||
+          target.closest("#rgs-inbox-fab") ||
+          target.closest("#rgs-action-fab") ||
+          target.closest("#rgs-toast-container") ||
+          target.closest("#rgs-inbox-panel")
+        ) {
+          continue;
+        }
+      }
+      isExternalMutation = true;
+      break;
+    }
+
+    if (!isExternalMutation) return;
+
+    if (typeof initGlobalTooltip !== "undefined") initGlobalTooltip();
+    if (typeof initSmartTooltip !== "undefined") initSmartTooltip();
+    if (typeof initFastTooltip !== "undefined") initFastTooltip(); // <--- ADD THIS LINE HERE
+    if (typeof NotesManager !== "undefined") NotesManager.init(); // <--- ADD THIS HERE
+    if (typeof injectUIButtons !== "undefined") injectUIButtons();
+
+    clearTimeout(renderTimeout);
+    renderTimeout = setTimeout(() => {
+      if (typeof window.rgsObserver !== "undefined")
+        window.rgsObserver.disconnect();
+
+      if (!engineStarted) {
+        engineStarted = true;
+        if (typeof startStreamingEngine !== "undefined") startStreamingEngine();
+      }
+      if (typeof updateSettingsCheckboxes !== "undefined")
+        updateSettingsCheckboxes();
+      if (typeof renderMatrixUI !== "undefined") renderMatrixUI();
+
+      if (typeof OverviewManager !== "undefined") OverviewManager.init();
+
+      if (typeof window.rgsObserver !== "undefined")
+        window.rgsObserver.observe(document.body, {
+          childList: true,
+          subtree: true,
+        });
+    }, 250);
+  });
+
+  window.rgsObserver = observer;
+  window.rgsObserver.observe(document.body, { childList: true, subtree: true });
 })();
