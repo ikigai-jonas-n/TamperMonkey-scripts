@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         [7.95] IKG Attendance Pro (Autopilot & Alarms)
+// @name         [7.96] IKG Attendance Pro (Autopilot & Alarms)
 // @namespace    http://tampermonkey.net/
-// @version      7.95
+// @version      7.96
 // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -20,6 +20,8 @@
 // @connect      gist.githubusercontent.com
 // @connect      github.com
 // @connect      ikg.deel.team
+// @connect      cdn.jsdelivr.net
+// @connect      date.nager.at
 // @run-at       document-start
 // ==/UserScript==
 
@@ -1412,191 +1414,193 @@
     }
   });
 
-  // 🎯 MASTER MATH FUNCTION & DATA SOURCE OF TRUTH
-  const evaluateDay = (dateStr, record, note, override, useOverrides) => {
-    const isFullPTO = !!(note && note.isPTO);
-    const isPartialPTO = !!(note && note.isPartialPTO);
-    let ptoHrs = note ? parseFloat(note.deductedHours) || 0 : 0;
-    const ptoType = note ? note.type || "PTO" : "";
-
-    const isIgnored = useOverrides !== false && override && override.isIgnored;
-
-    if (isIgnored) {
-      return {
-        isFullPTO: false,
-        isPartialPTO: false,
-        ptoHrs: 0,
-        ptoType: "",
-        isIgnored: true,
-        actualHrs: 0,
-        effStart: null,
-        effEnd: null,
-        effectiveHrs: 0,
-        targetHrs: 0,
-        flexHrs: 0,
-        isWorkingDay: false,
-        status: "ignored",
-        color: "var(--text-muted)",
-        chartColor: "var(--border)",
-        heatmapBg: "var(--border)",
-        reason: "Ignored (Pending)",
-        isSpoofed: false,
-      };
-    }
-
-    if (isFullPTO) ptoHrs = 9.0;
-
-    let actualHrs =
-      record && record.workHours ? parseFloat(record.workHours) : 0;
-    let effStart = record ? record.startTime : null;
-    let effEnd = record ? record.endTime : null;
-    let isSpoofed = false;
-
-    if (
-      useOverrides !== false &&
-      override &&
-      (override.manualIn || override.manualOut)
-    ) {
-      const [y, m, d] = dateStr.split("-");
-      let effStartD = override.manualIn
-        ? new Date(y, parseInt(m, 10) - 1, d, ...override.manualIn.split(":"))
-        : record?.startTime
-          ? new Date(record.startTime)
-          : null;
-      let effEndD = override.manualOut
-        ? new Date(y, parseInt(m, 10) - 1, d, ...override.manualOut.split(":"))
-        : record?.endTime
-          ? new Date(record.endTime)
-          : null;
-
-      if (effStartD && effEndD) {
-        actualHrs = Math.max(0, (effEndD - effStartD) / 3600000);
-        effStart = effStartD.getTime();
-        effEnd = effEndD.getTime();
-        isSpoofed = true;
-      } else if (effStartD) {
-        actualHrs = 0;
-        effStart = effStartD.getTime();
-        effEnd = null;
-        isSpoofed = true;
-      }
-    }
-
-    const [y, m, d] = dateStr.split("-");
-    const dObj = new Date(
-      parseInt(y, 10),
-      parseInt(m, 10) - 1,
-      parseInt(d, 10),
-    );
-    const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
-
-    let targetHrs = 0;
-    let isWorkingDay = false;
-
-    if (!isWeekend || isFullPTO) {
-      targetHrs = 9.0;
-      const todayD = new Date();
-      todayD.setHours(0, 0, 0, 0);
-      if (dObj <= todayD) isWorkingDay = true;
-    }
-
-    if (isWeekend && actualHrs > 0) {
-      targetHrs = 0;
-      isWorkingDay = true;
-    }
-
-    const effectiveHrs = isFullPTO ? targetHrs : actualHrs + ptoHrs;
-    const flexHrs = isWorkingDay ? effectiveHrs - targetHrs : 0;
-
-    let status = "none";
-    let color = "var(--text-muted)";
-    let chartColor = "transparent";
-    let heatmapBg = "transparent";
-    let reason = "";
-
-    if (isFullPTO) {
-      status = "full-pto";
-      color = "var(--pto)";
-      chartColor = "#8B5CF6";
-      heatmapBg = "#8B5CF6";
-      reason = "Full Day PTO";
-    } else if (actualHrs === 0 && effStart && !effEnd) {
-      status = "pending";
-      color = "var(--warn)";
-      chartColor = "#F59E0B";
-      heatmapBg = "#F59E0B";
-      reason = "Pending Checkout";
-      isWorkingDay = false;
-    } else if (actualHrs > 0) {
-      if (isPartialPTO) {
-        if (effectiveHrs >= targetHrs) {
-          status = "partial-pto-pass";
-          color = "var(--success)";
-          chartColor = "#10B981";
-          heatmapBg = "linear-gradient(135deg, #10B981 50%, #8B5CF6 50%)";
-          reason = `Goal passed`;
-        } else {
-          status = "partial-pto-fail";
-          color = "var(--danger)";
-          chartColor = "#EF4444";
-          heatmapBg = "linear-gradient(135deg, #EF4444 50%, #8B5CF6 50%)";
-          reason = `Short`;
-        }
-      } else {
-        if (actualHrs >= targetHrs) {
-          status = "pass";
-          color = "var(--success)";
-          chartColor = "#10B981";
-          heatmapBg = "#10B981";
-          reason = "Goal met";
-        } else {
-          status = "fail";
-          color = "var(--danger)";
-          chartColor = "#EF4444";
-          heatmapBg = "#EF4444";
-          reason = `Short`;
-        }
-      }
-    } else if (isWorkingDay && actualHrs === 0 && !isFullPTO) {
-      status = "fail";
-      color = "var(--danger)";
-      chartColor = "#EF4444";
-      heatmapBg = "#EF4444";
-      reason = "Absent";
-    }
-
-    if (
-      (status === "pass" || status === "partial-pto-pass") &&
-      actualHrs >= 10.0
-    ) {
-      chartColor = "#059669";
-      heatmapBg =
-        status === "pass"
-          ? "#059669"
-          : "linear-gradient(135deg, #059669 50%, #8B5CF6 50%)";
-    }
-
-    return {
-      isFullPTO,
-      isPartialPTO,
-      ptoHrs,
-      ptoType,
-      isIgnored,
-      actualHrs,
-      effStart,
-      effEnd,
-      effectiveHrs,
-      targetHrs,
-      flexHrs,
-      isWorkingDay,
-      status,
-      color,
-      chartColor,
-      heatmapBg,
-      reason,
-      isSpoofed,
+  // 🎯 NEW: Taiwan Public Holiday Fetcher (Nager.Date API)
+    const fetchTWHolidays = async (year) => {
+        const key = `IKG_TW_HOLIDAYS_${year}`;
+        if (localStorage.getItem(key)) return;
+        try {
+            const res = await window.fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/TW`);
+            if (res.ok) {
+                const data = await res.json();
+                const dateMap = {};
+                data.forEach(h => { dateMap[h.date] = h.localName || h.name; });
+                localStorage.setItem(key, JSON.stringify(dateMap));
+                
+                // Trigger a re-render once loaded
+                const cache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
+                if (document.getElementById('ikg-cal-grid')) {
+                    renderCalendar();
+                    if (typeof renderAnalytics === 'function') renderAnalytics(cache);
+                    if (typeof renderAudit === 'function') renderAudit(cache);
+                }
+            }
+        } catch (e) { IkgLog.warn("Failed to fetch TW holidays", e); }
     };
-  };
+    fetchTWHolidays(new Date().getFullYear());
+
+    // 🎯 MASTER BLOCKING HOLIDAY LOCK (Strict YYYY-MM-DD Normalizer, Native Scraped Names)
+        const ensureHolidaysSecured = (year) => {
+            const key = `IKG_HOLIDAYS_${year}`;
+            const cached = localStorage.getItem(key);
+
+            // Self-healing check: purges old broken caches containing un-hyphenated "20260619" keys
+            const isCacheHealthy = (str) => {
+                if (!str) return false;
+                try {
+                    const obj = JSON.parse(str);
+                    const sampleKey = Object.keys(obj)[0];
+                    return sampleKey && sampleKey.includes('-') && Object.keys(obj).length > 0;
+                } catch(e) { return false; }
+            };
+
+            if (isCacheHealthy(cached)) return Promise.resolve();
+
+            return new Promise((resolve, reject) => {
+                updateHeaderStatus(`Securing ${year} Holidays...`, 'var(--warn)');
+                GM_xmlhttpRequest({
+                    method: "GET",
+                    url: `https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/${year}.json`,
+                    timeout: 10000,
+                    onload: (res) => {
+                        if (res.status === 200) {
+                            try {
+                                const list = JSON.parse(res.responseText);
+                                const map = {};
+
+                                list.forEach(d => {
+                                    if (!d.date) return;
+
+                                    // Force "20260619" -> "2026-06-19"
+                                    const rawD = String(d.date);
+                                    let isoDate = rawD;
+                                    if (rawD.length === 8 && !rawD.includes('-')) {
+                                        isoDate = `${rawD.slice(0,4)}-${rawD.slice(4,6)}-${rawD.slice(6,8)}`;
+                                    }
+
+                                    const dObj = new Date(isoDate);
+                                    const dayOfWeek = dObj.getDay();
+                                    const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+
+                                    // 🎯 Pass the native Chinese description straight to the UI map!
+                                    if (d.isHoliday && !isWeekend) {
+                                        map[isoDate] = d.description || "國定假日";
+                                    }
+                                });
+
+                                // 🎯 "\u52de\u52d5\u7bc0" renders natively as "勞動節" in JS engine
+                                map[`${year}-05-01`] = "\u52de\u52d5\u7bc0";
+
+                                localStorage.setItem(key, JSON.stringify(map));
+                                updateHeaderStatus('✅ Synced', 'var(--success)');
+                                resolve();
+                            } catch(e) { reject("Malformed JSON from CDN"); }
+                        } else { reject(`HTTP ${res.status}`); }
+                    },
+                    ontimeout: () => reject("CDN Timeout"),
+                    onerror: () => reject("Network Failure")
+                });
+            });
+        };
+
+  // 🎯 MASTER MATH FUNCTION & DATA SOURCE OF TRUTH
+        const evaluateDay = (dateStr, record, note, override, useOverrides) => {
+            const isFullPTO = !!(note && note.isPTO);
+            const isPartialPTO = !!(note && note.isPartialPTO);
+            let ptoHrs = note ? (parseFloat(note.deductedHours) || 0) : 0;
+            const ptoType = note ? (note.type || 'PTO') : '';
+
+            const isIgnored = useOverrides !== false && override && override.isIgnored;
+
+            if (isIgnored) {
+                return {
+                    isFullPTO: false, isPartialPTO: false, ptoHrs: 0, ptoType: '', isIgnored: true,
+                    actualHrs: 0, effStart: null, effEnd: null, effectiveHrs: 0, targetHrs: 0, flexHrs: 0,
+                    isWorkingDay: false, isPublicHoliday: false, holidayName: '',
+                    status: 'ignored', color: 'var(--text-muted)', chartColor: 'var(--border)', heatmapBg: 'var(--border)', reason: 'Ignored', isSpoofed: false
+                };
+            }
+
+            if (isFullPTO) ptoHrs = 9.0;
+
+            let actualHrs = (record && record.workHours) ? parseFloat(record.workHours) : 0;
+            let effStart = record ? record.startTime : null;
+            let effEnd = record ? record.endTime : null;
+            let isSpoofed = false;
+
+            if (useOverrides !== false && override && (override.manualIn || override.manualOut)) {
+                const [y, m, d] = dateStr.split('-');
+                let effStartD = override.manualIn ? new Date(y, parseInt(m, 10)-1, d, ...override.manualIn.split(':')) : (record?.startTime ? new Date(record.startTime) : null);
+                let effEndD = override.manualOut ? new Date(y, parseInt(m, 10)-1, d, ...override.manualOut.split(':')) : (record?.endTime ? new Date(record.endTime) : null);
+
+                if (effStartD && effEndD) {
+                    actualHrs = Math.max(0, (effEndD - effStartD) / 3600000); 
+                    effStart = effStartD.getTime(); effEnd = effEndD.getTime();
+                    isSpoofed = true;
+                } else if (effStartD) {
+                    actualHrs = 0; effStart = effStartD.getTime(); effEnd = null; isSpoofed = true;
+                }
+            }
+
+            const [y, m, d] = dateStr.split('-');
+            const dObj = new Date(parseInt(y, 10), parseInt(m, 10)-1, parseInt(d, 10));
+            
+            // Look up secured English holidays
+            const twHolidays = JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${y}`) || '{}');
+            const isPublicHoliday = !!twHolidays[dateStr];
+            const holidayName = twHolidays[dateStr] || '';
+
+            const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
+            const isRestDay = isWeekend || isPublicHoliday;
+
+            let targetHrs = 0;
+            let isWorkingDay = false;
+
+            const hasNoPunches = !effStart && !effEnd && actualHrs === 0;
+
+            if (hasNoPunches && !isFullPTO) {
+                targetHrs = 0;
+                isWorkingDay = false; 
+            } else if (!isRestDay || isFullPTO) {
+                targetHrs = 9.0;
+                const todayD = new Date(); todayD.setHours(0,0,0,0);
+                if (dObj <= todayD) isWorkingDay = true;
+            } else if (isRestDay && actualHrs > 0) {
+                targetHrs = 0; 
+                isWorkingDay = true;
+            }
+
+            const effectiveHrs = isFullPTO ? targetHrs : (actualHrs + ptoHrs);
+            const flexHrs = isWorkingDay ? (effectiveHrs - targetHrs) : 0; 
+
+            let status = 'none'; let color = 'var(--text-muted)'; let chartColor = 'transparent'; let heatmapBg = 'transparent'; let reason = '';
+
+            if (hasNoPunches && !isFullPTO) {
+                if (isPublicHoliday) {
+                    status = 'holiday'; color = 'var(--primary)'; reason = holidayName;
+                } else {
+                    status = 'omitted'; color = 'var(--text-muted)'; reason = 'No Punches';
+                }
+            } else if (isFullPTO) {
+                status = 'full-pto'; color = 'var(--pto)'; chartColor = '#8B5CF6'; heatmapBg = '#8B5CF6'; reason = 'Full Day PTO';
+            } else if (actualHrs === 0 && effStart && !effEnd) {
+                status = 'pending'; color = 'var(--warn)'; chartColor = '#F59E0B'; heatmapBg = '#F59E0B'; reason = 'Pending Checkout';
+                isWorkingDay = false; 
+            } else if (actualHrs > 0) {
+                if (isPartialPTO) {
+                    if (effectiveHrs >= targetHrs) { status = 'partial-pto-pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = 'linear-gradient(135deg, #10B981 50%, #8B5CF6 50%)'; reason = `Goal passed`; } 
+                    else { status = 'partial-pto-fail'; color = 'var(--danger)'; chartColor = '#EF4444'; heatmapBg = 'linear-gradient(135deg, #EF4444 50%, #8B5CF6 50%)'; reason = `Short`; }
+                } else {
+                    if (actualHrs >= targetHrs) { status = 'pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = '#10B981'; reason = 'Goal met'; } 
+                    else { status = 'fail'; color = 'var(--danger)'; chartColor = '#EF4444'; heatmapBg = '#EF4444'; reason = `Short`; }
+                }
+            }
+
+            if ((status === 'pass' || status === 'partial-pto-pass') && actualHrs >= 10.0) {
+                chartColor = '#059669'; heatmapBg = status === 'pass' ? '#059669' : 'linear-gradient(135deg, #059669 50%, #8B5CF6 50%)';
+            }
+
+            return { isFullPTO, isPartialPTO, ptoHrs, ptoType, isIgnored, actualHrs, effStart, effEnd, effectiveHrs, targetHrs, flexHrs, isWorkingDay, isPublicHoliday, holidayName, status, color, chartColor, heatmapBg, reason, isSpoofed };
+        };
 
   let chartHoverHandler = null;
 
@@ -2513,8 +2517,9 @@
   let auditCalInstance = null;
 
   // --- RENDER LOGIC ---
-  function renderCalendar() {
-    const grid = document.getElementById("ikg-cal-grid");
+async function renderCalendar() {
+            try { await ensureHolidaysSecured(currentViewYear); } catch(e) { return; }
+            const grid = document.getElementById('ikg-cal-grid');
     const headerText = document.getElementById("ikg-cal-month-text");
     const prevBtn = document.getElementById("ikg-prev-month");
     const nextBtn = document.getElementById("ikg-next-month");
@@ -2600,25 +2605,24 @@
         monthTargetHours = safeFloat(monthTargetHours + evalDay.targetHrs);
       }
 
-      if (
-        isFetchingData &&
-        dateStr <= todayStr &&
-        record === undefined &&
-        !evalDay.isFullPTO
-      ) {
-        cellContent = `<div class="ikg-cell-data"><div class="skeleton skel-hrs"></div><div class="skeleton skel-box"></div></div>`;
-      } else if (evalDay.isIgnored) {
-        cellContent = `<div style="margin:auto; border:1px dashed var(--text-muted); color:var(--text-muted); padding:4px 8px; border-radius:6px; font-size:11px; font-weight:600; text-align:center;">⚠️ Ignored</div>`;
-      } else if (evalDay.isFullPTO) {
-        cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
-      }
-      // 🎯 CRITICAL FIX: Always render if there is a start punch, an end punch, or an active override!
-      else if (
-        evalDay.effStart ||
-        evalDay.effEnd ||
-        evalDay.isSpoofed ||
-        evalDay.actualHrs > 0
-      ) {
+      if (isFetchingData && dateStr <= todayStr && record === undefined && !evalDay.isFullPTO) {
+                cellContent = `<div class="ikg-cell-data"><div class="skeleton skel-hrs"></div><div class="skeleton skel-box"></div></div>`;
+            }
+            else if (evalDay.isIgnored) {
+                cellContent = `<div style="margin:auto; border:1px dashed var(--text-muted); color:var(--text-muted); padding:4px 8px; border-radius:6px; font-size:11px; font-weight:600; text-align:center;">⚠️ Ignored</div>`;
+            }
+            else if (evalDay.status === 'holiday') {
+                // 🎯 Render Taiwan Public Holidays gracefully
+                cellContent = `<div class="pto-pill" style="background:rgba(59,130,246,0.1); color:var(--primary); border-color:var(--primary);">🎊 ${evalDay.holidayName}</div>`;
+            }
+            else if (evalDay.status === 'omitted') {
+                // 🎯 Show user that the day is neutralized because they didn't punch
+                cellContent = `<div style="margin:auto; color:var(--text-muted); font-size:11px; font-weight:600; text-align:center; opacity: 0.5;">No Punches</div>`;
+            }
+            else if (evalDay.isFullPTO) {
+                cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
+            }
+            else if (evalDay.effStart || evalDay.effEnd || evalDay.isSpoofed || evalDay.actualHrs > 0) {
         let pendingIcon = "";
         let timesClass = "";
 
@@ -2798,12 +2802,10 @@
     }
   }
 
-  function renderAudit(localCache) {
-    currentAuditMonth = populateMonthSelect(
-      "ikg-audit-month",
-      localCache,
-      currentAuditMonth,
-    );
+  async function renderAudit(localCache) {
+            const targetY = currentAuditMonth ? parseInt(currentAuditMonth.split('-')[0], 10) : new Date().getFullYear();
+            try { await ensureHolidaysSecured(targetY); } catch(e) { return; }
+            currentAuditMonth = populateMonthSelect('ikg-audit-month', localCache, currentAuditMonth);
 
     const allDates = Object.keys(localCache)
       .filter((d) => localCache[d] && localCache[d].workHours)
@@ -2877,9 +2879,9 @@
           ? formatTime(evalDay.effEnd)
           : formatTime(record.endTime);
 
-        let reasonHtml = evalDay.isPartialPTO
-          ? `<div style="font-size:11px; color:var(--pto); font-weight:600; margin-top:4px;">inc. +${evalDay.ptoHrs}h ${evalDay.ptoType}</div>`
-          : "";
+        let reasonHtml = evalDay.isPartialPTO ? `<div style="font-size:11px; color:var(--pto); font-weight:600; margin-top:4px;">inc. +${evalDay.ptoHrs}h ${evalDay.ptoType}</div>` : '';
+                if (evalDay.isSpoofed) reasonHtml += `<div style="font-size:10px; color:var(--warn); margin-top:4px;">(Manual Override)</div>`;
+                if (evalDay.isPublicHoliday) reasonHtml += `<div style="font-size:10px; color:var(--primary); margin-top:4px;">🎊 ${evalDay.holidayName}</div>`;
         if (evalDay.isSpoofed)
           reasonHtml += `<div style="font-size:10px; color:var(--warn); margin-top:4px;">(Manual Override)</div>`;
 
@@ -2900,12 +2902,10 @@
     tbody.innerHTML = html;
   }
 
-  function renderAnalytics(localCache) {
-    currentStatsMonth = populateMonthSelect(
-      "ikg-stats-month",
-      localCache,
-      currentStatsMonth,
-    );
+ async function renderAnalytics(localCache) {
+            const targetY = currentStatsMonth ? parseInt(currentStatsMonth.split('-')[0], 10) : new Date().getFullYear();
+            try { await ensureHolidaysSecured(targetY); } catch(e) { return; }
+            currentStatsMonth = populateMonthSelect('ikg-stats-month', localCache, currentStatsMonth);
     const dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
 
     const allDates = [
