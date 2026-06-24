@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         [7.96] IKG Attendance Pro (Autopilot & Alarms)
+// @name         [7.97] IKG Attendance Pro (Autopilot & Alarms)
 // @namespace    http://tampermonkey.net/
-// @version      7.96
+// @version      7.97
 // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1502,7 +1502,7 @@
             });
         };
 
-  // 🎯 MASTER MATH FUNCTION & DATA SOURCE OF TRUTH
+ // 🎯 MASTER MATH FUNCTION & DATA SOURCE OF TRUTH
         const evaluateDay = (dateStr, record, note, override, useOverrides) => {
             const isFullPTO = !!(note && note.isPTO);
             const isPartialPTO = !!(note && note.isPartialPTO);
@@ -1510,15 +1510,6 @@
             const ptoType = note ? (note.type || 'PTO') : '';
 
             const isIgnored = useOverrides !== false && override && override.isIgnored;
-
-            if (isIgnored) {
-                return {
-                    isFullPTO: false, isPartialPTO: false, ptoHrs: 0, ptoType: '', isIgnored: true,
-                    actualHrs: 0, effStart: null, effEnd: null, effectiveHrs: 0, targetHrs: 0, flexHrs: 0,
-                    isWorkingDay: false, isPublicHoliday: false, holidayName: '',
-                    status: 'ignored', color: 'var(--text-muted)', chartColor: 'var(--border)', heatmapBg: 'var(--border)', reason: 'Ignored', isSpoofed: false
-                };
-            }
 
             if (isFullPTO) ptoHrs = 9.0;
 
@@ -1544,7 +1535,6 @@
             const [y, m, d] = dateStr.split('-');
             const dObj = new Date(parseInt(y, 10), parseInt(m, 10)-1, parseInt(d, 10));
             
-            // Look up secured English holidays
             const twHolidays = JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${y}`) || '{}');
             const isPublicHoliday = !!twHolidays[dateStr];
             const holidayName = twHolidays[dateStr] || '';
@@ -1570,7 +1560,7 @@
             }
 
             const effectiveHrs = isFullPTO ? targetHrs : (actualHrs + ptoHrs);
-            const flexHrs = isWorkingDay ? (effectiveHrs - targetHrs) : 0; 
+            let flexHrs = isWorkingDay ? (effectiveHrs - targetHrs) : 0; 
 
             let status = 'none'; let color = 'var(--text-muted)'; let chartColor = 'transparent'; let heatmapBg = 'transparent'; let reason = '';
 
@@ -1595,7 +1585,19 @@
                 }
             }
 
-            if ((status === 'pass' || status === 'partial-pto-pass') && actualHrs >= 10.0) {
+            // 🎯 INTERCEPT IGNORED AFTER CALCULATING REAL PUNCHES
+            if (isIgnored) {
+                status = 'ignored';
+                color = 'var(--text-muted)'; // Renders hours in subdued grey
+                chartColor = 'var(--border)';
+                heatmapBg = 'var(--border)';
+                reason = 'Ignored Day';
+                targetHrs = 0; 
+                flexHrs = 0;   
+                isWorkingDay = false; // Disqualifies it from monthly sum loops!
+            }
+
+            if ((status === 'pass' || status === 'partial-pto-pass') && actualHrs >= 10.0 && !isIgnored) {
                 chartColor = '#059669'; heatmapBg = status === 'pass' ? '#059669' : 'linear-gradient(135deg, #059669 50%, #8B5CF6 50%)';
             }
 
@@ -2608,62 +2610,44 @@ async function renderCalendar() {
       if (isFetchingData && dateStr <= todayStr && record === undefined && !evalDay.isFullPTO) {
                 cellContent = `<div class="ikg-cell-data"><div class="skeleton skel-hrs"></div><div class="skeleton skel-box"></div></div>`;
             }
-            else if (evalDay.isIgnored) {
-                cellContent = `<div style="margin:auto; border:1px dashed var(--text-muted); color:var(--text-muted); padding:4px 8px; border-radius:6px; font-size:11px; font-weight:600; text-align:center;">⚠️ Ignored</div>`;
-            }
+            // (Notice the old 'evalDay.isIgnored' block that was here has been deleted!)
             else if (evalDay.status === 'holiday') {
-                // 🎯 Render Taiwan Public Holidays gracefully
                 cellContent = `<div class="pto-pill" style="background:rgba(59,130,246,0.1); color:var(--primary); border-color:var(--primary);">🎊 ${evalDay.holidayName}</div>`;
             }
             else if (evalDay.status === 'omitted') {
-                // 🎯 Show user that the day is neutralized because they didn't punch
                 cellContent = `<div style="margin:auto; color:var(--text-muted); font-size:11px; font-weight:600; text-align:center; opacity: 0.5;">No Punches</div>`;
             }
             else if (evalDay.isFullPTO) {
                 cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
             }
             else if (evalDay.effStart || evalDay.effEnd || evalDay.isSpoofed || evalDay.actualHrs > 0) {
-        let pendingIcon = "";
-        let timesClass = "";
+                let pendingIcon = "";
+                let timesClass = "";
 
-        const inTimeDisplay = evalDay.effStart
-          ? formatTime(evalDay.effStart)
-          : formatTime(record.startTime);
-        let outTimeDisplay = evalDay.effEnd
-          ? formatTime(evalDay.effEnd)
-          : record.endTime
-            ? formatTime(record.endTime)
-            : "--:--";
+                const inTimeDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : formatTime(record.startTime);
+                let outTimeDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : record.endTime ? formatTime(record.endTime) : "--:--";
 
-        if (evalDay.status === "pending") {
-          timesClass = "pending";
-          pendingIcon =
-            ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>';
-          outTimeDisplay = "Pending";
-        }
+                if (evalDay.status === "pending") {
+                    timesClass = "pending";
+                    pendingIcon = ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>';
+                    outTimeDisplay = "Pending";
+                }
 
-        const shortPtoName = evalDay.ptoType
-          ? evalDay.ptoType.split(" - ")[0]
-          : "PTO";
-        if (evalDay.isPartialPTO) {
-          partialPill = `<div class="ikg-fast-tt no-dot" data-title="${evalDay.ptoType}" style="font-size:9px; background:var(--pto); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70px; box-shadow: 0 2px 4px rgba(139,92,246,0.3); cursor:help; margin-right:auto;">+${evalDay.ptoHrs}h ${shortPtoName}</div>`;
-        }
+                const shortPtoName = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
+                if (evalDay.isPartialPTO) {
+                    partialPill = `<div class="ikg-fast-tt no-dot" data-title="${evalDay.ptoType}" style="font-size:9px; background:var(--pto); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70px; box-shadow: 0 2px 4px rgba(139,92,246,0.3); cursor:help; margin-right:auto;">+${evalDay.ptoHrs}h ${shortPtoName}</div>`;
+                }
 
-        const flexTooltip =
-          evalDay.flexHrs >= 0
-            ? `+${formatDurFromDec(evalDay.flexHrs, false)}`
-            : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
-        let activeShiftStyles =
-          isToday &&
-          evalDay.status !== "pass" &&
-          evalDay.status !== "partial-pto-pass"
-            ? "background:var(--primary-glow); border:1px solid var(--border);"
-            : "";
+                // 🎯 INJECT THE INLINE BADGE
+                const ignoredBadge = evalDay.isIgnored ? `<span class="ikg-fast-tt" data-title="Omitted from System Totals" style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⚠️ IGNORED</span>` : '';
 
-        cellContent = `
+                const flexTooltip = evalDay.flexHrs >= 0 ? `+${formatDurFromDec(evalDay.flexHrs, false)}` : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
+                let activeShiftStyles = isToday && evalDay.status !== "pass" && evalDay.status !== "partial-pto-pass" ? "background:var(--primary-glow); border:1px solid var(--border);" : "";
+
+                cellContent = `
                     <div class="ikg-cell-data">
                         <div class="ikg-total-hrs ikg-fast-tt" data-title="${flexTooltip}" style="color:${evalDay.color}; width:fit-content; cursor:help; margin-bottom:4px; min-height:22px; display:flex; align-items:center;">
-                            ${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"} ${pendingIcon}
+                            ${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"} ${pendingIcon} ${ignoredBadge}
                         </div>
                         <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
                             <div>IN <span>${inTimeDisplay}</span></div>
@@ -2671,7 +2655,7 @@ async function renderCalendar() {
                         </div>
                     </div>
                 `;
-      }
+            }
 
       grid.innerHTML += `
                 <div class="ikg-day ${isToday ? "today" : ""}" data-date="${dateStr}">
