@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         [7.97] IKG Attendance Pro (Autopilot & Alarms)
+// @name         [7.98] IKG Attendance Pro (Autopilot & Alarms)
 // @namespace    http://tampermonkey.net/
-// @version      7.97
+// @version      7.98
 // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1661,6 +1661,10 @@
       const yBase = padTop + chartH;
 
       if (item.val > 0) {
+        ctx.save();
+        // 🎯 GHOST RENDERING: Drop opacity to 30% if marked as ignored
+        if (item.isIgnored) ctx.globalAlpha = 0.3; 
+        
         ctx.fillStyle = item.color;
         ctx.beginPath();
         if (ctx.roundRect)
@@ -1673,6 +1677,7 @@
           );
         else ctx.rect(x - barW / 2, yBase - actualBarH, barW, actualBarH);
         ctx.fill();
+        ctx.restore();
       }
 
       if (item.pto > 0) {
@@ -1693,7 +1698,7 @@
 
       const totalVal = item.val + item.pto;
       if (totalVal > 0) {
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.fillStyle = item.isIgnored ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.9)";
         ctx.font = "bold 10px sans-serif";
         ctx.textBaseline = "bottom";
         ctx.fillText(totalVal.toFixed(1), x, yBase - actualBarH - ptoBarH - 4);
@@ -1736,36 +1741,38 @@
       const index = Math.floor(chartX / spacing);
       if (index >= 0 && index < dataItems.length) {
         const item = dataItems[index];
-        const cleanPtoLabel = item.ptoType
-          ? item.ptoType.split(" - ")[0]
-          : "PTO";
+        const cleanPtoLabel = item.ptoType ? item.ptoType.split(" - ")[0] : "PTO";
 
         let text = `<div style="color:var(--text-muted); font-size:11px; margin-bottom:8px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase;">${labels[index]}</div>`;
 
+        if (item.isIgnored) {
+          text += `<div style="color:var(--warn); font-size:9px; font-weight:700; margin-bottom:8px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); padding:2px 6px; border-radius:4px; width:fit-content;">⚠️ IGNORED PUNCH</div>`;
+        }
+
         const totalHrs = item.val + item.pto;
-        const totalColor = totalHrs >= 9.0 ? "var(--success)" : "var(--danger)";
+        const totalColor = item.isIgnored ? "var(--text-muted)" : (totalHrs >= 9.0 ? "var(--success)" : "var(--danger)");
 
         text += `<div style="display: grid; grid-template-columns: 20px 1fr; gap: 4px 8px; align-items: center; font-size: 13px;">`;
 
         if (item.val > 0) {
           text += `
-                        <div style="text-align:center; font-size:14px;" title="Worked">⏱️</div>
-                        <div style="color:var(--text-main);"><b>${item.val.toFixed(2)}h</b></div>
-                    `;
+            <div style="text-align:center; font-size:14px;" title="Worked">⏱️</div>
+            <div style="color:${item.isIgnored ? 'var(--text-muted)' : 'var(--text-main)'};"><b>${item.val.toFixed(2)}h</b></div>
+          `;
         }
         if (item.pto > 0 && !item.isFullPTO) {
           text += `
-                        <div style="text-align:center; font-size:14px;" title="PTO">🏝️</div>
-                        <div style="color:var(--pto);"><b>${item.pto.toFixed(2)}h</b> <span style="font-size:10px; opacity:0.75;">(${cleanPtoLabel})</span></div>
-                    `;
+            <div style="text-align:center; font-size:14px;" title="PTO">🏝️</div>
+            <div style="color:var(--pto);"><b>${item.pto.toFixed(2)}h</b> <span style="font-size:10px; opacity:0.75;">(${cleanPtoLabel})</span></div>
+          `;
         }
 
         if (totalHrs > 0) {
           text += `<div style="grid-column: 1 / -1; margin: 4px 0; border-top: 1px dashed var(--border);"></div>`;
           text += `
-                        <div style="text-align:center; font-size:14px;" title="Total">📊</div>
-                        <div style="color:${totalColor}; font-weight:700;">${totalHrs.toFixed(2)}h</div>
-                    `;
+            <div style="text-align:center; font-size:14px;" title="Total">📊</div>
+            <div style="color:${totalColor}; font-weight:700;">${totalHrs.toFixed(2)}h</div>
+          `;
         } else if (item.isFullPTO) {
           text += `<div style="grid-column: 1 / -1; color:var(--pto); font-weight:700; margin-top:4px;">🏝️ Full Day PTO</div>`;
         }
@@ -3194,15 +3201,11 @@ async function renderCalendar() {
       heatmapWrapper.style.display = "none";
       const dataItems = [];
       const labels = [];
+      
       filteredDates.forEach((dStr) => {
         const d = new Date(dStr);
         const isDense = filteredDates.length > 60;
-        labels.push(
-          isDense
-            ? `${d.getMonth() + 1}/${d.getDate()}`
-            : `${d.toLocaleString("default", { month: "short" })} ${d.getDate()}`,
-        );
-
+        
         const evalDay = evaluateDay(
           dStr,
           localCache[dStr],
@@ -3211,17 +3214,24 @@ async function renderCalendar() {
           settings.useManualOverrides,
         );
 
-        if (!evalDay.isIgnored) {
-          dataItems.push({
-            dateStr: dStr,
-            val: evalDay.actualHrs,
-            pto: evalDay.ptoHrs,
-            color: evalDay.chartColor,
-            isSpoofed: evalDay.isSpoofed,
-            ptoType: evalDay.ptoType,
-          });
-        }
+        // 🎯 STRICT 1:1 PUSH: Labels and Data must stay permanently locked to the same index
+        labels.push(
+          isDense
+            ? `${d.getMonth() + 1}/${d.getDate()}`
+            : `${d.toLocaleString("default", { month: "short" })} ${d.getDate()}`,
+        );
+
+        dataItems.push({
+          dateStr: dStr,
+          val: evalDay.actualHrs,
+          pto: evalDay.ptoHrs,
+          color: evalDay.chartColor, // compiles to dark grey var(--border) if ignored
+          isSpoofed: evalDay.isSpoofed,
+          isIgnored: evalDay.isIgnored, // 🎯 Pass ignored flag to the canvas renderer
+          ptoType: evalDay.ptoType,
+        });
       });
+
       drawNativeChart("ikg-main-chart", labels, dataItems);
     }
   }
