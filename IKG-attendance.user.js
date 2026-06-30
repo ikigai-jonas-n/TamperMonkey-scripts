@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         [7.101] IKG Attendance Pro (Autopilot & Alarms)
+// @name         [7.102] IKG Attendance Pro (Autopilot & Alarms)
 // @namespace    http://tampermonkey.net/
-// @version      7.101
+// @version      7.102
 // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -2150,9 +2150,9 @@
     let container = document.getElementById("ikg-active-shift-container");
     if (!container) return;
 
-    const record = localCache[todayStr];
-    if (record && record.startTime) {
-      const startMs = record.startTime;
+    // 🎯 FIX: Rely on the evaluated start time (which supports Overrides) instead of the raw API record
+    if (todaysEval.effStart && !todaysEval.isIgnored) {
+      const startMs = todaysEval.effStart;
       const minCheckoutMs = baseShiftEndMs - todaysEval.ptoHrs * 3600000;
 
       if (applyFlex && realMonthBalance > 0) {
@@ -2176,15 +2176,10 @@
         todaysFlexGoal = (targetMs - startMs) / 3600000;
       }
 
-      const isCompleted = record.workHours
-        ? parseFloat(record.workHours) >= todaysFlexGoal
-        : false;
-      const gcalStart = new Date(targetMs)
-        .toISOString()
-        .replace(/[-:]|\.\d{3}/g, "");
-      const gcalEnd = new Date(targetMs + 15 * 60000)
-        .toISOString()
-        .replace(/[-:]|\.\d{3}/g, "");
+      // 🎯 FIX: Use the evaluated actual hours so overrides can trigger completion
+      const isCompleted = todaysEval.actualHrs >= todaysFlexGoal && todaysEval.actualHrs > 0;
+      const gcalStart = new Date(targetMs).toISOString().replace(/[-:]|\.\d{3}/g, "");
+      const gcalEnd = new Date(targetMs + 15 * 60000).toISOString().replace(/[-:]|\.\d{3}/g, "");
 
       if (isCompleted) {
         container.innerHTML = `<div id="ikg-active-shift" style="border-color: var(--success); background: var(--success-bg); padding: 16px; border-radius: 12px;"><div class="ikg-active-header" style="color: var(--success); margin-bottom: 4px;">🎉 Shift Completed</div><div style="font-size:12px; color: var(--text-main);">Goal reached! Time to disconnect.</div></div>`;
@@ -2230,6 +2225,8 @@
 
         const checkboxDisabled = realMonthBalance <= 0 ? "disabled" : "";
         const checkboxOpacity = realMonthBalance <= 0 ? "0.5" : "1";
+        
+        const spoofBadge = todaysEval.isSpoofed ? `<span class="ikg-fast-tt" data-title="Using Manual Override time" style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:8px; font-weight:700; vertical-align:middle; cursor:help;">⚠️ OVERRIDE</span>` : '';
 
         container.innerHTML = `
                     <div id="ikg-active-shift" style="background: var(--bg-base); border: 1px solid var(--border); border-radius: 12px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
@@ -2245,7 +2242,7 @@
 
                         <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; font-size: 13px; margin-bottom: 12px; color: var(--text-main); align-items: center;">
                             <div style="color: var(--text-muted); font-weight: 500;">In:</div>
-                            <div style="display: flex; align-items: center; min-width: 0;"><b style="font-family: monospace; font-size: 15px; letter-spacing: 0.5px;">${formatTime(startMs)}</b></div>
+                            <div style="display: flex; align-items: center; min-width: 0;"><b style="font-family: monospace; font-size: 15px; letter-spacing: 0.5px;">${formatTime(startMs)}</b>${spoofBadge}</div>
 
                             <div class="ikg-fast-tt no-dot" data-title="Note: Calendar shows system checkout time (lags 1 day). Trust the Goal Out above." style="color: var(--text-muted); font-weight: 500; display: flex; align-items: center; gap: 6px; width: fit-content; border-bottom: 1px dotted var(--text-muted);">
                                 Goal Out <span style="display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; background:var(--border); color:var(--text-muted); border-radius:4px; font-size:10px; font-weight:bold; font-family:serif;">i</span>:
@@ -2718,10 +2715,10 @@ async function renderCalendar() {
     }
 
     document.getElementById("side-val-days").innerHTML = daysHtml;
-    document.getElementById("side-val-actual").innerText = formatDurFromDec(
-      monthTotalHours,
-      false,
-    );
+    document.getElementById("side-val-actual").innerText = formatDurFromDec(monthTotalHours, false);
+    
+    // 🎯 FIX: Restored the missing line that paints Target Hours to the UI!
+    document.getElementById("side-val-target").innerText = formatDurFromDec(monthTargetHours, false);
 
     const balanceEl = document.getElementById("side-val-net");
 
