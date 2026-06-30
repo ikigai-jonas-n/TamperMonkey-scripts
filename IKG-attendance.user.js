@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         [7.102] IKG Attendance Pro (Autopilot & Alarms)
+// @name         [7.103] IKG Attendance Pro (Autopilot & Alarms)
 // @namespace    http://tampermonkey.net/
-// @version      7.102
+// @version      7.103
 // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1414,30 +1414,6 @@
     }
   });
 
-  // 🎯 NEW: Taiwan Public Holiday Fetcher (Nager.Date API)
-    const fetchTWHolidays = async (year) => {
-        const key = `IKG_TW_HOLIDAYS_${year}`;
-        if (localStorage.getItem(key)) return;
-        try {
-            const res = await window.fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/TW`);
-            if (res.ok) {
-                const data = await res.json();
-                const dateMap = {};
-                data.forEach(h => { dateMap[h.date] = h.localName || h.name; });
-                localStorage.setItem(key, JSON.stringify(dateMap));
-                
-                // Trigger a re-render once loaded
-                const cache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
-                if (document.getElementById('ikg-cal-grid')) {
-                    renderCalendar();
-                    if (typeof renderAnalytics === 'function') renderAnalytics(cache);
-                    if (typeof renderAudit === 'function') renderAudit(cache);
-                }
-            }
-        } catch (e) { IkgLog.warn("Failed to fetch TW holidays", e); }
-    };
-    fetchTWHolidays(new Date().getFullYear());
-
     // 🎯 MASTER BLOCKING HOLIDAY LOCK (Strict YYYY-MM-DD Normalizer, Native Scraped Names)
         const ensureHolidaysSecured = (year) => {
             const key = `IKG_HOLIDAYS_${year}`;
@@ -1525,7 +1501,7 @@
         }
     };
 
-    // 🎯 DDD DOMAIN MODEL: Evaluates a Day Entity reliably regardless of API quirks
+    // 🎯 DDD DOMAIN MODEL: Pure, Strict, and Clean
     const evaluateDay = (ctx) => {
         const { dateStr, record, note, override, settings, holidays } = ctx;
         
@@ -1538,8 +1514,6 @@
         if (isFullPTO) ptoHrs = 9.0; // Standardize math
 
         const isIgnored = settings.useManualOverrides !== false && override && override.isIgnored;
-
-        // 🎯 FIX: Removed the early return here. We MUST parse punches first so the Calendar can draw them.
 
         let actualHrs = (record && record.workHours) ? parseFloat(record.workHours) : 0;
         let effStart = record ? record.startTime : null;
@@ -1595,6 +1569,9 @@
         if (hasNoPunches && ptoHrs === 0) {
             if (isPublicHoliday) {
                 status = 'holiday'; color = 'var(--primary)'; reason = holidayName;
+            } else if (isWeekend) {
+                // 🎯 NEW: Safely flag unworked weekends so the UI can hide them
+                status = 'weekend-empty'; color = 'transparent'; reason = '';
             } else {
                 status = 'omitted'; color = 'var(--text-muted)'; reason = 'No Punches';
             }
@@ -1613,16 +1590,16 @@
             }
         }
 
-        // 🎯 FIX: Intercept Ignored AFTER calculating the real punches so the Calendar still has visual data to draw
+        // Intercept Ignored AFTER calculating the real punches so the Calendar still has visual data to draw
         if (isIgnored) {
             status = 'ignored';
-            color = 'var(--text-muted)'; // Renders hours in subdued grey
+            color = 'var(--text-muted)'; 
             chartColor = 'var(--border)';
             heatmapBg = 'var(--border)';
             reason = 'Ignored Day';
             targetHrs = 0; 
             flexHrs = 0;   
-            isWorkingDay = false; // Disqualifies it from monthly sum loops
+            isWorkingDay = false; 
         }
 
         if ((status === 'pass' || status === 'partial-pto-pass') && actualHrs >= 10.0 && !isIgnored) {
@@ -2137,13 +2114,9 @@
     baseShiftEndD.setHours(shiftEndHour, shiftEndMin, 0, 0);
     const baseShiftEndMs = baseShiftEndD.getTime();
 
-    const todaysEval = evaluateDay(
-      todayStr,
-      localCache[todayStr],
-      dayNotes[todayStr],
-      overrides[todayStr],
-      appSettings.useManualOverrides,
-    );
+    // 🎯 CLEAN DDD: Use the snapshot we already built at the top of updateActiveShiftUI!
+    const todaysEval = evaluateDay(IKG_DataStore.getDayContext(todayStr, snapshot));
+    
     let todaysFlexGoal = safeFloat(9.0 - todaysEval.ptoHrs);
     let appliedFlexToday = 0;
 
@@ -2637,9 +2610,12 @@ async function renderCalendar() {
       if (isFetchingData && dateStr <= todayStr && record === undefined && !evalDay.isFullPTO) {
                 cellContent = `<div class="ikg-cell-data"><div class="skeleton skel-hrs"></div><div class="skeleton skel-box"></div></div>`;
             }
-            // (Notice the old 'evalDay.isIgnored' block that was here has been deleted!)
             else if (evalDay.status === 'holiday') {
                 cellContent = `<div class="pto-pill" style="background:rgba(59,130,246,0.1); color:var(--primary); border-color:var(--primary);">🎊 ${evalDay.holidayName}</div>`;
+            }
+            else if (evalDay.status === 'weekend-empty') {
+                // 🎯 Render absolutely nothing for normal weekends!
+                cellContent = ``; 
             }
             else if (evalDay.status === 'omitted') {
                 // 🎯 If the day has no punches but has a synced Deel note (e.g. Unpaid Leave, Sick), render the pill!
@@ -2873,16 +2849,16 @@ async function renderCalendar() {
     if (!tbody) return;
 
     let html = "";
+    
+    // 🎯 CLEAN DDD: Build snapshot once for the entire audit table
+    const snapshot = IKG_DataStore.buildSnapshot();
+
     filteredDates.forEach((dateStr) => {
-      const record = localCache[dateStr];
+      const record = snapshot.cache[dateStr];
       if (record && record.startTime && record.endTime) {
-        const evalDay = evaluateDay(
-          dateStr,
-          record,
-          dayNotes[dateStr],
-          overrides[dateStr],
-          settings.useManualOverrides,
-        );
+        
+        // Use the DataStore Context
+        const evalDay = evaluateDay(IKG_DataStore.getDayContext(dateStr, snapshot));
 
         const isToday = dateStr === todayStr;
         const exactHrs = evalDay.actualHrs;
@@ -3174,13 +3150,8 @@ async function renderCalendar() {
             }
             const rec = localCache[dStr];
             const note = dayNotes[dStr];
-            const evalDay = evaluateDay(
-              dStr,
-              rec,
-              note,
-              overrides[dStr],
-              settings.useManualOverrides,
-            );
+            // 🎯 CLEAN DDD: Use the DataStore snapshot
+            const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, snapshot));
 
             const shortPto = evalDay.ptoType
               ? evalDay.ptoType.split(" - ")[0]
@@ -3242,13 +3213,8 @@ async function renderCalendar() {
         const d = new Date(dStr);
         const isDense = filteredDates.length > 60;
         
-        const evalDay = evaluateDay(
-          dStr,
-          localCache[dStr],
-          dayNotes[dStr],
-          overrides[dStr],
-          settings.useManualOverrides,
-        );
+        // 🎯 CLEAN DDD: Use the DataStore snapshot
+        const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, snapshot));
 
         // 🎯 STRICT 1:1 PUSH: Labels and Data must stay permanently locked to the same index
         labels.push(
@@ -3978,30 +3944,16 @@ async function renderCalendar() {
             return;
           }
 
-          const localCache = JSON.parse(
-            localStorage.getItem(CACHE_KEY) || "{}",
-          );
-          const notes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
-          const overrides = JSON.parse(
-            localStorage.getItem(OVERRIDES_KEY) || "{}",
-          );
-          const settings = getSettings();
+          // 🎯 CLEAN DDD: Fetch snapshot and evaluate safely!
+          const snapshot = IKG_DataStore.buildSnapshot();
+          const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, snapshot));
 
-          const evalDay = evaluateDay(
-            dStr,
-            localCache[dStr],
-            notes[dStr],
-            overrides[dStr],
-            settings.useManualOverrides,
-          );
           if (evalDay.status === "none") {
             if (gridTooltip) gridTooltip.style.opacity = "0";
             return;
           }
 
-          const cleanPtoLabel = evalDay.ptoType
-            ? evalDay.ptoType.split(" - ")[0]
-            : "PTO";
+          const cleanPtoLabel = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
           const dObj = new Date(dStr);
           const monthNames = [
             "JAN",
