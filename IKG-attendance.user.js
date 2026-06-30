@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         [7.100] IKG Attendance Pro (Autopilot & Alarms)
+// @name         [7.101] IKG Attendance Pro (Autopilot & Alarms)
 // @namespace    http://tampermonkey.net/
-// @version      7.100
+// @version      7.101
 // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1532,21 +1532,14 @@
         let ptoHrs = note ? (parseFloat(note.deductedHours) || 0) : 0;
         const ptoType = note ? (note.type || 'PTO') : '';
 
-        // 🎯 FIX: Intelligently detect Full vs Partial PTO based on actual hours, fixing Personal Leave!
+        // Intelligently detect Full vs Partial PTO based on actual hours
         const isFullPTO = !!(note && note.isPTO) || ptoHrs >= 8.0;
         const isPartialPTO = !isFullPTO && ptoHrs > 0;
         if (isFullPTO) ptoHrs = 9.0; // Standardize math
 
         const isIgnored = settings.useManualOverrides !== false && override && override.isIgnored;
 
-        if (isIgnored) {
-            return {
-                isFullPTO: false, isPartialPTO: false, ptoHrs: 0, ptoType: '', isIgnored: true,
-                actualHrs: 0, effStart: null, effEnd: null, effectiveHrs: 0, targetHrs: 0, flexHrs: 0,
-                isWorkingDay: false, isPublicHoliday: false, holidayName: '',
-                status: 'ignored', color: 'var(--text-muted)', chartColor: 'var(--border)', heatmapBg: 'var(--border)', reason: 'Ignored (Pending)', isSpoofed: false
-            };
-        }
+        // 🎯 FIX: Removed the early return here. We MUST parse punches first so the Calendar can draw them.
 
         let actualHrs = (record && record.workHours) ? parseFloat(record.workHours) : 0;
         let effStart = record ? record.startTime : null;
@@ -1581,7 +1574,7 @@
 
         const hasNoPunches = !effStart && !effEnd && actualHrs === 0;
 
-        // 🎯 FIX: A day is only "Omitted" if you have NO punches AND NO PTO.
+        // A day is only "Omitted" if you have NO punches AND NO PTO.
         if (hasNoPunches && ptoHrs === 0) {
             targetHrs = 0;
             isWorkingDay = false; 
@@ -1618,6 +1611,18 @@
                 if (actualHrs >= targetHrs) { status = 'pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = '#10B981'; reason = 'Goal met'; } 
                 else { status = 'fail'; color = 'var(--danger)'; chartColor = '#EF4444'; heatmapBg = '#EF4444'; reason = `Short`; }
             }
+        }
+
+        // 🎯 FIX: Intercept Ignored AFTER calculating the real punches so the Calendar still has visual data to draw
+        if (isIgnored) {
+            status = 'ignored';
+            color = 'var(--text-muted)'; // Renders hours in subdued grey
+            chartColor = 'var(--border)';
+            heatmapBg = 'var(--border)';
+            reason = 'Ignored Day';
+            targetHrs = 0; 
+            flexHrs = 0;   
+            isWorkingDay = false; // Disqualifies it from monthly sum loops
         }
 
         if ((status === 'pass' || status === 'partial-pto-pass') && actualHrs >= 10.0 && !isIgnored) {
