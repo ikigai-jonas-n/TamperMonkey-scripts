@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         [7.98] IKG Attendance Pro (Autopilot & Alarms)
+// @name         [7.99] IKG Attendance Pro (Autopilot & Alarms)
 // @namespace    http://tampermonkey.net/
-// @version      7.98
+// @version      7.99
 // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -2588,6 +2588,8 @@ async function renderCalendar() {
     let monthWorkedDays = 0;
     let monthTotalHours = 0;
     let monthTargetHours = 0;
+    let monthFullPTODays = 0;
+    let monthPartialPTODays = 0;
 
     const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}");
     const settings = getSettings();
@@ -2607,11 +2609,14 @@ async function renderCalendar() {
       let cellContent = "";
       let partialPill = "";
 
-      // 🎯 BLINDLY TRUST evaluateDay
+      // 🎯 BLINDLY TRUST evaluateDay & TRACK PTO SPLITS
       if (evalDay.isWorkingDay && !isToday) {
         monthWorkedDays++;
         monthTotalHours = safeFloat(monthTotalHours + evalDay.effectiveHrs);
         monthTargetHours = safeFloat(monthTargetHours + evalDay.targetHrs);
+        
+        if (evalDay.isFullPTO) monthFullPTODays++;
+        if (evalDay.isPartialPTO) monthPartialPTODays++;
       }
 
       if (isFetchingData && dateStr <= todayStr && record === undefined && !evalDay.isFullPTO) {
@@ -2622,7 +2627,12 @@ async function renderCalendar() {
                 cellContent = `<div class="pto-pill" style="background:rgba(59,130,246,0.1); color:var(--primary); border-color:var(--primary);">🎊 ${evalDay.holidayName}</div>`;
             }
             else if (evalDay.status === 'omitted') {
-                cellContent = `<div style="margin:auto; color:var(--text-muted); font-size:11px; font-weight:600; text-align:center; opacity: 0.5;">No Punches</div>`;
+                // 🎯 If the day has no punches but has a synced Deel note (e.g. Unpaid Leave, Sick), render the pill!
+                if (evalDay.ptoType) {
+                    cellContent = `<div class="pto-pill" style="background:rgba(245, 158, 11, 0.1); color:var(--warn); border-color:var(--warn);">🌴 ${evalDay.ptoType}</div>`;
+                } else {
+                    cellContent = `<div style="margin:auto; color:var(--text-muted); font-size:11px; font-weight:600; text-align:center; opacity: 0.5;">No Punches</div>`;
+                }
             }
             else if (evalDay.isFullPTO) {
                 cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
@@ -2681,13 +2691,17 @@ async function renderCalendar() {
     // 🎯 BLINDLY TRUST evaluateDay
     const netBalance = safeFloat(monthTotalHours - monthTargetHours);
 
-    document.getElementById("side-val-days").innerText = monthWorkedDays;
+    let daysHtml = monthWorkedDays;
+    if (monthFullPTODays > 0 || monthPartialPTODays > 0) {
+        let ptoTxt = [];
+        if (monthFullPTODays > 0) ptoTxt.push(`${monthFullPTODays} Full`);
+        if (monthPartialPTODays > 0) ptoTxt.push(`${monthPartialPTODays} Part`);
+        daysHtml = `${monthWorkedDays} <span class="ikg-fast-tt tt-right no-dot" data-title="PTO is counted towards effective working days." style="font-size:11px; color:var(--pto); font-weight:700; margin-left:6px; cursor:help;">(${ptoTxt.join(', ')} PTO)</span>`;
+    }
+
+    document.getElementById("side-val-days").innerHTML = daysHtml;
     document.getElementById("side-val-actual").innerText = formatDurFromDec(
       monthTotalHours,
-      false,
-    );
-    document.getElementById("side-val-target").innerText = formatDurFromDec(
-      monthTargetHours,
       false,
     );
 
@@ -2953,6 +2967,8 @@ async function renderCalendar() {
     let filterTotalDays = 0;
     let filterTotalHours = 0;
     let filterTargetHours = 0;
+    let filterFullPTODays = 0;
+    let filterPartialPTODays = 0;
 
     filteredDates.forEach((dateStr) => {
       const record = localCache[dateStr];
@@ -2973,6 +2989,9 @@ async function renderCalendar() {
         filterTotalDays++;
         filterTotalHours = safeFloat(filterTotalHours + evalDay.effectiveHrs);
         filterTargetHours = safeFloat(filterTargetHours + evalDay.targetHrs);
+        
+        if (evalDay.isFullPTO) filterFullPTODays++;
+        if (evalDay.isPartialPTO) filterPartialPTODays++;
       }
 
       if (!evalDay.isFullPTO && !evalDay.isIgnored && hrs > 0) {
@@ -3079,7 +3098,15 @@ async function renderCalendar() {
     if (summaryTitle)
       summaryTitle.innerText = titleMap[currentStatsRange] || "System Stats";
 
-    document.getElementById("all-val-days").innerText = filterTotalDays;
+    let filterDaysHtml = filterTotalDays;
+    if (filterFullPTODays > 0 || filterPartialPTODays > 0) {
+        let ptoTxt = [];
+        if (filterFullPTODays > 0) ptoTxt.push(`${filterFullPTODays} Full`);
+        if (filterPartialPTODays > 0) ptoTxt.push(`${filterPartialPTODays} Part`);
+        filterDaysHtml = `${filterTotalDays} <span class="ikg-fast-tt tt-right no-dot" data-title="PTO is counted towards effective working days." style="font-size:11px; color:var(--pto); font-weight:700; margin-left:6px; cursor:help;">(${ptoTxt.join(', ')} PTO)</span>`;
+    }
+
+    document.getElementById("all-val-days").innerHTML = filterDaysHtml;
     document.getElementById("all-val-hours").innerText = formatDurFromDec(
       filterTotalHours,
       false,
