@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         [7.103] IKG Attendance Pro (Autopilot & Alarms)
+// @name         [7.104] IKG Attendance Pro (Autopilot & Alarms)
 // @namespace    http://tampermonkey.net/
-// @version      7.103
+// @version      7.104
 // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1123,8 +1123,10 @@
         "IKG_DEEL_TOKEN",
         function (name, old_value, new_value, remote) {
           if (new_value) {
-            IkgLog.info("Token caught from Deel tab!");
+            IkgLog.info("Token caught from Deel tab! Killing background tab...");
             GM_removeValueChangeListener(listenerId);
+            // 🎯 FIX: Actively assassinate the background tab from the parent
+            try { deelTab.close(); } catch (e) {} 
             resolve(new_value);
           }
         },
@@ -1152,7 +1154,7 @@
           } catch (e) {}
           resolve(null);
         }
-      }, 60000); // Increased timeout to 60 seconds
+      }, 60000); // 60 seconds timeout
     });
   };
 
