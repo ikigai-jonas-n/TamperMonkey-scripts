@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         [19.22] EnvDashboard Matrix History & Overview (Ultimate Live Engine)
+// @name         [19.23] EnvDashboard Matrix History & Overview (Ultimate Live Engine)
 // @namespace    http://tampermonkey.net/
-// @version      19.22
+// @version      19.23
 // @description  Pipeline Tooltips, Dashboard Timeline FAB, Auto-Highlight Notifications, Smart Toast Stacking
 // @author       JonasNg
 // @match        https://lab.iki-utl.cc/dashboard/env-dashboard/
@@ -3514,13 +3514,14 @@
 
     const pinnedRepos = getPinnedRepos();
     const rows = document.querySelectorAll("tbody tr");
-    const rowMap = {};
+    const rowMap = {}; // Changed: Will now hold arrays of rows to fix 1-to-Many mapping
 
-    rows.forEach((row) => {
+    rows.forEach((row, index) => {
       const pNode = row.querySelector("th p");
       if (pNode) {
         const repoName = pNode.textContent.replace(/[()]/g, "").trim();
-        rowMap[repoName] = row;
+        if (!rowMap[repoName]) rowMap[repoName] = [];
+        rowMap[repoName].push({ row, id: index }); // Save the row and a unique ID
 
         const isToggled =
           settings.repoToggles[repoName] !== undefined
@@ -3552,27 +3553,35 @@
             : pinnedRepos.includes(rNameClean);
         if (!isToggled) return;
 
-        const row = rowMap[rNameClean];
-        if (!row) return;
+        const targets = rowMap[rNameClean];
+        if (!targets) return; // Skip if no rows match
 
-        detail.regions.forEach((region) => {
-          const colName = getGridColumnName(wf.environment, region);
-          if (!colName) return;
-          const colIndex = headers.findIndex(
-            (h) => h && h.toUpperCase() === colName,
-          );
-          if (colIndex === -1) return;
+        // Loop through ALL matching rows for this repo
+        targets.forEach(({ row, id }) => {
+          detail.regions.forEach((region) => {
+            const colName = getGridColumnName(wf.environment, region);
+            if (!colName) return;
+            const colIndex = headers.findIndex(
+              (h) => h && h.toUpperCase() === colName,
+            );
+            if (colIndex === -1) return;
 
-          const key = `${rNameClean}||${colIndex}`;
-          if (!renderQueue[key])
-            renderQueue[key] = { td: row.children[colIndex], items: [] };
-          renderQueue[key].items.push({
-            ...detail,
-            context_repo: repoObj.name,
-            context_version: repoObj.version,
-            id: wf.id,
-            created_at: wf.created_at,
-            status: wf.status,
+            // Include unique row ID in the render queue key
+            const key = `${rNameClean}||${colIndex}||${id}`;
+            if (!renderQueue[key])
+              renderQueue[key] = { td: row.children[colIndex], items: [] };
+              
+            // Prevent duplicate injections if a workflow processes multiple times
+            if (!renderQueue[key].items.some(i => i.id === wf.id)) {
+                renderQueue[key].items.push({
+                  ...detail,
+                  context_repo: repoObj.name,
+                  context_version: repoObj.version,
+                  id: wf.id,
+                  created_at: wf.created_at,
+                  status: wf.status,
+                });
+            }
           });
         });
       });
