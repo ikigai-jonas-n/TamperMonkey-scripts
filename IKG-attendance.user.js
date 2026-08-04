@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         [7.104] IKG Attendance Pro (Autopilot & Alarms)
+// @name         [7.106] IKG Attendance Pro (Autopilot & Alarms)
 // @namespace    http://tampermonkey.net/
-// @version      7.104
+// @version      7.106
 // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
 // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -22,6 +22,7 @@
 // @connect      ikg.deel.team
 // @connect      cdn.jsdelivr.net
 // @connect      date.nager.at
+// @connect      script.google.com
 // @run-at       document-start
 // ==/UserScript==
 
@@ -189,6 +190,63 @@
     });
 
     return; // CRITICAL: Stop the rest of the Attendance script from rendering on Deel
+  }
+
+  // ==========================================
+  // 1.6 GAS TOKEN SNATCHER (Runs on script.google.com)
+  // ==========================================
+  if (location.hostname === "script.google.com") {
+    IkgLog.info("GAS Domain Detected. Hunting for Auth Token...");
+
+    const injectScript = document.createElement("script");
+    injectScript.textContent = `
+        (function() {
+            // 1. Intercept Fetch (Google uses fetch for this callback)
+            const originalFetch = window.fetch;
+            window.fetch = async function(...args) {
+                try {
+                    let url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : '');
+                    if (url && url.includes('callback') && url.includes('token=')) {
+                        const urlObj = new URL(url.startsWith('http') ? url : window.location.origin + url);
+                        const gasToken = urlObj.searchParams.get('token');
+                        const callbackUrl = url.split('?')[0]; 
+                        if (gasToken) {
+                            window.postMessage({ type: 'IKG_GAS_FOUND', token: gasToken, callbackUrl: callbackUrl }, '*');
+                        }
+                    }
+                } catch(e) {}
+                return originalFetch.apply(this, args);
+            };
+
+            // 2. Intercept XHR (Fallback)
+            const originalOpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                if (typeof url === 'string' && url.includes('callback') && url.includes('token=')) {
+                    try {
+                        const urlObj = new URL(url.startsWith('http') ? url : window.location.origin + url);
+                        const gasToken = urlObj.searchParams.get('token');
+                        const callbackUrl = url.split('?')[0]; 
+                        if (gasToken) {
+                            window.postMessage({ type: 'IKG_GAS_FOUND', token: gasToken, callbackUrl: callbackUrl }, '*');
+                        }
+                    } catch(e) {}
+                }
+                return originalOpen.call(this, method, url, ...rest);
+            };
+        })();
+    `;
+    document.documentElement.appendChild(injectScript);
+    injectScript.remove();
+
+    window.addEventListener("message", (e) => {
+        if (e.data && e.data.type === 'IKG_GAS_FOUND') {
+            IkgLog.info("✅ FRESH GAS Token secured. Handing back to Attendance App...");
+            GM_setValue("IKG_GAS_DATA", JSON.stringify({ token: e.data.token, callbackUrl: e.data.callbackUrl, exp: Date.now() + 3000000 }));
+            // Close the background tab automatically
+            setTimeout(() => window.close(), 500);
+        }
+    });
+    return; // CRITICAL: Stop the rest of the attendance script from running on the Google script page
   }
 
   // ==========================================
@@ -867,8 +925,6 @@
   // ==========================================
   let isFetchingData = false;
   const API_BASE = "https://9a2igbhvdb.execute-api.us-west-2.amazonaws.com";
-
-  // Apply Unified Versioning
   const CACHE_KEY = `IKG_ATTENDANCE_CACHE_${APP_VER}`;
   const DAY_NOTES_KEY = `IKG_DAY_NOTES_${APP_VER}`;
   const AGG_CACHE_KEY = `IKG_AGGREGATE_CACHE_${APP_VER}`;
@@ -876,166 +932,79 @@
   const STATS_STATE_KEY = `IKG_STATS_STATE_${APP_VER}`;
   const AUDIT_STATE_KEY = `IKG_AUDIT_STATE_${APP_VER}`;
 
-  // --- SMART MIGRATION & GARBAGE COLLECTOR ---
   const cleanUpAndMigrateStorage = () => {
     const pad = (n) => String(n).padStart(2, "0");
     const d = new Date();
     const todayStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     const keysToRemove = [];
 
-    const baseKeys = [
-      "IKG_ATTENDANCE_CACHE",
-      "IKG_DAY_NOTES",
-      "IKG_AGGREGATE_CACHE",
-      "IKG_FULL_SYNC_DONE",
-      "IKG_STATS_STATE",
-      "IKG_AUDIT_STATE",
-    ];
+    const baseKeys = ["IKG_ATTENDANCE_CACHE", "IKG_DAY_NOTES", "IKG_AGGREGATE_CACHE", "IKG_FULL_SYNC_DONE", "IKG_STATS_STATE", "IKG_AUDIT_STATE"];
 
     baseKeys.forEach((base) => {
       const newKey = `${base}_${APP_VER}`;
       if (!localStorage.getItem(newKey)) {
-        let highestOldVal = null;
-        let highestOldVer = -1;
-
+        let highestOldVal = null; let highestOldVer = -1;
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
           const match = key.match(new RegExp(`^${base}_V(\\d+)$`));
           if (match) {
             const ver = parseInt(match[1], 10);
-            if (ver > highestOldVer) {
-              highestOldVer = ver;
-              highestOldVal = localStorage.getItem(key);
-            }
+            if (ver > highestOldVer) { highestOldVer = ver; highestOldVal = localStorage.getItem(key); }
           }
         }
-
-        if (highestOldVal === null && localStorage.getItem(base)) {
-          highestOldVal = localStorage.getItem(base);
-          IkgLog.info(`Rescued unversioned legacy data for: ${base}`);
-        }
-
-        if (highestOldVal !== null) {
-          localStorage.setItem(newKey, highestOldVal);
-          IkgLog.info(`Migrated data to ${newKey}`);
-        }
+        if (highestOldVal === null && localStorage.getItem(base)) highestOldVal = localStorage.getItem(base);
+        if (highestOldVal !== null) localStorage.setItem(newKey, highestOldVal);
       }
     });
 
-    // GARBAGE COLLECTION
-    const dailyPattern =
-      /^(IKG_ALARM_DISMISSED_|IKG_AUTO_ALARM_|IKG_TODAY_FLEX_)(\d{4}-\d{2}-\d{2})$/;
+    const dailyPattern = /^(IKG_ALARM_DISMISSED_|IKG_AUTO_ALARM_|IKG_TODAY_FLEX_)(\d{4}-\d{2}-\d{2})$/;
     const versionPattern = /^IKG_.*_V(\d+)$/;
-
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       const dailyMatch = key.match(dailyPattern);
-      if (dailyMatch) {
-        if (dailyMatch[2] < todayStr) keysToRemove.push(key);
-        continue;
-      }
+      if (dailyMatch) { if (dailyMatch[2] < todayStr) keysToRemove.push(key); continue; }
       const verMatch = key.match(versionPattern);
-      if (verMatch && !key.endsWith(`_${APP_VER}`)) {
-        keysToRemove.push(key);
-      }
+      if (verMatch && !key.endsWith(`_${APP_VER}`)) keysToRemove.push(key);
     }
     keysToRemove.forEach((k) => localStorage.removeItem(k));
   };
   cleanUpAndMigrateStorage();
 
-  let globalTotalDays = 0;
-  let globalTotalHours = 0;
-  let globalFirstDate = "--";
+  let globalTotalDays = 0, globalTotalHours = 0, globalFirstDate = "--";
   const today = new Date();
-  let currentViewYear = today.getFullYear();
-  let currentViewMonth = today.getMonth() + 1;
-  let activeShiftHtml = "";
-  let activeTab = "cal";
-
-  let currentStatsRange = "7D";
-  let currentAuditRange = "ALL";
-  let currentStatsMonth = "";
-  let currentAuditMonth = "";
-  let statsRangeStart = null,
-    statsRangeEnd = null;
-  let auditRangeStart = null,
-    auditRangeEnd = null;
+  let currentViewYear = today.getFullYear(), currentViewMonth = today.getMonth() + 1, activeTab = "cal";
+  let currentStatsRange = "7D", currentAuditRange = "ALL", currentStatsMonth = "", currentAuditMonth = "";
+  let statsRangeStart = null, statsRangeEnd = null, auditRangeStart = null, auditRangeEnd = null;
 
   try {
     const savedStats = JSON.parse(localStorage.getItem(STATS_STATE_KEY));
-    if (savedStats) {
-      currentStatsRange = savedStats.range || "7D";
-      currentStatsMonth = savedStats.month || "";
-      statsRangeStart = savedStats.start ? new Date(savedStats.start) : null;
-      statsRangeEnd = savedStats.end ? new Date(savedStats.end) : null;
-    }
+    if (savedStats) { currentStatsRange = savedStats.range || "7D"; currentStatsMonth = savedStats.month || ""; statsRangeStart = savedStats.start ? new Date(savedStats.start) : null; statsRangeEnd = savedStats.end ? new Date(savedStats.end) : null; }
     const savedAudit = JSON.parse(localStorage.getItem(AUDIT_STATE_KEY));
-    if (savedAudit) {
-      currentAuditRange = savedAudit.range || "ALL";
-      currentAuditMonth = savedAudit.month || "";
-      auditRangeStart = savedAudit.start ? new Date(savedAudit.start) : null;
-      auditRangeEnd = savedAudit.end ? new Date(savedAudit.end) : null;
-    }
+    if (savedAudit) { currentAuditRange = savedAudit.range || "ALL"; currentAuditMonth = savedAudit.month || ""; auditRangeStart = savedAudit.start ? new Date(savedAudit.start) : null; auditRangeEnd = savedAudit.end ? new Date(savedAudit.end) : null; }
   } catch (e) {}
 
-  const safeFloat = (num) =>
-    Math.round((num + Number.EPSILON) * 1000000) / 1000000;
-  const toYMD = (d) => {
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  };
+  const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 1000000;
+  const toYMD = (d) => { const pad = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
   const populateMonthSelect = (selectId, localCache, currentVal) => {
     const selectEl = document.getElementById(selectId);
     if (!selectEl) return currentVal;
-
     const months = new Set();
-    Object.keys(localCache).forEach((dateStr) => {
-      if (localCache[dateStr] && localCache[dateStr].workHours) {
-        months.add(dateStr.substring(0, 7));
-      }
-    });
-
+    Object.keys(localCache).forEach((dateStr) => { if (localCache[dateStr] && localCache[dateStr].workHours) months.add(dateStr.substring(0, 7)); });
     const sortedMonths = Array.from(months).sort().reverse();
-    const monthNames = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
-
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     const currentOptions = Array.from(selectEl.options).map((o) => o.value);
     if (JSON.stringify(currentOptions) !== JSON.stringify(sortedMonths)) {
       selectEl.innerHTML = "";
-      if (sortedMonths.length === 0) {
-        selectEl.innerHTML = `<option value="">No Data</option>`;
-        return "";
-      }
-      sortedMonths.forEach((m) => {
-        const [yyyy, mm] = m.split("-");
-        const name = `${monthNames[parseInt(mm, 10) - 1]} ${yyyy}`;
-        selectEl.innerHTML += `<option value="${m}">${name}</option>`;
-      });
+      if (sortedMonths.length === 0) { selectEl.innerHTML = `<option value="">No Data</option>`; return ""; }
+      sortedMonths.forEach((m) => { const [yyyy, mm] = m.split("-"); const name = `${monthNames[parseInt(mm, 10) - 1]} ${yyyy}`; selectEl.innerHTML += `<option value="${m}">${name}</option>`; });
     }
-
-    if (currentVal && sortedMonths.includes(currentVal)) {
-      selectEl.value = currentVal;
-      return currentVal;
-    } else if (sortedMonths.length > 0) {
-      selectEl.value = sortedMonths[0];
-      return sortedMonths[0];
-    }
+    if (currentVal && sortedMonths.includes(currentVal)) { selectEl.value = currentVal; return currentVal; } 
+    else if (sortedMonths.length > 0) { selectEl.value = sortedMonths[0]; return sortedMonths[0]; }
     return "";
   };
 
+  // 🎯 RESTORED GLOBAL TIME FUNCTIONS (Duplicates Removed)
   const formatTime = (ms) => {
     if (!ms) return "--:--";
     const showSecs = getSettings().showSeconds;
@@ -1060,40 +1029,21 @@
   const formatDurFromDec = (decimalHours, isDelta = false) => {
     if (isNaN(decimalHours)) return "--";
     const showSecs = getSettings().showSeconds;
-
     const isNeg = decimalHours < 0;
     const totalSeconds = Math.round(Math.abs(decimalHours) * 3600);
-    const h = Math.floor(totalSeconds / 3600);
-    const m = Math.floor((totalSeconds % 3600) / 60);
-    const s = totalSeconds % 60;
-
+    const h = Math.floor(totalSeconds / 3600), m = Math.floor((totalSeconds % 3600) / 60), s = totalSeconds % 60;
     const pad = (n) => String(n).padStart(2, "0");
-
     let res = "";
-    if (h > 0) {
-      res = showSecs ? `${h}h ${pad(m)}m ${pad(s)}s` : `${h}h ${pad(m)}m`;
-    } else {
-      res = showSecs ? `${m}m ${pad(s)}s` : `${m}m`;
-    }
-
+    if (h > 0) res = showSecs ? `${h}h ${pad(m)}m ${pad(s)}s` : `${h}h ${pad(m)}m`;
+    else res = showSecs ? `${m}m ${pad(s)}s` : `${m}m`;
     if (totalSeconds === 0) res = showSecs ? "0m 00s" : "0m";
-
-    if (isDelta) {
-      return isNeg ? `-${res}` : `+${res}`;
-    }
-    return res;
+    return isDelta ? (isNeg ? `-${res}` : `+${res}`) : res;
   };
 
   const fillCacheGaps = (startStr, endStr, records, cache) => {
-    const recordMap = {};
-    records.forEach((r) => (recordMap[r.PK] = r));
-    let curr = new Date(startStr);
-    const end = new Date(endStr);
-    while (curr <= end) {
-      const dStr = toYMD(curr);
-      cache[dStr] = recordMap[dStr] || null;
-      curr.setDate(curr.getDate() + 1);
-    }
+    const recordMap = {}; records.forEach((r) => (recordMap[r.PK] = r));
+    let curr = new Date(startStr); const end = new Date(endStr);
+    while (curr <= end) { const dStr = toYMD(curr); cache[dStr] = recordMap[dStr] || null; curr.setDate(curr.getDate() + 1); }
   };
 
   // --- DEEL PTO AUTO-SYNC ENGINE ---
@@ -1283,6 +1233,11 @@
     }
   };
 
+  // ==========================================
+  // 4. CORE LOGIC & STATE (WITH GAS SUPPORT)
+  // ==========================================
+
+  // --- GAS INJECTION INTERCEPTOR ---
   const injectScript = document.createElement("script");
   injectScript.textContent = `
         (function() {
@@ -1290,7 +1245,9 @@
             window.fetch = async function(...args) {
                 try {
                     let url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : '');
-                    let options = args[1] || {}; let headersObj = (args[0] && args[0].headers) ? args[0].headers : options.headers;
+                    let options = args[1] || {}; 
+                    let headersObj = (args[0] && args[0].headers) ? args[0].headers : options.headers;
+                    
                     if (url && url.includes('9a2igbhvdb.execute-api.us-west-2.amazonaws.com/attendance')) {
                         let token = null;
                         if (headersObj) {
@@ -1299,35 +1256,149 @@
                         }
                         if (token) window.dispatchEvent(new CustomEvent('IKG_Token_Found', { detail: token }));
                     }
+
+                    // Catch Google Script Tokens Aggressively
+                    if (url && url.includes('script.google.com') && url.includes('token=')) {
+                        const urlObj = new URL(url.startsWith('http') ? url : window.location.origin + url);
+                        const gasToken = urlObj.searchParams.get('token');
+                        if (gasToken) window.dispatchEvent(new CustomEvent('IKG_GAS_Token_Found', { detail: gasToken }));
+                    }
                 } catch (e) {}
 
                 const response = await originalFetch.apply(this, args);
-                if (response.status === 401) {
-                    window.dispatchEvent(new CustomEvent('IKG_Session_Death'));
-                }
+                if (response.status === 401) window.dispatchEvent(new CustomEvent('IKG_Session_Death'));
                 return response;
             };
+
+            const originalOpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                if (typeof url === 'string' && url.includes('script.google.com') && url.includes('token=')) {
+                    try {
+                        const urlObj = new URL(url.startsWith('http') ? url : window.location.origin + url);
+                        const gasToken = urlObj.searchParams.get('token');
+                        if (gasToken) window.dispatchEvent(new CustomEvent('IKG_GAS_Token_Found', { detail: gasToken }));
+                    } catch(e) {}
+                }
+                return originalOpen.call(this, method, url, ...rest);
+            };
         })();
-    `;
+  `;
   document.documentElement.appendChild(injectScript);
   injectScript.remove();
 
+  let gasAuthToken = null;
   window.addEventListener("IKG_Token_Found", function (e) {
-    if (!authToken) {
-      authToken = e.detail;
-      autopilotEnabled = false;
-      IkgLog.info("Token Intercepted. Handing off to Range Sync.");
-    }
+    if (!authToken) { authToken = e.detail; autopilotEnabled = false; IkgLog.info("AWS Token Intercepted."); }
+  });
+
+  window.addEventListener("IKG_GAS_Token_Found", function(e) {
+      if (gasAuthToken !== e.detail) { 
+          gasAuthToken = e.detail; 
+          IkgLog.info("✅ Google Apps Script (WFH) Token Intercepted!"); 
+      }
   });
 
   window.addEventListener("IKG_Session_Death", function () {
-    if (authToken) {
-      IkgLog.warn("API returned 401. Fast session death detected!");
-      authToken = null;
-      autopilotEnabled = true;
-      attemptAppClick();
-    }
+    if (authToken) { IkgLog.warn("API returned 401. Fast session death detected!"); authToken = null; autopilotEnabled = true; attemptAppClick(); }
   });
+
+  // --- GAS DATA FETCHER (Silent Scraper Mode) ---
+  const ensureGasToken = () => {
+    return new Promise((resolve) => {
+        let gasData = null;
+        try { gasData = JSON.parse(GM_getValue("IKG_GAS_DATA", "null")); } catch(e){}
+        // Reuse token if it hasn't expired yet
+        if (gasData && gasData.token && gasData.exp > Date.now()) return resolve(gasData);
+
+        IkgLog.info("No active GAS token. Silently scraping from HTML...");
+        updateHeaderStatus("Securing WFH Token...", "var(--warn)");
+
+        const gasUrl = "https://script.google.com/a/macros/ikigai.team/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/exec";
+        
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: gasUrl,
+            withCredentials: true, // 🔑 This automatically applies your Google Session Cookies!
+            onload: (res) => {
+                if (res.status === 200) {
+                    // 🎯 Regex to scrape the hidden Execution Token (Format: ACHNx...:1785...)
+                    const match = res.responseText.match(/(ACHNx[a-zA-Z0-9_\-]+(?:%3A|:)[0-9]+)/);
+                    if (match && match[1]) {
+                        const rawToken = decodeURIComponent(match[1]); // Clean up encoding
+                        IkgLog.info("✅ Silently secured GAS Token from HTML!");
+                        
+                        const newGasData = {
+                            token: rawToken,
+                            callbackUrl: "https://script.google.com/a/ikigai.team/macros/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/callback",
+                            exp: Date.now() + 3300000 // Valid for ~55 mins
+                        };
+                        GM_setValue("IKG_GAS_DATA", JSON.stringify(newGasData));
+                        return resolve(newGasData);
+                    }
+                }
+                IkgLog.error("Failed to scrape GAS Token. Status:", res.status);
+                resolve(null);
+            },
+            onerror: () => {
+                IkgLog.error("Network error while securing GAS token.");
+                resolve(null);
+            }
+        });
+    });
+  };
+
+  const fetchGasRecords = async (dateStr, gasData) => {
+    return new Promise((resolve) => {
+        const urlWithParams = `${gasData.callbackUrl}?nocache_id=${Math.floor(Math.random()*1000)}&token=${encodeURIComponent(gasData.token)}`;
+        const payloadStr = `["getRecordsByDate","[\\"${dateStr}\\"]",null,[0],null,null,1,0]`;
+        const formData = `request=${encodeURIComponent(payloadStr)}`;
+
+        GM_xmlhttpRequest({
+            method: "POST",
+            url: urlWithParams,
+            headers: { 
+                "accept": "*/*", 
+                "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+                "origin": "https://script.google.com",
+                "referer": "https://script.google.com/a/macros/ikigai.team/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/exec",
+                "x-same-domain": "1"
+            },
+            data: formData,
+            withCredentials: true,
+            onload: function(res) {
+                if (res.status === 200) {
+                    try {
+                        // Dynamically find the start of the JSON array to avoid prefix issues
+                        const firstBracket = res.responseText.indexOf('[');
+                        if (firstBracket !== -1) {
+                            const cleanJsonStr = res.responseText.substring(firstBracket);
+                            const parsedArray = JSON.parse(cleanJsonStr);
+                            const payloadOp = parsedArray.find(item => item[0] === "op.exec");
+                            
+                            if (payloadOp && payloadOp[1] && typeof payloadOp[1][1] === 'string') {
+                                const records = JSON.parse(payloadOp[1][1]);
+                                if (records && records.length > 0) IkgLog.debug(`[GAS] ${dateStr} returned ${records.length} punches.`);
+                                resolve(records);
+                                return;
+                            } else {
+                                IkgLog.warn(`[GAS] Empty/Invalid payload for ${dateStr}. Google returned:`, res.responseText.substring(0, 100));
+                            }
+                        }
+                    } catch (e) {
+                        IkgLog.error(`[GAS Parse Error] ${dateStr}`, e);
+                    }
+                } else {
+                    IkgLog.error(`[GAS HTTP Error] ${dateStr} returned ${res.status}`);
+                }
+                resolve(null);
+            },
+            onerror: (err) => {
+                IkgLog.error(`[GAS Network Error] ${dateStr}`, err);
+                resolve(null);
+            }
+        });
+    });
+  };
 
   // ==========================================
   // 5. REACTIVE FOREGROUND AUTOMATION
@@ -1418,198 +1489,108 @@
 
     // 🎯 MASTER BLOCKING HOLIDAY LOCK (Strict YYYY-MM-DD Normalizer, Native Scraped Names)
         const ensureHolidaysSecured = (year) => {
-            const key = `IKG_HOLIDAYS_${year}`;
-            const cached = localStorage.getItem(key);
+    const key = `IKG_HOLIDAYS_${year}`;
+    const cached = localStorage.getItem(key);
+    const isCacheHealthy = (str) => { if (!str) return false; try { const obj = JSON.parse(str); const sampleKey = Object.keys(obj)[0]; return sampleKey && sampleKey.includes('-') && Object.keys(obj).length > 0; } catch(e) { return false; } };
+    if (isCacheHealthy(cached)) return Promise.resolve();
 
-            // Self-healing check: purges old broken caches containing un-hyphenated "20260619" keys
-            const isCacheHealthy = (str) => {
-                if (!str) return false;
-                try {
-                    const obj = JSON.parse(str);
-                    const sampleKey = Object.keys(obj)[0];
-                    return sampleKey && sampleKey.includes('-') && Object.keys(obj).length > 0;
-                } catch(e) { return false; }
-            };
-
-            if (isCacheHealthy(cached)) return Promise.resolve();
-
-            return new Promise((resolve, reject) => {
-                updateHeaderStatus(`Securing ${year} Holidays...`, 'var(--warn)');
-                GM_xmlhttpRequest({
-                    method: "GET",
-                    url: `https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/${year}.json`,
-                    timeout: 10000,
-                    onload: (res) => {
-                        if (res.status === 200) {
-                            try {
-                                const list = JSON.parse(res.responseText);
-                                const map = {};
-
-                                list.forEach(d => {
-                                    if (!d.date) return;
-
-                                    // Force "20260619" -> "2026-06-19"
-                                    const rawD = String(d.date);
-                                    let isoDate = rawD;
-                                    if (rawD.length === 8 && !rawD.includes('-')) {
-                                        isoDate = `${rawD.slice(0,4)}-${rawD.slice(4,6)}-${rawD.slice(6,8)}`;
-                                    }
-
-                                    const dObj = new Date(isoDate);
-                                    const dayOfWeek = dObj.getDay();
-                                    const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
-
-                                    // 🎯 Pass the native Chinese description straight to the UI map!
-                                    if (d.isHoliday && !isWeekend) {
-                                        map[isoDate] = d.description || "國定假日";
-                                    }
-                                });
-
-                                // 🎯 "\u52de\u52d5\u7bc0" renders natively as "勞動節" in JS engine
-                                map[`${year}-05-01`] = "\u52de\u52d5\u7bc0";
-
-                                localStorage.setItem(key, JSON.stringify(map));
-                                updateHeaderStatus('✅ Synced', 'var(--success)');
-                                resolve();
-                            } catch(e) { reject("Malformed JSON from CDN"); }
-                        } else { reject(`HTTP ${res.status}`); }
-                    },
-                    ontimeout: () => reject("CDN Timeout"),
-                    onerror: () => reject("Network Failure")
-                });
-            });
-        };
+    return new Promise((resolve, reject) => {
+        updateHeaderStatus(`Securing ${year} Holidays...`, 'var(--warn)');
+        GM_xmlhttpRequest({
+            method: "GET", url: `https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/${year}.json`, timeout: 10000,
+            onload: (res) => {
+                if (res.status === 200) {
+                    try {
+                        const list = JSON.parse(res.responseText); const map = {};
+                        list.forEach(d => {
+                            if (!d.date) return;
+                            const rawD = String(d.date); let isoDate = rawD;
+                            if (rawD.length === 8 && !rawD.includes('-')) isoDate = `${rawD.slice(0,4)}-${rawD.slice(4,6)}-${rawD.slice(6,8)}`;
+                            const dObj = new Date(isoDate); const dayOfWeek = dObj.getDay();
+                            if (d.isHoliday && !(dayOfWeek === 0 || dayOfWeek === 6)) map[isoDate] = d.description || "國定假日";
+                        });
+                        map[`${year}-05-01`] = "\u52de\u52d5\u7bc0";
+                        localStorage.setItem(key, JSON.stringify(map)); updateHeaderStatus('✅ Synced', 'var(--success)'); resolve();
+                    } catch(e) { reject("Malformed JSON from CDN"); }
+                } else { reject(`HTTP ${res.status}`); }
+            },
+            ontimeout: () => reject("CDN Timeout"), onerror: () => reject("Network Failure")
+        });
+    });
+  };
 
  // 🎯 DDD REPOSITORY: Single Source of Truth for cross-tab synchronization
     const IKG_DataStore = {
-        buildSnapshot: function() {
-            return {
-                cache: JSON.parse(localStorage.getItem(CACHE_KEY) || "{}"),
-                pto: JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}"),
-                overrides: JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}"),
-                settings: getSettings()
-            };
-        },
-        getDayContext: function(dateStr, snapshot) {
-            const y = dateStr.split('-')[0];
-            return {
-                dateStr,
-                record: snapshot.cache[dateStr],
-                note: snapshot.pto[dateStr],
-                override: snapshot.overrides[dateStr],
-                settings: snapshot.settings,
-                holidays: JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${y}`) || "{}")
-            };
-        }
-    };
+      buildSnapshot: function() {
+          return { cache: JSON.parse(localStorage.getItem(CACHE_KEY) || "{}"), pto: JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}"), overrides: JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}"), settings: getSettings() };
+      },
+      getDayContext: function(dateStr, snapshot) {
+          const y = dateStr.split('-')[0];
+          return { dateStr, record: snapshot.cache[dateStr], note: snapshot.pto[dateStr], override: snapshot.overrides[dateStr], settings: snapshot.settings, holidays: JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${y}`) || "{}") };
+      }
+  };
 
     // 🎯 DDD DOMAIN MODEL: Pure, Strict, and Clean
     const evaluateDay = (ctx) => {
-        const { dateStr, record, note, override, settings, holidays } = ctx;
-        
-        let ptoHrs = note ? (parseFloat(note.deductedHours) || 0) : 0;
-        const ptoType = note ? (note.type || 'PTO') : '';
+      const { dateStr, record, note, override, settings, holidays } = ctx;
+      let ptoHrs = note ? (parseFloat(note.deductedHours) || 0) : 0;
+      const ptoType = note ? (note.type || 'PTO') : '';
 
-        // Intelligently detect Full vs Partial PTO based on actual hours
-        const isFullPTO = !!(note && note.isPTO) || ptoHrs >= 8.0;
-        const isPartialPTO = !isFullPTO && ptoHrs > 0;
-        if (isFullPTO) ptoHrs = 9.0; // Standardize math
+      const isFullPTO = !!(note && note.isPTO) || ptoHrs >= 8.0;
+      const isPartialPTO = !isFullPTO && ptoHrs > 0;
+      if (isFullPTO) ptoHrs = 9.0; 
 
-        const isIgnored = settings.useManualOverrides !== false && override && override.isIgnored;
+      const isIgnored = settings.useManualOverrides !== false && override && override.isIgnored;
+      const isWFH = !!(record && record.isWFH); // 🎯 Track WFH from Cache
 
-        let actualHrs = (record && record.workHours) ? parseFloat(record.workHours) : 0;
-        let effStart = record ? record.startTime : null;
-        let effEnd = record ? record.endTime : null;
-        let isSpoofed = false;
+      let actualHrs = (record && record.workHours) ? parseFloat(record.workHours) : 0;
+      let effStart = record ? record.startTime : null; let effEnd = record ? record.endTime : null; let isSpoofed = false;
 
-        if (settings.useManualOverrides !== false && override && (override.manualIn || override.manualOut)) {
-            const [y, m, d] = dateStr.split('-');
-            let effStartD = override.manualIn ? new Date(y, parseInt(m, 10)-1, d, ...override.manualIn.split(':')) : (record?.startTime ? new Date(record.startTime) : null);
-            let effEndD = override.manualOut ? new Date(y, parseInt(m, 10)-1, d, ...override.manualOut.split(':')) : (record?.endTime ? new Date(record.endTime) : null);
+      if (settings.useManualOverrides !== false && override && (override.manualIn || override.manualOut)) {
+          const [y, m, d] = dateStr.split('-');
+          let effStartD = override.manualIn ? new Date(y, parseInt(m, 10)-1, d, ...override.manualIn.split(':')) : (record?.startTime ? new Date(record.startTime) : null);
+          let effEndD = override.manualOut ? new Date(y, parseInt(m, 10)-1, d, ...override.manualOut.split(':')) : (record?.endTime ? new Date(record.endTime) : null);
 
-            if (effStartD && effEndD) {
-                actualHrs = Math.max(0, (effEndD - effStartD) / 3600000); 
-                effStart = effStartD.getTime(); effEnd = effEndD.getTime();
-                isSpoofed = true;
-            } else if (effStartD) {
-                actualHrs = 0; effStart = effStartD.getTime(); effEnd = null; isSpoofed = true;
-            }
-        }
+          if (effStartD && effEndD) { actualHrs = Math.max(0, (effEndD - effStartD) / 3600000); effStart = effStartD.getTime(); effEnd = effEndD.getTime(); isSpoofed = true; } 
+          else if (effStartD) { actualHrs = 0; effStart = effStartD.getTime(); effEnd = null; isSpoofed = true; }
+      }
 
-        const [y, m, d] = dateStr.split('-');
-        const dObj = new Date(parseInt(y, 10), parseInt(m, 10)-1, parseInt(d, 10));
-        
-        const isPublicHoliday = !!holidays[dateStr];
-        const holidayName = holidays[dateStr] || '';
+      const [y, m, d] = dateStr.split('-'); const dObj = new Date(parseInt(y, 10), parseInt(m, 10)-1, parseInt(d, 10));
+      const isPublicHoliday = !!holidays[dateStr]; const holidayName = holidays[dateStr] || '';
+      const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6; const isRestDay = isWeekend || isPublicHoliday;
 
-        const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
-        const isRestDay = isWeekend || isPublicHoliday;
+      let targetHrs = 0; let isWorkingDay = false; const hasNoPunches = !effStart && !effEnd && actualHrs === 0;
 
-        let targetHrs = 0;
-        let isWorkingDay = false;
+      if (hasNoPunches && ptoHrs === 0) { targetHrs = 0; isWorkingDay = false; } 
+      else if (!isRestDay || ptoHrs > 0) { targetHrs = 9.0; const todayD = new Date(); todayD.setHours(0,0,0,0); if (dObj <= todayD) isWorkingDay = true; } 
+      else if (isRestDay && actualHrs > 0) { targetHrs = 0; isWorkingDay = true; }
 
-        const hasNoPunches = !effStart && !effEnd && actualHrs === 0;
+      const effectiveHrs = isFullPTO ? targetHrs : (actualHrs + ptoHrs);
+      let flexHrs = isWorkingDay ? (effectiveHrs - targetHrs) : 0; 
 
-        // A day is only "Omitted" if you have NO punches AND NO PTO.
-        if (hasNoPunches && ptoHrs === 0) {
-            targetHrs = 0;
-            isWorkingDay = false; 
-        } else if (!isRestDay || ptoHrs > 0) {
-            targetHrs = 9.0;
-            const todayD = new Date(); todayD.setHours(0,0,0,0);
-            if (dObj <= todayD) isWorkingDay = true;
-        } else if (isRestDay && actualHrs > 0) {
-            targetHrs = 0; 
-            isWorkingDay = true;
-        }
+      let status = 'none', color = 'var(--text-muted)', chartColor = 'transparent', heatmapBg = 'transparent', reason = '';
 
-        const effectiveHrs = isFullPTO ? targetHrs : (actualHrs + ptoHrs);
-        let flexHrs = isWorkingDay ? (effectiveHrs - targetHrs) : 0; 
+      if (hasNoPunches && ptoHrs === 0) {
+          if (isPublicHoliday) { status = 'holiday'; color = 'var(--primary)'; reason = holidayName; } 
+          else if (isWeekend) { status = 'weekend-empty'; color = 'transparent'; reason = ''; } 
+          else { status = 'omitted'; color = 'var(--text-muted)'; reason = 'No Punches'; }
+      } else if (isFullPTO && hasNoPunches) { status = 'full-pto'; color = 'var(--pto)'; chartColor = '#8B5CF6'; heatmapBg = '#8B5CF6'; reason = 'Full Day PTO'; } 
+      else if (actualHrs === 0 && effStart && !effEnd) { status = 'pending'; color = 'var(--warn)'; chartColor = '#F59E0B'; heatmapBg = '#F59E0B'; reason = 'Pending Checkout'; isWorkingDay = false; } 
+      else if (actualHrs > 0 || ptoHrs > 0) {
+          if (isPartialPTO) {
+              if (effectiveHrs >= targetHrs) { status = 'partial-pto-pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = 'linear-gradient(135deg, #10B981 50%, #8B5CF6 50%)'; reason = `Goal passed`; } 
+              else { status = 'partial-pto-fail'; color = 'var(--danger)'; chartColor = '#EF4444'; heatmapBg = 'linear-gradient(135deg, #EF4444 50%, #8B5CF6 50%)'; reason = `Short`; }
+          } else {
+              if (actualHrs >= targetHrs) { status = 'pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = '#10B981'; reason = 'Goal met'; } 
+              else { status = 'fail'; color = 'var(--danger)'; chartColor = '#EF4444'; heatmapBg = '#EF4444'; reason = `Short`; }
+          }
+      }
 
-        let status = 'none'; let color = 'var(--text-muted)'; let chartColor = 'transparent'; let heatmapBg = 'transparent'; let reason = '';
+      if (isIgnored) { status = 'ignored'; color = 'var(--text-muted)'; chartColor = 'var(--border)'; heatmapBg = 'var(--border)'; reason = 'Ignored Day'; targetHrs = 0; flexHrs = 0; isWorkingDay = false; }
+      if ((status === 'pass' || status === 'partial-pto-pass') && actualHrs >= 10.0 && !isIgnored) { chartColor = '#059669'; heatmapBg = status === 'pass' ? '#059669' : 'linear-gradient(135deg, #059669 50%, #8B5CF6 50%)'; }
 
-        if (hasNoPunches && ptoHrs === 0) {
-            if (isPublicHoliday) {
-                status = 'holiday'; color = 'var(--primary)'; reason = holidayName;
-            } else if (isWeekend) {
-                // 🎯 NEW: Safely flag unworked weekends so the UI can hide them
-                status = 'weekend-empty'; color = 'transparent'; reason = '';
-            } else {
-                status = 'omitted'; color = 'var(--text-muted)'; reason = 'No Punches';
-            }
-        } else if (isFullPTO && hasNoPunches) {
-            status = 'full-pto'; color = 'var(--pto)'; chartColor = '#8B5CF6'; heatmapBg = '#8B5CF6'; reason = 'Full Day PTO';
-        } else if (actualHrs === 0 && effStart && !effEnd) {
-            status = 'pending'; color = 'var(--warn)'; chartColor = '#F59E0B'; heatmapBg = '#F59E0B'; reason = 'Pending Checkout';
-            isWorkingDay = false; 
-        } else if (actualHrs > 0 || ptoHrs > 0) {
-            if (isPartialPTO) {
-                if (effectiveHrs >= targetHrs) { status = 'partial-pto-pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = 'linear-gradient(135deg, #10B981 50%, #8B5CF6 50%)'; reason = `Goal passed`; } 
-                else { status = 'partial-pto-fail'; color = 'var(--danger)'; chartColor = '#EF4444'; heatmapBg = 'linear-gradient(135deg, #EF4444 50%, #8B5CF6 50%)'; reason = `Short`; }
-            } else {
-                if (actualHrs >= targetHrs) { status = 'pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = '#10B981'; reason = 'Goal met'; } 
-                else { status = 'fail'; color = 'var(--danger)'; chartColor = '#EF4444'; heatmapBg = '#EF4444'; reason = `Short`; }
-            }
-        }
-
-        // Intercept Ignored AFTER calculating the real punches so the Calendar still has visual data to draw
-        if (isIgnored) {
-            status = 'ignored';
-            color = 'var(--text-muted)'; 
-            chartColor = 'var(--border)';
-            heatmapBg = 'var(--border)';
-            reason = 'Ignored Day';
-            targetHrs = 0; 
-            flexHrs = 0;   
-            isWorkingDay = false; 
-        }
-
-        if ((status === 'pass' || status === 'partial-pto-pass') && actualHrs >= 10.0 && !isIgnored) {
-            chartColor = '#059669'; heatmapBg = status === 'pass' ? '#059669' : 'linear-gradient(135deg, #059669 50%, #8B5CF6 50%)';
-        }
-
-        return { isFullPTO, isPartialPTO, ptoHrs, ptoType, isIgnored, actualHrs, effStart, effEnd, effectiveHrs, targetHrs, flexHrs, isWorkingDay, isPublicHoliday, holidayName, status, color, chartColor, heatmapBg, reason, isSpoofed };
-    };
+      return { isFullPTO, isPartialPTO, ptoHrs, ptoType, isIgnored, isWFH, actualHrs, effStart, effEnd, effectiveHrs, targetHrs, flexHrs, isWorkingDay, isPublicHoliday, holidayName, status, color, chartColor, heatmapBg, reason, isSpoofed };
+  };
 
   let chartHoverHandler = null;
 
@@ -1782,6 +1763,11 @@
           `;
         } else if (item.isFullPTO) {
           text += `<div style="grid-column: 1 / -1; color:var(--pto); font-weight:700; margin-top:4px;">🏝️ Full Day PTO</div>`;
+        }
+
+        // 🎯 Add WFH Flag to Chart Tooltip
+        if (item.isWFH && !item.isIgnored) {
+          text += `<div style="grid-column: 1 / -1; color:var(--primary); font-weight:700; margin-top:4px; font-size:11px;">🏠 Work From Home</div>`;
         }
 
         text += `</div>`;
@@ -2523,54 +2509,25 @@
 
   // --- RENDER LOGIC ---
 async function renderCalendar() {
-            try { await ensureHolidaysSecured(currentViewYear); } catch(e) { return; }
-            const grid = document.getElementById('ikg-cal-grid');
+    try { await ensureHolidaysSecured(currentViewYear); } catch(e) { return; }
+    const grid = document.getElementById('ikg-cal-grid');
     const headerText = document.getElementById("ikg-cal-month-text");
     const prevBtn = document.getElementById("ikg-prev-month");
     const nextBtn = document.getElementById("ikg-next-month");
 
     grid.innerHTML = "";
-    const monthNames = [
-      "January",
-      "February",
-      "March",
-      "April",
-      "May",
-      "June",
-      "July",
-      "August",
-      "September",
-      "October",
-      "November",
-      "December",
-    ];
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     headerText.innerText = `${monthNames[currentViewMonth - 1]} ${currentViewYear}`;
 
     const todayReal = new Date();
-    nextBtn.classList.toggle(
-      "hidden",
-      currentViewYear === todayReal.getFullYear() &&
-        currentViewMonth === todayReal.getMonth() + 1,
-    );
+    nextBtn.classList.toggle("hidden", currentViewYear === todayReal.getFullYear() && currentViewMonth === todayReal.getMonth() + 1);
     if (globalFirstDate !== "--") {
       const fd = new Date(globalFirstDate);
-      prevBtn.classList.toggle(
-        "hidden",
-        currentViewYear === fd.getFullYear() &&
-          currentViewMonth === fd.getMonth() + 1,
-      );
+      prevBtn.classList.toggle("hidden", currentViewYear === fd.getFullYear() && currentViewMonth === fd.getMonth() + 1);
     }
 
-    const firstDay = new Date(
-      currentViewYear,
-      currentViewMonth - 1,
-      1,
-    ).getDay();
-    const daysInMonth = new Date(
-      currentViewYear,
-      currentViewMonth,
-      0,
-    ).getDate();
+    const firstDay = new Date(currentViewYear, currentViewMonth - 1, 1).getDay();
+    const daysInMonth = new Date(currentViewYear, currentViewMonth, 0).getDate();
 
     let localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
     let dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
@@ -2578,16 +2535,13 @@ async function renderCalendar() {
     const monthStr = `${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`;
     const todayStr = `${todayReal.getFullYear()}-${String(todayReal.getMonth() + 1).padStart(2, "0")}-${String(todayReal.getDate()).padStart(2, "0")}`;
 
-    for (let i = 0; i < firstDay; i++)
-      grid.innerHTML += `<div class="ikg-day empty"></div>`;
+    for (let i = 0; i < firstDay; i++) grid.innerHTML += `<div class="ikg-day empty"></div>`;
 
-    let monthWorkedDays = 0;
-    let monthTotalHours = 0;
-    let monthTargetHours = 0;
-    let monthFullPTODays = 0;
-    let monthPartialPTODays = 0;
+    // 🎯 NEW: Added Day trackers for WFH and Office
+    let monthWorkedDays = 0, monthTotalHours = 0, monthTargetHours = 0, monthFullPTODays = 0, monthPartialPTODays = 0;
+    let monthWFHHours = 0, monthOfficeHours = 0, monthPTOHours = 0;
+    let monthWFHDays = 0, monthOfficeDays = 0;
 
-    // 🎯 DDD Implementation: Fetch Snapshot once per render cycle
     const snapshot = IKG_DataStore.buildSnapshot();
 
     for (let i = 1; i <= daysInMonth; i++) {
@@ -2599,123 +2553,138 @@ async function renderCalendar() {
       let cellContent = "";
       let partialPill = "";
 
-      // 🎯 All partial & full PTO days with hours > 0 are now safely counted
       if (evalDay.isWorkingDay && !isToday) {
         monthWorkedDays++;
         monthTotalHours = safeFloat(monthTotalHours + evalDay.effectiveHrs);
         monthTargetHours = safeFloat(monthTargetHours + evalDay.targetHrs);
+        monthPTOHours = safeFloat(monthPTOHours + evalDay.ptoHrs);
         
-        if (evalDay.isFullPTO) monthFullPTODays++;
-        else if (evalDay.isPartialPTO) monthPartialPTODays++;
+        if (evalDay.isFullPTO) {
+            monthFullPTODays++;
+        } else {
+            if (evalDay.isPartialPTO) monthPartialPTODays++;
+            
+            // Track physical days
+            if (evalDay.actualHrs > 0) {
+                if (evalDay.isWFH) {
+                    monthWFHHours = safeFloat(monthWFHHours + evalDay.actualHrs);
+                    monthWFHDays++;
+                } else {
+                    monthOfficeHours = safeFloat(monthOfficeHours + evalDay.actualHrs);
+                    monthOfficeDays++;
+                }
+            }
+        }
       }
 
       if (isFetchingData && dateStr <= todayStr && record === undefined && !evalDay.isFullPTO) {
-                cellContent = `<div class="ikg-cell-data"><div class="skeleton skel-hrs"></div><div class="skeleton skel-box"></div></div>`;
-            }
-            else if (evalDay.status === 'holiday') {
-                cellContent = `<div class="pto-pill" style="background:rgba(59,130,246,0.1); color:var(--primary); border-color:var(--primary);">🎊 ${evalDay.holidayName}</div>`;
-            }
-            else if (evalDay.status === 'weekend-empty') {
-                // 🎯 Render absolutely nothing for normal weekends!
-                cellContent = ``; 
-            }
-            else if (evalDay.status === 'omitted') {
-                // 🎯 If the day has no punches but has a synced Deel note (e.g. Unpaid Leave, Sick), render the pill!
-                if (evalDay.ptoType) {
-                    cellContent = `<div class="pto-pill" style="background:rgba(245, 158, 11, 0.1); color:var(--warn); border-color:var(--warn);">🌴 ${evalDay.ptoType}</div>`;
-                } else {
-                    cellContent = `<div style="margin:auto; color:var(--text-muted); font-size:11px; font-weight:600; text-align:center; opacity: 0.5;">No Punches</div>`;
-                }
-            }
-            else if (evalDay.isFullPTO) {
-                cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
-            }
-            else if (evalDay.effStart || evalDay.effEnd || evalDay.isSpoofed || evalDay.actualHrs > 0) {
-                let pendingIcon = "";
-                let timesClass = "";
+          cellContent = `<div class="ikg-cell-data"><div class="skeleton skel-hrs"></div><div class="skeleton skel-box"></div></div>`;
+      } else if (evalDay.status === 'holiday') {
+          cellContent = `<div class="pto-pill" style="background:rgba(59,130,246,0.1); color:var(--primary); border-color:var(--primary);">🎊 ${evalDay.holidayName}</div>`;
+      } else if (evalDay.status === 'weekend-empty') {
+          cellContent = ``; 
+      } else if (evalDay.status === 'omitted') {
+          if (evalDay.ptoType) {
+              cellContent = `<div class="pto-pill" style="background:rgba(245, 158, 11, 0.1); color:var(--warn); border-color:var(--warn);">🌴 ${evalDay.ptoType}</div>`;
+          } else {
+              cellContent = `<div style="margin:auto; color:var(--text-muted); font-size:11px; font-weight:600; text-align:center; opacity: 0.5;">No Punches</div>`;
+          }
+      } else if (evalDay.isFullPTO) {
+          cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
+      } else if (evalDay.effStart || evalDay.effEnd || evalDay.isSpoofed || evalDay.actualHrs > 0) {
+          let pendingIcon = ""; let timesClass = "";
 
-                const inTimeDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : formatTime(record.startTime);
-                let outTimeDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : record.endTime ? formatTime(record.endTime) : "--:--";
+          const inTimeDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : formatTime(record.startTime);
+          let outTimeDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : record.endTime ? formatTime(record.endTime) : "--:--";
 
-                if (evalDay.status === "pending") {
-                    timesClass = "pending";
-                    pendingIcon = ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>';
-                    outTimeDisplay = "Pending";
-                }
+          if (evalDay.status === "pending") {
+              timesClass = "pending"; pendingIcon = ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>'; outTimeDisplay = "Pending";
+          }
 
-                const shortPtoName = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
-                if (evalDay.isPartialPTO) {
-                    partialPill = `<div class="ikg-fast-tt no-dot" data-title="${evalDay.ptoType}" style="font-size:9px; background:var(--pto); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70px; box-shadow: 0 2px 4px rgba(139,92,246,0.3); cursor:help; margin-right:auto;">+${evalDay.ptoHrs}h ${shortPtoName}</div>`;
-                }
+          if (evalDay.isWFH) {
+              partialPill += `<div class="ikg-fast-tt no-dot" data-title="Work From Home" style="font-size:9px; background:var(--primary); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; box-shadow: 0 2px 4px rgba(59,130,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;">🏠 WFH</div>`;
+          }
 
-                // 🎯 INJECT THE INLINE BADGE
-                const ignoredBadge = evalDay.isIgnored ? `<span class="ikg-fast-tt" data-title="Omitted from System Totals" style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⚠️ IGNORED</span>` : '';
+          const shortPtoName = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
+          if (evalDay.isPartialPTO) {
+              partialPill += `<div class="ikg-fast-tt no-dot" data-title="${evalDay.ptoType}" style="font-size:9px; background:var(--pto); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70px; box-shadow: 0 2px 4px rgba(139,92,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;">+${evalDay.ptoHrs}h ${shortPtoName}</div>`;
+          }
 
-                const flexTooltip = evalDay.flexHrs >= 0 ? `+${formatDurFromDec(evalDay.flexHrs, false)}` : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
-                let activeShiftStyles = isToday && evalDay.status !== "pass" && evalDay.status !== "partial-pto-pass" ? "background:var(--primary-glow); border:1px solid var(--border);" : "";
+          const ignoredBadge = evalDay.isIgnored ? `<span class="ikg-fast-tt" data-title="Omitted from System Totals" style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⚠️ IGNORED</span>` : '';
+          const flexTooltip = evalDay.flexHrs >= 0 ? `+${formatDurFromDec(evalDay.flexHrs, false)}` : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
+          let activeShiftStyles = isToday && evalDay.status !== "pass" && evalDay.status !== "partial-pto-pass" ? "background:var(--primary-glow); border:1px solid var(--border);" : "";
 
-                cellContent = `
-                    <div class="ikg-cell-data">
-                        <div class="ikg-total-hrs ikg-fast-tt" data-title="${flexTooltip}" style="color:${evalDay.color}; width:fit-content; cursor:help; margin-bottom:4px; min-height:22px; display:flex; align-items:center;">
-                            ${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"} ${pendingIcon} ${ignoredBadge}
-                        </div>
-                        <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
-                            <div>IN <span>${inTimeDisplay}</span></div>
-                            <div>OUT <span>${outTimeDisplay}</span></div>
-                        </div>
-                    </div>
-                `;
-            }
+          cellContent = `
+              <div class="ikg-cell-data">
+                  <div class="ikg-total-hrs ikg-fast-tt" data-title="${flexTooltip}" style="color:${evalDay.color}; width:fit-content; cursor:help; margin-bottom:4px; min-height:22px; display:flex; align-items:center;">
+                      ${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"} ${pendingIcon} ${ignoredBadge}
+                  </div>
+                  <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
+                      <div>IN <span>${inTimeDisplay}</span></div>
+                      <div>OUT <span>${outTimeDisplay}</span></div>
+                  </div>
+              </div>`;
+      }
 
       grid.innerHTML += `
-                <div class="ikg-day ${isToday ? "today" : ""}" data-date="${dateStr}">
-                    <div class="ikg-date-header" style="align-items: center;">
-                        ${partialPill}
-                        <div class="ikg-date-num">${i}</div>
-                    </div>
-                    ${cellContent}
-                </div>`;
+          <div class="ikg-day ${isToday ? "today" : ""}" data-date="${dateStr}">
+              <div class="ikg-date-header" style="align-items: center; justify-content: flex-end;">
+                  ${partialPill}
+                  <div class="ikg-date-num">${i}</div>
+              </div>
+              ${cellContent}
+          </div>`;
     }
 
     const totalCells = firstDay + daysInMonth;
-    for (let i = 0; i < 42 - totalCells; i++)
-      grid.innerHTML += `<div class="ikg-day empty"></div>`;
+    for (let i = 0; i < 42 - totalCells; i++) grid.innerHTML += `<div class="ikg-day empty"></div>`;
 
-    // 🎯 BLINDLY TRUST evaluateDay
     const netBalance = safeFloat(monthTotalHours - monthTargetHours);
 
-    let daysHtml = monthWorkedDays;
-    if (monthFullPTODays > 0 || monthPartialPTODays > 0) {
-        let ptoTxt = [];
-        if (monthFullPTODays > 0) ptoTxt.push(`${monthFullPTODays} Full`);
-        if (monthPartialPTODays > 0) ptoTxt.push(`${monthPartialPTODays} Part`);
-        daysHtml = `${monthWorkedDays} <span class="ikg-fast-tt tt-right no-dot" data-title="PTO is counted towards effective working days." style="font-size:11px; color:var(--pto); font-weight:700; margin-left:6px; cursor:help;">(${ptoTxt.join(', ')} PTO)</span>`;
+    // 🎯 NEW: Sub-render arrays for Effective Days explicitly broken down
+    let subDays = [];
+    if (monthOfficeDays > 0) subDays.push(`🏢 ${monthOfficeDays}`);
+    if (monthWFHDays > 0) subDays.push(`🏠 ${monthWFHDays}`);
+    let ptoTxt = [];
+    if (monthFullPTODays > 0) ptoTxt.push(`${monthFullPTODays} Full`);
+    if (monthPartialPTODays > 0) ptoTxt.push(`${monthPartialPTODays} Part`);
+    if (ptoTxt.length > 0) subDays.push(`🏝️ ${ptoTxt.join(', ')}`);
+
+    // 🎯 Use flex-column to force strict rightward alignment
+    let daysHtml = `<div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;"><div style="white-space:nowrap;">${monthWorkedDays}</div>`;
+    if (subDays.length > 0) {
+        daysHtml += `<div style="font-size:10px; color:var(--text-muted); font-weight:500; text-align:right;">${subDays.join(' | ')}</div>`;
+    }
+    daysHtml += `</div>`;
+
+    const sideDaysEl = document.getElementById("side-val-days");
+    sideDaysEl.innerHTML = daysHtml;
+    if (sideDaysEl.parentElement) {
+        sideDaysEl.parentElement.style.alignItems = "flex-start"; // Align to top
+        sideDaysEl.parentElement.style.gap = "12px"; // Prevent text collision
+    }
+    
+    const sideActualEl = document.getElementById("side-val-actual");
+    sideActualEl.innerHTML = `
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+            <div style="white-space:nowrap;">${formatDurFromDec(monthTotalHours, false)}</div>
+            <div style="font-size:10px; color:var(--text-muted); font-weight:500; text-align:right;">🏢 ${formatDurFromDec(monthOfficeHours, false)} | 🏠 ${formatDurFromDec(monthWFHHours, false)} | 🏝️ ${formatDurFromDec(monthPTOHours, false)}</div>
+        </div>`;
+    if (sideActualEl.parentElement) {
+        sideActualEl.parentElement.style.alignItems = "flex-start";
+        sideActualEl.parentElement.style.gap = "12px";
     }
 
-    document.getElementById("side-val-days").innerHTML = daysHtml;
-    document.getElementById("side-val-actual").innerText = formatDurFromDec(monthTotalHours, false);
-    
-    // 🎯 FIX: Restored the missing line that paints Target Hours to the UI!
     document.getElementById("side-val-target").innerText = formatDurFromDec(monthTargetHours, false);
 
     const balanceEl = document.getElementById("side-val-net");
-
     let insightEl = document.getElementById("ikg-flex-insight");
-    if (!insightEl) {
-      insightEl = document.createElement("div");
-      insightEl.id = "ikg-flex-insight";
-      balanceEl.parentNode.insertAdjacentElement("afterend", insightEl);
-    }
+    if (!insightEl) { insightEl = document.createElement("div"); insightEl.id = "ikg-flex-insight"; balanceEl.parentNode.insertAdjacentElement("afterend", insightEl); }
 
     if (netBalance > 0) {
       balanceEl.innerHTML = `<span class="good">${formatDurFromDec(netBalance, true)}</span>`;
       const burnDays = Math.ceil(netBalance / 0.5);
-      insightEl.innerHTML = `
-                <div style="font-size:11px; color:var(--warn); background:var(--warn-bg); border:1px solid rgba(245, 158, 11, 0.3); padding:8px 10px; border-radius:6px; margin-top:12px; display:flex; gap:8px; align-items:flex-start; line-height:1.4;">
-                    <span style="font-size:14px;">💡</span>
-                    <span>Flex burns max <b>30m/day</b> to offset late arrivals.<br>Requires <b>~${burnDays} planned late-ins</b> (e.g. 09:30) to clear.</span>
-                </div>
-            `;
+      insightEl.innerHTML = `<div style="font-size:11px; color:var(--warn); background:var(--warn-bg); border:1px solid rgba(245, 158, 11, 0.3); padding:8px 10px; border-radius:6px; margin-top:12px; display:flex; gap:8px; align-items:flex-start; line-height:1.4;"><span style="font-size:14px;">💡</span><span>Flex burns max <b>30m/day</b> to offset late arrivals.<br>Requires <b>~${burnDays} planned late-ins</b> to clear.</span></div>`;
     } else if (netBalance < 0) {
       balanceEl.innerHTML = `<span class="bad">${formatDurFromDec(netBalance, true)}</span>`;
       insightEl.innerHTML = "";
@@ -2800,129 +2769,98 @@ async function renderCalendar() {
     }
   }
 
+  // --- DATA AUDIT FIX ---
   async function renderAudit(localCache) {
-            const targetY = currentAuditMonth ? parseInt(currentAuditMonth.split('-')[0], 10) : new Date().getFullYear();
-            try { await ensureHolidaysSecured(targetY); } catch(e) { return; }
-            currentAuditMonth = populateMonthSelect('ikg-audit-month', localCache, currentAuditMonth);
+    const targetY = currentAuditMonth ? parseInt(currentAuditMonth.split('-')[0], 10) : new Date().getFullYear();
+    try { await ensureHolidaysSecured(targetY); } catch(e) { return; }
+    currentAuditMonth = populateMonthSelect('ikg-audit-month', localCache, currentAuditMonth);
 
-    const allDates = Object.keys(localCache)
-      .filter((d) => localCache[d] && localCache[d].workHours)
-      .sort()
-      .reverse();
+    const dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
+    const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}");
+    const allDates = [...new Set([
+        ...Object.keys(localCache).filter((d) => localCache[d] && localCache[d].workHours),
+        ...Object.keys(dayNotes).filter((d) => dayNotes[d] && (dayNotes[d].isPTO || dayNotes[d].isPartialPTO)),
+        ...Object.keys(overrides).filter((d) => overrides[d] && (overrides[d].manualIn || overrides[d].manualOut || overrides[d].isIgnored))
+    ])].sort().reverse();
+
     let filteredDates = [];
-    const todayObj = new Date();
-    todayObj.setHours(0, 0, 0, 0);
-
-    // 🎯 FIX: Explicitly define todayStr inside renderAudit scope
-    const todayStr = `${todayObj.getFullYear()}-${String(todayObj.getMonth() + 1).padStart(2, "0")}-${String(todayObj.getDate()).padStart(2, "0")}`;
+    const todayObj = new Date(); todayObj.setHours(0, 0, 0, 0);
+    const pad = (n) => String(n).padStart(2, "0");
+    const todayStr = `${todayObj.getFullYear()}-${pad(todayObj.getMonth() + 1)}-${pad(todayObj.getDate())}`;
 
     if (currentAuditRange === "7D") {
-      let iterDate = new Date(todayObj);
-      let wDaysCount = 1;
+      let iterDate = new Date(todayObj); let wDaysCount = 1;
       if (iterDate.getDay() === 0 || iterDate.getDay() === 6) wDaysCount = 0;
-      while (wDaysCount < 7) {
-        iterDate.setDate(iterDate.getDate() - 1);
-        if (iterDate.getDay() !== 0 && iterDate.getDay() !== 6) wDaysCount++;
-      }
+      while (wDaysCount < 7) { iterDate.setDate(iterDate.getDate() - 1); if (iterDate.getDay() !== 0 && iterDate.getDay() !== 6) wDaysCount++; }
       filteredDates = allDates.filter((d) => new Date(d) >= iterDate);
     } else if (currentAuditRange === "30D") {
       const cutoff = new Date(todayObj.getTime() - 29 * 86400000);
       filteredDates = allDates.filter((d) => new Date(d) >= cutoff);
-    } else if (currentAuditRange === "MONTH") {
-      filteredDates = allDates.filter((d) => d.startsWith(currentAuditMonth));
-    } else if (currentAuditRange === "CUSTOM") {
+    } else if (currentAuditRange === "MONTH") { filteredDates = allDates.filter((d) => d.startsWith(currentAuditMonth)); } 
+    else if (currentAuditRange === "CUSTOM") {
       const rStart = auditCalInstance ? auditCalInstance.rangeStart : null;
       const rEnd = auditCalInstance ? auditCalInstance.rangeEnd : null;
-      filteredDates = allDates.filter((d) => {
-        const cur = parseLocalDate(d);
-        if (rStart && cur < rStart) return false;
-        if (rEnd && cur > rEnd) return false;
-        return true;
-      });
-    } else if (currentAuditRange === "ALL") {
-      filteredDates = allDates;
-    }
+      filteredDates = allDates.filter((d) => { const cur = parseLocalDate(d); if (rStart && cur < rStart) return false; if (rEnd && cur > rEnd) return false; return true; });
+    } else if (currentAuditRange === "ALL") { filteredDates = allDates; }
 
     const tbody = document.getElementById("audit-table-body");
-    const dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
-    const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}");
-    const settings = getSettings();
-
-    if (!tbody) return;
-
-    let html = "";
-    
-    // 🎯 CLEAN DDD: Build snapshot once for the entire audit table
-    const snapshot = IKG_DataStore.buildSnapshot();
+    if (!tbody) return; let html = ""; const snapshot = IKG_DataStore.buildSnapshot();
 
     filteredDates.forEach((dateStr) => {
-      const record = snapshot.cache[dateStr];
-      if (record && record.startTime && record.endTime) {
-        
-        // Use the DataStore Context
-        const evalDay = evaluateDay(IKG_DataStore.getDayContext(dateStr, snapshot));
+      const evalDay = evaluateDay(IKG_DataStore.getDayContext(dateStr, snapshot));
 
+      if (evalDay.effStart || evalDay.actualHrs > 0 || evalDay.isIgnored || evalDay.ptoHrs > 0) {
         const isToday = dateStr === todayStr;
         const exactHrs = evalDay.actualHrs;
-
-        // 🎯 Flex deficit disregarded for ongoing today's shift
         const exactFlexHrs = isToday ? 0 : evalDay.flexHrs;
-        const flexStr =
-          exactFlexHrs === 0 ? "-" : formatDurFromDec(exactFlexHrs, true);
+        const flexStr = exactFlexHrs === 0 ? "-" : formatDurFromDec(exactFlexHrs, true);
 
-        const startDisplay = evalDay.effStart
-          ? formatTime(evalDay.effStart)
-          : formatTime(record.startTime);
-        const endDisplay = evalDay.effEnd
-          ? formatTime(evalDay.effEnd)
-          : formatTime(record.endTime);
+        const startDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : "--:--";
+        const endDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : "--:--";
 
         let reasonHtml = evalDay.isPartialPTO ? `<div style="font-size:11px; color:var(--pto); font-weight:600; margin-top:4px;">inc. +${evalDay.ptoHrs}h ${evalDay.ptoType}</div>` : '';
-                if (evalDay.isSpoofed) reasonHtml += `<div style="font-size:10px; color:var(--warn); margin-top:4px;">(Manual Override)</div>`;
-                if (evalDay.isPublicHoliday) reasonHtml += `<div style="font-size:10px; color:var(--primary); margin-top:4px;">🎊 ${evalDay.holidayName}</div>`;
-        if (evalDay.isSpoofed)
-          reasonHtml += `<div style="font-size:10px; color:var(--warn); margin-top:4px;">(Manual Override)</div>`;
+        if (evalDay.isSpoofed) reasonHtml += `<div style="font-size:10px; color:var(--warn); margin-top:4px;">(Manual Override)</div>`;
+        if (evalDay.isPublicHoliday) reasonHtml += `<div style="font-size:10px; color:var(--primary); margin-top:4px;">🎊 ${evalDay.holidayName}</div>`;
+        if (evalDay.isWFH) reasonHtml += `<div style="font-size:10px; color:var(--primary); margin-top:4px;">🏠 Work From Home (GAS)</div>`;
 
         html += `
-                      <tr>
-                          <td>${dateStr}</td>
-                          <td>${startDisplay}</td>
-                          <td>${endDisplay}</td>
-                          <td>${formatDurFromDec(exactHrs, false)}</td>
-                          <td style="color:${evalDay.color}; font-weight:bold; line-height: 1.4;">
-                              ${flexStr}
-                              ${reasonHtml}
-                          </td>
-                      </tr>
-                  `;
+            <tr>
+                <td>${dateStr}</td>
+                <td>${startDisplay}</td>
+                <td>${endDisplay}</td>
+                <td>${formatDurFromDec(exactHrs, false)}</td>
+                <td style="color:${evalDay.color}; font-weight:bold; line-height: 1.4;">
+                    ${flexStr} ${reasonHtml}
+                </td>
+            </tr>`;
       }
     });
     tbody.innerHTML = html;
   }
 
- async function renderAnalytics(localCache) {
-            const targetY = currentStatsMonth ? parseInt(currentStatsMonth.split('-')[0], 10) : new Date().getFullYear();
-            try { await ensureHolidaysSecured(targetY); } catch(e) { return; }
-            currentStatsMonth = populateMonthSelect('ikg-stats-month', localCache, currentStatsMonth);
+ // --- ANALYTICS FIX ---
+  async function renderAnalytics(localCache) {
+    const targetY = currentStatsMonth ? parseInt(currentStatsMonth.split('-')[0], 10) : new Date().getFullYear();
+    try { await ensureHolidaysSecured(targetY); } catch(e) { return; }
+    currentStatsMonth = populateMonthSelect('ikg-stats-month', localCache, currentStatsMonth);
+    
     const dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
+    const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}");
 
     const allDates = [
       ...new Set([
-        ...Object.keys(localCache).filter(
-          (d) => localCache[d] && localCache[d].workHours,
-        ),
-        ...Object.keys(dayNotes).filter(
-          (d) => dayNotes[d] && (dayNotes[d].isPTO || dayNotes[d].isPartialPTO),
-        ),
-      ]),
+        ...Object.keys(localCache).filter((d) => localCache[d] && localCache[d].workHours),
+        ...Object.keys(dayNotes).filter((d) => dayNotes[d] && (dayNotes[d].isPTO || dayNotes[d].isPartialPTO)),
+        ...Object.keys(overrides).filter((d) => overrides[d] && (overrides[d].manualIn || overrides[d].manualOut || overrides[d].isIgnored))
+      ])
     ].sort();
 
     let filteredDates = [];
     const todayObj = new Date();
     todayObj.setHours(0, 0, 0, 0);
 
-    // 🎯 FIX: Explicitly define todayStr inside renderAnalytics scope
-    const todayStr = `${todayObj.getFullYear()}-${String(todayObj.getMonth() + 1).padStart(2, "0")}-${String(todayObj.getDate()).padStart(2, "0")}`;
+    const pad = (n) => String(n).padStart(2, "0");
+    const todayStr = `${todayObj.getFullYear()}-${pad(todayObj.getMonth() + 1)}-${pad(todayObj.getDate())}`;
 
     if (currentStatsRange === "7D") {
       let iterDate = new Date(todayObj);
@@ -2951,34 +2889,44 @@ async function renderCalendar() {
       filteredDates = allDates;
     }
 
-    const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}");
     const settings = getSettings();
-
     let inMsArr = [];
     let outMsArr = [];
     let shiftHrsArr = [];
-    let filterTotalDays = 0;
-    let filterTotalHours = 0;
-    let filterTargetHours = 0;
-    let filterFullPTODays = 0;
-    let filterPartialPTODays = 0;
+    
+    // 🎯 NEW: Added Day trackers for WFH and Office
+    let filterTotalDays = 0, filterTotalHours = 0, filterTargetHours = 0, filterFullPTODays = 0, filterPartialPTODays = 0;
+    let filterWFHHours = 0, filterOfficeHours = 0, filterPTOHours = 0;
+    let filterWFHDays = 0, filterOfficeDays = 0;
 
-    // 🎯 DDD Implementation
     const snapshot = IKG_DataStore.buildSnapshot();
 
     filteredDates.forEach((dateStr) => {
       const evalDay = evaluateDay(IKG_DataStore.getDayContext(dateStr, snapshot));
       const hrs = evalDay.actualHrs;
-
       const isToday = dateStr === todayStr;
 
       if (evalDay.isWorkingDay && !isToday) {
         filterTotalDays++;
         filterTotalHours = safeFloat(filterTotalHours + evalDay.effectiveHrs);
         filterTargetHours = safeFloat(filterTargetHours + evalDay.targetHrs);
+        filterPTOHours = safeFloat(filterPTOHours + evalDay.ptoHrs);
         
-        if (evalDay.isFullPTO) filterFullPTODays++;
-        else if (evalDay.isPartialPTO) filterPartialPTODays++;
+        if (evalDay.isFullPTO) {
+            filterFullPTODays++;
+        } else {
+            if (evalDay.isPartialPTO) filterPartialPTODays++;
+            
+            if (evalDay.actualHrs > 0) {
+                if (evalDay.isWFH) {
+                    filterWFHHours = safeFloat(filterWFHHours + evalDay.actualHrs);
+                    filterWFHDays++;
+                } else {
+                    filterOfficeHours = safeFloat(filterOfficeHours + evalDay.actualHrs);
+                    filterOfficeDays++;
+                }
+            }
+        }
       }
 
       if (!evalDay.isFullPTO && !evalDay.isIgnored && hrs > 0) {
@@ -3002,8 +2950,7 @@ async function renderCalendar() {
       }
     });
 
-    const getMean = (arr) =>
-      arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : NaN;
+    const getMean = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : NaN;
     const getMedian = (arr) => {
       if (!arr.length) return NaN;
       const s = [...arr].sort((a, b) => a - b);
@@ -3012,12 +2959,10 @@ async function renderCalendar() {
     };
     const getStdDev = (arr, mean) => {
       if (arr.length <= 1) return 0;
-      const variance =
-        arr.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / arr.length;
+      const variance = arr.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / arr.length;
       return Math.sqrt(variance);
     };
-    const getRange = (arr) =>
-      arr.length ? Math.max(...arr) - Math.min(...arr) : NaN;
+    const getRange = (arr) => arr.length ? Math.max(...arr) - Math.min(...arr) : NaN;
     const getMode = (arr) => {
       if (!arr.length) return NaN;
       const counts = {};
@@ -3036,41 +2981,15 @@ async function renderCalendar() {
 
     const meanShift = getMean(shiftHrsArr);
 
-    document.getElementById("habit-val-in-mean").innerText = msToTimeString(
-      getMean(inMsArr),
-    );
-    document.getElementById("habit-val-in-med").innerText = msToTimeString(
-      getMedian(inMsArr),
-    );
-    document.getElementById("habit-val-out-mean").innerText = msToTimeString(
-      getMean(outMsArr),
-    );
-    document.getElementById("habit-val-out-med").innerText = msToTimeString(
-      getMedian(outMsArr),
-    );
-    document.getElementById("habit-val-hrs-mean").innerText = isNaN(meanShift)
-      ? "--"
-      : formatDurFromDec(meanShift, false);
-    document.getElementById("habit-val-hrs-med").innerText = isNaN(
-      getMedian(shiftHrsArr),
-    )
-      ? "--"
-      : formatDurFromDec(getMedian(shiftHrsArr), false);
-    document.getElementById("habit-val-hrs-mode").innerText = isNaN(
-      getMode(shiftHrsArr),
-    )
-      ? "--"
-      : `~${getMode(shiftHrsArr).toFixed(1)}h`;
-    document.getElementById("habit-val-hrs-std").innerText = isNaN(
-      getStdDev(shiftHrsArr, meanShift),
-    )
-      ? "--"
-      : `±${formatDurFromDec(getStdDev(shiftHrsArr, meanShift), false)}`;
-    document.getElementById("habit-val-hrs-range").innerText = isNaN(
-      getRange(shiftHrsArr),
-    )
-      ? "--"
-      : formatDurFromDec(getRange(shiftHrsArr), false);
+    document.getElementById("habit-val-in-mean").innerText = msToTimeString(getMean(inMsArr));
+    document.getElementById("habit-val-in-med").innerText = msToTimeString(getMedian(inMsArr));
+    document.getElementById("habit-val-out-mean").innerText = msToTimeString(getMean(outMsArr));
+    document.getElementById("habit-val-out-med").innerText = msToTimeString(getMedian(outMsArr));
+    document.getElementById("habit-val-hrs-mean").innerText = isNaN(meanShift) ? "--" : formatDurFromDec(meanShift, false);
+    document.getElementById("habit-val-hrs-med").innerText = isNaN(getMedian(shiftHrsArr)) ? "--" : formatDurFromDec(getMedian(shiftHrsArr), false);
+    document.getElementById("habit-val-hrs-mode").innerText = isNaN(getMode(shiftHrsArr)) ? "--" : `~${getMode(shiftHrsArr).toFixed(1)}h`;
+    document.getElementById("habit-val-hrs-std").innerText = isNaN(getStdDev(shiftHrsArr, meanShift)) ? "--" : `±${formatDurFromDec(getStdDev(shiftHrsArr, meanShift), false)}`;
+    document.getElementById("habit-val-hrs-range").innerText = isNaN(getRange(shiftHrsArr)) ? "--" : formatDurFromDec(getRange(shiftHrsArr), false);
 
     filterTargetHours = safeFloat(filterTotalDays * 9.0);
 
@@ -3082,28 +3001,44 @@ async function renderCalendar() {
       ALL: "Lifetime System Stats",
     };
     const summaryTitle = document.getElementById("stats-summary-title");
-    if (summaryTitle)
-      summaryTitle.innerText = titleMap[currentStatsRange] || "System Stats";
+    if (summaryTitle) summaryTitle.innerText = titleMap[currentStatsRange] || "System Stats";
 
-    let filterDaysHtml = filterTotalDays;
-    if (filterFullPTODays > 0 || filterPartialPTODays > 0) {
-        let ptoTxt = [];
-        if (filterFullPTODays > 0) ptoTxt.push(`${filterFullPTODays} Full`);
-        if (filterPartialPTODays > 0) ptoTxt.push(`${filterPartialPTODays} Part`);
-        filterDaysHtml = `${filterTotalDays} <span class="ikg-fast-tt tt-right no-dot" data-title="PTO is counted towards effective working days." style="font-size:11px; color:var(--pto); font-weight:700; margin-left:6px; cursor:help;">(${ptoTxt.join(', ')} PTO)</span>`;
+    // 🎯 NEW: Sub-render arrays for Analytics Explicit Breakdown
+    let filterSubDays = [];
+    if (filterOfficeDays > 0) filterSubDays.push(`🏢 ${filterOfficeDays}`);
+    if (filterWFHDays > 0) filterSubDays.push(`🏠 ${filterWFHDays}`);
+    let filterPtoTxt = [];
+    if (filterFullPTODays > 0) filterPtoTxt.push(`${filterFullPTODays} Full`);
+    if (filterPartialPTODays > 0) filterPtoTxt.push(`${filterPartialPTODays} Part`);
+    if (filterPtoTxt.length > 0) filterSubDays.push(`🏝️ ${filterPtoTxt.join(', ')}`);
+
+    // 🎯 Use flex-column to force strict rightward alignment
+    let filterDaysHtml = `<div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;"><div style="white-space:nowrap;">${filterTotalDays}</div>`;
+    if (filterSubDays.length > 0) {
+        filterDaysHtml += `<div style="font-size:10px; color:var(--text-muted); font-weight:500; text-align:right;">${filterSubDays.join(' | ')}</div>`;
+    }
+    filterDaysHtml += `</div>`;
+
+    const allDaysEl = document.getElementById("all-val-days");
+    allDaysEl.innerHTML = filterDaysHtml;
+    if (allDaysEl.parentElement) {
+        allDaysEl.parentElement.style.alignItems = "flex-start"; // Align to top
+        allDaysEl.parentElement.style.gap = "12px"; // Prevent text collision
+    }
+    
+    const allActualEl = document.getElementById("all-val-hours");
+    allActualEl.innerHTML = `
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+            <div style="white-space:nowrap;">${formatDurFromDec(filterTotalHours, false)}</div>
+            <div style="font-size:10px; color:var(--text-muted); font-weight:500; text-align:right;">🏢 ${formatDurFromDec(filterOfficeHours, false)} | 🏠 ${formatDurFromDec(filterWFHHours, false)} | 🏝️ ${formatDurFromDec(filterPTOHours, false)}</div>
+        </div>`;
+    if (allActualEl.parentElement) {
+        allActualEl.parentElement.style.alignItems = "flex-start";
+        allActualEl.parentElement.style.gap = "12px";
     }
 
-    document.getElementById("all-val-days").innerHTML = filterDaysHtml;
-    document.getElementById("all-val-hours").innerText = formatDurFromDec(
-      filterTotalHours,
-      false,
-    );
-    document.getElementById("all-val-target").innerText = formatDurFromDec(
-      filterTargetHours,
-      false,
-    );
-    document.getElementById("all-val-first").innerText =
-      filteredDates.length > 0 ? filteredDates[0] : "--";
+    document.getElementById("all-val-target").innerText = formatDurFromDec(filterTargetHours, false);
+    document.getElementById("all-val-first").innerText = filteredDates.length > 0 ? filteredDates[0] : "--";
 
     const canvasContainer = document.querySelector(".ikg-canvas-container");
     const heatmapWrapper = document.getElementById("ikg-heatmap-wrapper");
@@ -3150,14 +3085,9 @@ async function renderCalendar() {
               isNewMonth = true;
               monthName = curr.toLocaleString("default", { month: "short" });
             }
-            const rec = localCache[dStr];
-            const note = dayNotes[dStr];
-            // 🎯 CLEAN DDD: Use the DataStore snapshot
+            
             const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, snapshot));
-
-            const shortPto = evalDay.ptoType
-              ? evalDay.ptoType.split(" - ")[0]
-              : "PTO";
+            const shortPto = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
 
             let color = "var(--bg-elevated)";
             let title = dStr;
@@ -3191,10 +3121,10 @@ async function renderCalendar() {
             }
 
             heatmapGrid.innerHTML += `
-                                  <div class="ikg-heat-sq" style="background:${color}; ${pointerEvent}" data-date="${dStr}" data-jump="${dStr}">
-                                      <div class="heat-date">${curr.getDate()}</div>
-                                      <div>${innerTxt}</div>
-                                  </div>`;
+              <div class="ikg-heat-sq" style="background:${color}; ${pointerEvent}" data-date="${dStr}" data-jump="${dStr}">
+                  <div class="heat-date">${curr.getDate()}</div>
+                  <div>${innerTxt}</div>
+              </div>`;
             curr.setDate(curr.getDate() + 1);
           }
 
@@ -3214,24 +3144,22 @@ async function renderCalendar() {
       filteredDates.forEach((dStr) => {
         const d = new Date(dStr);
         const isDense = filteredDates.length > 60;
-        
-        // 🎯 CLEAN DDD: Use the DataStore snapshot
         const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, snapshot));
 
-        // 🎯 STRICT 1:1 PUSH: Labels and Data must stay permanently locked to the same index
         labels.push(
           isDense
             ? `${d.getMonth() + 1}/${d.getDate()}`
-            : `${d.toLocaleString("default", { month: "short" })} ${d.getDate()}`,
+            : `${d.toLocaleString("default", { month: "short" })} ${d.getDate()}`
         );
 
         dataItems.push({
           dateStr: dStr,
           val: evalDay.actualHrs,
           pto: evalDay.ptoHrs,
-          color: evalDay.chartColor, // compiles to dark grey var(--border) if ignored
+          color: evalDay.chartColor,
           isSpoofed: evalDay.isSpoofed,
-          isIgnored: evalDay.isIgnored, // 🎯 Pass ignored flag to the canvas renderer
+          isIgnored: evalDay.isIgnored,
+          isWFH: evalDay.isWFH,
           ptoType: evalDay.ptoType,
         });
       });
@@ -4371,20 +4299,30 @@ async function renderCalendar() {
       }
     }, 500);
 
-    // 🎯 THE RANGE PROTOCOL IMPLEMENTATION
+    // 🎯 HIGH-SPEED WFH SYNC WITH REAL-TIME PROGRESS TRACKER & SHIFT-CLICK FORCE RESCAN
     document
       .getElementById("ikg-btn-fetch")
-      .addEventListener("click", async () => {
+      .addEventListener("click", async (e) => {
         IkgLog.info("Sync Triggered via The Range Protocol.");
         const btn = document.getElementById("ikg-btn-fetch");
         btn.disabled = true;
         isFetchingData = true;
+
+        // 🎯 Detect Shift-Click to Force Full WFH Historical Rescan
+        const isForceRescan = e && e.shiftKey;
 
         try {
           let localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
           const dayNotes = JSON.parse(
             localStorage.getItem(DAY_NOTES_KEY) || "{}",
           );
+
+          if (isForceRescan) {
+            IkgLog.warn("⚡ SHIFT-CLICK DETECTED: Clearing WFH cache flags & forcing full rescan back to July 1, 2026!");
+            Object.keys(localCache).forEach(k => {
+              if (localCache[k]) delete localCache[k].gasSynced;
+            });
+          }
 
           const todayReal = new Date();
           const todayStr = toYMD(todayReal);
@@ -4515,7 +4453,84 @@ async function renderCalendar() {
             await Promise.all(fetchTasks);
           }
 
-          // 1. Release the main UI instantly for fast interaction
+          // 🎯 GAS CONCURRENT SYNC WITH ATOMIC REAL-TIME PROGRESS TRACKER
+          const gasData = await ensureGasToken();
+          if (gasData && gasData.token) {
+              const syncDaysCount = getSettings().syncDays || 7;
+              const limitDate = new Date(2026, 6, 1); // July 1, 2026
+              
+              const forceDates = [];
+              let iterDateGas = new Date(todayReal);
+              for(let i=0; i <= syncDaysCount; i++) {
+                  forceDates.push(toYMD(iterDateGas));
+                  iterDateGas.setDate(iterDateGas.getDate() - 1);
+              }
+              
+              const deepDates = [];
+              let deepIter = new Date(todayReal);
+              while (deepIter >= limitDate) {
+                  const dStr = toYMD(deepIter);
+                  if (!forceDates.includes(dStr) && (!localCache[dStr] || !localCache[dStr].gasSynced || isForceRescan)) {
+                      deepDates.push(dStr);
+                  }
+                  deepIter.setDate(deepIter.getDate() - 1);
+              }
+              
+              const datesToCheck = [...new Set([...forceDates, ...deepDates])].sort().reverse();
+              const totalGas = datesToCheck.length;
+              let completedGas = 0;
+              let gasFoundCount = 0;
+
+              if (totalGas > 0) {
+                  IkgLog.info(`⚡ Fire-fetching ${totalGas} WFH dates...`);
+                  updateHeaderStatus(`Syncing WFH... (0/${totalGas})`, "var(--primary)");
+
+                  // Chunking into batches of 10 to balance Speed vs Network Limits
+                  const chunkSize = 10;
+                  for (let i = 0; i < totalGas; i += chunkSize) {
+                      const chunk = datesToCheck.slice(i, i + chunkSize);
+                      
+                      await Promise.all(chunk.map(async (dStr) => {
+                          const gasRecords = await fetchGasRecords(dStr, gasData);
+                          completedGas++;
+                          
+                          // 🎯 REAL-TIME UI TRACKER
+                          updateHeaderStatus(`Syncing WFH... (${completedGas}/${totalGas})`, "var(--primary)");
+
+                          if (!localCache[dStr]) localCache[dStr] = {};
+                          localCache[dStr].gasSynced = true;
+
+                          if (gasRecords && gasRecords.length > 0) {
+                              let cIn = null, cOut = null;
+                              
+                              gasRecords.forEach(r => {
+                                  if (r.type === "Clock In") { if (!cIn || r.time < cIn) cIn = r.time; }
+                                  else if (r.type === "Clock Out") { if (!cOut || r.time > cOut) cOut = r.time; }
+                              });
+                              
+                              if (cIn || cOut) {
+                                  const [y, m, d] = dStr.split('-');
+                                  if (cIn) localCache[dStr].startTime = new Date(y, m - 1, d, ...cIn.split(':')).getTime();
+                                  if (cOut) localCache[dStr].endTime = new Date(y, m - 1, d, ...cOut.split(':')).getTime();
+                                  
+                                  if (localCache[dStr].startTime && localCache[dStr].endTime) {
+                                      localCache[dStr].workHours = (localCache[dStr].endTime - localCache[dStr].startTime) / 3600000;
+                                  }
+                                  localCache[dStr].isWFH = true;
+                                  gasFoundCount++;
+                                  
+                                  IkgLog.info(`🏠 WFH Match Found! [${dStr}]: IN ${cIn || '--'} | OUT ${cOut || '--'}`);
+                              }
+                          }
+                      }));
+                  }
+                  
+                  IkgLog.info(`✅ WFH Sync Finished! (${gasFoundCount} records tagged out of ${totalGas} dates scanned)`);
+              }
+          } else {
+              IkgLog.warn("Skipping GAS Sync: Failed to obtain token from background tab.");
+          }
+
           localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
 
           updateHeaderStatus("Syncing Deel PTO...", "var(--warn)");
@@ -4523,7 +4538,6 @@ async function renderCalendar() {
           if (activeTab === "stats") renderAnalytics(localCache);
           if (activeTab === "audit") renderAudit(localCache);
 
-          // 2. Fetch Deel (Awaited safely within the try block)
           const deelPto = await fetchAndParseDeelPTO();
           if (deelPto && Object.keys(deelPto.ptoCalendar).length > 0) {
             Object.keys(deelPto.ptoCalendar).forEach((dateStr) => {
@@ -4546,7 +4560,6 @@ async function renderCalendar() {
             if (activeTab === "audit") renderAudit(localCache);
           }
 
-          // Finalize Cache Aggregates
           globalTotalDays = 0;
           globalTotalHours = 0;
           let earliestDate = "9999-99-99";
@@ -4586,11 +4599,9 @@ async function renderCalendar() {
 
           updateHeaderStatus("✅ Synced", "var(--success)");
         } catch (err) {
-          // 🎯 FIX 2: Catch any critical failure and alert the logs
           IkgLog.error("Critical Sync Error", err);
           updateHeaderStatus("❌ Sync Error", "var(--danger)");
         } finally {
-          // 🎯 FIX 3: GUARANTEED TO UNLOCK THE BUTTON
           btn.disabled = false;
           isFetchingData = false;
         }
