@@ -1,7 +1,7 @@
     // ==UserScript==
-    // @name         [7.116] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.117] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.116
+    // @version      7.117
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -419,7 +419,7 @@
           soundType: "pro_fkj",
           mp3Name: "",
           snoozeMins: 5,
-          useFlexDef: false,
+          useFlexDef: true,
           triggers: [-0.5, 0],
           triggerUnit: "m",
           snoozeUnit: "m",
@@ -4657,7 +4657,7 @@
             };
 
             // =========================================================================
-            // 🎯 TASK 2: Smart WFH Sync (Missing Days Clamped to Current/Prev Month)
+            // 🎯 TASK 2: Smart WFH Sync (Fires AFTER AWS & PTO populate cache)
             // =========================================================================
             const runWfhSync = async () => {
               syncStatus.wfh = "🔄";
@@ -4685,7 +4685,7 @@
               const targetDates = [];
 
               if (isForceRescan || !isWfhInitialized) {
-                IkgLog.info("First WFH sync detected. Target: 1 month of Wednesdays...");
+                IkgLog.info("First WFH sync detected. Target: Wednesdays in past 30 days...");
                 let iterWed = new Date(currentWed);
                 const cutoff = new Date(todayReal.getTime() - 30 * 86400000);
 
@@ -4704,7 +4704,8 @@
                 targetDates.push(toYMD(lastWed));
               }
 
-              // Clamp missing day checks strictly to start of previous month
+              // 🎯 READ FRESH SNAPSHOT: AWS and Deel have completed, so localCache & dayNotes are populated!
+              const freshNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
               const missingDates = [];
               let checkIter = new Date(todayReal);
               const searchCutoff = new Date(todayReal.getFullYear(), todayReal.getMonth() - 1, 1);
@@ -4716,10 +4717,11 @@
 
                 if (dayOfWeek !== 0 && dayOfWeek !== 6 && !holidays[dStr] && dStr < todayStr) {
                   const record = localCache[dStr];
-                  const note = dayNotes[dStr];
+                  const note = freshNotes[dStr];
                   const hasPunches = record && (record.startTime || record.endTime || record.workHours > 0);
                   const hasPto = note && (note.isPTO || note.isPartialPTO || note.deductedHours > 0);
 
+                  // Only query GAS if the day TRULY has no punches AND no PTO
                   if (!hasPunches && !hasPto && (!record || !record.gasSynced || isForceRescan)) {
                     missingDates.push(dStr);
                   }
@@ -4734,12 +4736,12 @@
               if (datesToCheck.length === 0) {
                 syncStatus.wfh = "✅";
                 updateSyncProgressUI();
-                IkgLog.info("✅ WFH Data up-to-date.");
+                IkgLog.info("✅ WFH Data up-to-date. No missing dates to check.");
                 localStorage.setItem(INIT_FLAG_KEY, "true");
                 return;
               }
 
-              IkgLog.info(`⚡ Parallel-fetching WFH for ${datesToCheck.length} dates...`);
+              IkgLog.info(`⚡ Fetching WFH for ${datesToCheck.length} target dates:`, datesToCheck);
 
               let completedCount = 0;
               let wfhMatches = 0;
@@ -4830,7 +4832,11 @@
 
             updateSyncProgressUI();
 
-            await Promise.all([runAttendanceSync(), runWfhSync(), runDeelSync()]);
+            // 🎯 STEP 1: Fetch AWS & Deel PTO in parallel first
+            await Promise.all([runAttendanceSync(), runDeelSync()]);
+
+            // 🎯 STEP 2: Now run WFH scanner with accurate cache knowledge of office & PTO days
+            await runWfhSync();
 
             localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
 
