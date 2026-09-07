@@ -1,7 +1,7 @@
     // ==UserScript==
-    // @name         [7.115] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.116] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.115
+    // @version      7.116
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -542,26 +542,27 @@
       window.ikgScheduledTargetMs = window.ikgScheduledTargetMs || null;
       window.ikgTestAlarmTimeout = window.ikgTestAlarmTimeout || null;
 
-      const updateHeaderStatus = (msg, colorVar = "var(--text-muted)") => {
-        const statusEl = document.getElementById("ikg-header-status");
-        if (statusEl) {
-          statusEl.innerHTML = msg;
-          statusEl.style.color = colorVar;
-          if (colorVar === "var(--success)") {
-            statusEl.style.borderColor = "var(--success)";
-            statusEl.style.background = "var(--success-bg)";
-          } else if (colorVar === "var(--primary)") {
-            statusEl.style.borderColor = "var(--primary)";
-            statusEl.style.background = "var(--primary-glow)";
-          } else if (colorVar === "var(--warn)") {
-            statusEl.style.borderColor = "var(--warn)";
-            statusEl.style.background = "var(--warn-bg)";
-          } else {
-            statusEl.style.borderColor = "var(--border)";
-            statusEl.style.background = "var(--bg-elevated)";
-          }
+      // 🎯 ENHANCED STATUS BADGE RENDERER
+    const updateHeaderStatus = (msg, colorVar = "var(--text-muted)") => {
+      const statusEl = document.getElementById("ikg-header-status");
+      if (statusEl) {
+        statusEl.innerHTML = msg;
+        statusEl.style.color = colorVar;
+        if (colorVar === "var(--success)") {
+          statusEl.style.borderColor = "var(--success)";
+          statusEl.style.background = "var(--success-bg)";
+        } else if (colorVar === "var(--primary)") {
+          statusEl.style.borderColor = "var(--primary)";
+          statusEl.style.background = "var(--primary-glow)";
+        } else if (colorVar === "var(--warn)") {
+          statusEl.style.borderColor = "var(--warn)";
+          statusEl.style.background = "var(--warn-bg)";
+        } else {
+          statusEl.style.borderColor = "var(--border)";
+          statusEl.style.background = "var(--bg-elevated)";
         }
-      };
+      }
+    };
 
       const AlarmSystem = {
         overlay: null,
@@ -2065,12 +2066,44 @@
             .audit-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--text-main); font-family: monospace; font-size: 12px; }
             .audit-table tr:hover { background: var(--bg-elevated); }
 
-            .ikg-fast-tt { position: relative; cursor: help; border-bottom: 1px dotted rgba(148, 163, 184, 0.5); }
-            .ikg-fast-tt.no-dot { border-bottom: none; }
-            .ikg-fast-tt::after { content: attr(data-title); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%) translateY(4px); width: max-content; max-width: 220px; background: var(--bg-elevated); color: var(--text-main); font-family: var(--font-family); font-size: 11px; font-weight: 500; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); box-shadow: 0 8px 24px rgba(0,0,0,0.8); opacity: 0; visibility: hidden; transition: opacity 0.1s ease, transform 0.1s ease; z-index: 1000; pointer-events: none; white-space: normal; line-height: 1.4; text-align: center; margin-bottom: 6px; }
-            .ikg-fast-tt:hover::after { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); }
-            .ikg-fast-tt.tt-right::after { left: auto; right: 0; transform: translateX(0) translateY(4px); }
-            .ikg-fast-tt.tt-right:hover::after { transform: translateX(0) translateY(0); }
+            .ikg-fast-tt { position: relative; cursor: help; border-bottom: 1px dotted rgba(148, 163, 184, 0.5); display: inline-block; }
+          .ikg-fast-tt.no-dot { border-bottom: none; }
+          .ikg-fast-tt::after { 
+              content: attr(data-title); 
+              position: absolute; 
+              bottom: 125%; 
+              left: 50%; 
+              transform: translateX(-50%) translateY(4px); 
+              width: max-content; 
+              max-width: 280px; 
+              background: var(--bg-elevated); 
+              color: var(--text-main); 
+              font-family: var(--font-family); 
+              font-size: 12px; 
+              font-weight: 600; 
+              padding: 8px 12px; 
+              border-radius: 8px; 
+              border: 1px solid var(--border); 
+              box-shadow: 0 12px 28px rgba(0,0,0,0.8); 
+              opacity: 0; 
+              visibility: hidden; 
+              /* 🎯 INSTANT 0s DELAY HOVER ENGINE */
+              transition: opacity 0.05s linear 0s, transform 0.05s linear 0s;
+              will-change: opacity, transform;
+              z-index: 100001; 
+              pointer-events: none; 
+              white-space: normal; 
+              line-height: 1.4; 
+              text-align: center; 
+              margin-bottom: 6px; 
+          }
+          .ikg-fast-tt:hover::after { 
+              opacity: 1; 
+              visibility: visible; 
+              transform: translateX(-50%) translateY(0); 
+          }
+          .ikg-fast-tt.tt-right::after { left: auto; right: 0; transform: translateX(0) translateY(4px); }
+          .ikg-fast-tt.tt-right:hover::after { transform: translateX(0) translateY(0); }
 
             span[title] { border-bottom: 1px dotted rgba(148, 163, 184, 0.5); cursor: help; }
         `);
@@ -2650,50 +2683,52 @@
           } else if (evalDay.isFullPTO) {
               cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
           } else if (evalDay.effStart || evalDay.effEnd || evalDay.isSpoofed || evalDay.actualHrs > 0) {
-              let pendingIcon = ""; 
-              let timesClass = "";
+            let pendingIcon = ""; 
+            let timesClass = "";
 
-              const inTimeDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : (record?.startTime ? formatTime(record.startTime) : "--:--");
-              let outTimeDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : (record?.endTime ? formatTime(record.endTime) : "--:--");
+            const inTimeDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : (record?.startTime ? formatTime(record.startTime) : "--:--");
+            let outTimeDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : (record?.endTime ? formatTime(record.endTime) : "--:--");
 
-              if (evalDay.status === "pending") {
-                  timesClass = "pending"; 
-                  pendingIcon = ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>'; 
-                  outTimeDisplay = "Pending";
-              }
+            if (evalDay.status === "pending") {
+                timesClass = "pending"; 
+                pendingIcon = ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>'; 
+                outTimeDisplay = "Pending";
+            }
 
-              if (evalDay.isWFH) {
-                  partialPill += `<div class="ikg-fast-tt no-dot" data-title="Work From Home" style="font-size:9px; background:var(--primary); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; box-shadow: 0 2px 4px rgba(59,130,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;">🏠 WFH</div>`;
-              }
+            if (evalDay.isWFH) {
+                partialPill += `<div class="ikg-fast-tt no-dot" data-title="Work From Home" style="font-size:9px; background:var(--primary); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; box-shadow: 0 2px 4px rgba(59,130,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;">🏠 WFH</div>`;
+            }
 
-              const shortPtoName = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
-              if (evalDay.isPartialPTO) {
-                  partialPill += `<div class="ikg-fast-tt no-dot" data-title="${evalDay.ptoType}" style="font-size:9px; background:var(--pto); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70px; box-shadow: 0 2px 4px rgba(139,92,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;">+${evalDay.ptoHrs}h ${shortPtoName}</div>`;
-              }
+            const shortPtoName = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
+            
+            // 🎯 FIXED: Removed 'overflow: hidden' from outer div so CSS ::after tooltip is not clipped
+            if (evalDay.isPartialPTO) {
+                const fullPtoTitle = `${evalDay.ptoType} (+${evalDay.ptoHrs}h)`;
+                partialPill += `<div class="ikg-fast-tt no-dot" data-title="${fullPtoTitle}" style="font-size:9px; background:var(--pto); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; box-shadow: 0 2px 4px rgba(139,92,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;"><span style="display:inline-block; max-width:65px; overflow:hidden; text-overflow:ellipsis; vertical-align:bottom;">+${evalDay.ptoHrs}h ${shortPtoName}</span></div>`;
+            }
 
-              // 🎯 NEW: GRACE & ACTIVE SHIFT BADGES
-              let graceBadge = "";
-              if (evalDay.status === "yesterday-grace") {
-                  graceBadge = `<span class="ikg-fast-tt" data-title="System checkout syncs lag by 1 day. Hour thresholds remain unpenalized until 3:00 PM today." style="font-size:9px; background:rgba(148,163,184,0.15); border:1px solid rgba(148,163,184,0.3); color:var(--text-muted); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⏳ LAG GRACE</span>`;
-              } else if (evalDay.status === "today-active") {
-                  graceBadge = `<span class="ikg-fast-tt" data-title="Shift actively in progress today." style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⏱️ IN PROGRESS</span>`;
-              }
+            let graceBadge = "";
+            if (evalDay.status === "yesterday-grace") {
+                graceBadge = `<span class="ikg-fast-tt no-dot" data-title="System checkout syncs lag by 1 day. Hour thresholds remain unpenalized until 3:00 PM today." style="font-size:9px; background:rgba(148,163,184,0.15); border:1px solid rgba(148,163,184,0.3); color:var(--text-muted); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⏳ LAG GRACE</span>`;
+            } else if (evalDay.status === "today-active") {
+                graceBadge = `<span class="ikg-fast-tt no-dot" data-title="Shift actively in progress today." style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⏱️ IN PROGRESS</span>`;
+            }
 
-              const ignoredBadge = evalDay.isIgnored ? `<span class="ikg-fast-tt" data-title="Omitted from System Totals" style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⚠️ IGNORED</span>` : '';
-              const flexTooltip = evalDay.flexHrs >= 0 ? `+${formatDurFromDec(evalDay.flexHrs, false)}` : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
-              let activeShiftStyles = isToday && evalDay.status !== "pass" && evalDay.status !== "partial-pto-pass" ? "background:var(--primary-glow); border:1px solid var(--border);" : "";
+            const ignoredBadge = evalDay.isIgnored ? `<span class="ikg-fast-tt no-dot" data-title="Omitted from System Totals" style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⚠️ IGNORED</span>` : '';
+            const flexTooltip = evalDay.flexHrs >= 0 ? `+${formatDurFromDec(evalDay.flexHrs, false)}` : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
+            let activeShiftStyles = isToday && evalDay.status !== "pass" && evalDay.status !== "partial-pto-pass" ? "background:var(--primary-glow); border:1px solid var(--border);" : "";
 
-              cellContent = `
-                  <div class="ikg-cell-data">
-                      <div class="ikg-total-hrs ikg-fast-tt" data-title="${flexTooltip}" style="color:${evalDay.color}; width:fit-content; cursor:help; margin-bottom:4px; min-height:22px; display:flex; align-items:center;">
-                          ${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"} ${pendingIcon} ${graceBadge} ${ignoredBadge}
-                      </div>
-                      <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
-                          <div>IN <span>${inTimeDisplay}</span></div>
-                          <div>OUT <span>${outTimeDisplay}</span></div>
-                      </div>
-                  </div>`;
-          }
+            cellContent = `
+                <div class="ikg-cell-data">
+                    <div class="ikg-total-hrs" style="color:${evalDay.color}; width:fit-content; margin-bottom:4px; min-height:22px; display:flex; align-items:center;">
+                        <span class="ikg-fast-tt no-dot" data-title="${flexTooltip}">${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"}</span> ${pendingIcon} ${graceBadge} ${ignoredBadge}
+                    </div>
+                    <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
+                        <div>IN <span>${inTimeDisplay}</span></div>
+                        <div>OUT <span>${outTimeDisplay}</span></div>
+                    </div>
+                </div>`;
+        }
 
           htmlBuffer += `
               <div class="ikg-day ${isToday ? "today" : ""}" data-date="${dateStr}">
@@ -4477,321 +4512,373 @@
           }
         }, 500);
 
-        document
-          .getElementById("ikg-btn-fetch")
-          .addEventListener("click", async (e) => {
-            IkgLog.info("Sync Triggered via High-Speed Parallel Protocol.");
-            const btn = document.getElementById("ikg-btn-fetch");
-            btn.disabled = true;
-            isFetchingData = true;
+        // 🎯 HIGH-SPEED PARALLEL SYNC WITH REAL-TIME SUB-TASK PROGRESS & OPTIMIZED CLAMPING
+      document
+        .getElementById("ikg-btn-fetch")
+        .addEventListener("click", async (e) => {
+          IkgLog.info("Sync Triggered via High-Speed Parallel Protocol.");
+          const btn = document.getElementById("ikg-btn-fetch");
+          btn.disabled = true;
+          isFetchingData = true;
 
-            const isForceRescan = e && e.shiftKey;
+          const isForceRescan = e && e.shiftKey;
 
-            try {
-              let localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
-              const dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
+          // Track sub-task status for UI rendering
+          const syncStatus = {
+            aws: "⏳",
+            wfh: "⏳",
+            deel: "⏳",
+          };
 
-              if (isForceRescan) {
-                IkgLog.warn("⚡ SHIFT-CLICK DETECTED: Clearing WFH cache flags.");
-                Object.keys(localCache).forEach((k) => {
-                  if (localCache[k]) delete localCache[k].gasSynced;
-                });
-              }
+          const updateSyncProgressUI = () => {
+            updateHeaderStatus(
+              `⚡ Syncing: AWS ${syncStatus.aws} | WFH ${syncStatus.wfh} | Deel ${syncStatus.deel}`,
+              "var(--primary)"
+            );
+          };
 
-              const todayReal = new Date();
-              const todayStr = toYMD(todayReal);
-              const tomorrowReal = new Date(todayReal);
-              tomorrowReal.setDate(tomorrowReal.getDate() + 1);
-              const tomorrowStr = toYMD(tomorrowReal);
+          try {
+            let localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
+            const dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
 
-              const runAttendanceSync = async () => {
-                const didFullSync = localStorage.getItem(SYNC_FLAG_KEY);
-                if (!didFullSync) {
-                  IkgLog.info("Executing 90-day chunked Deep Sync.");
-                  let endD = new Date(tomorrowReal);
-                  while (true) {
-                    let startD = new Date(endD.getTime() - 90 * 86400000);
-                    const endStr = toYMD(endD);
-                    const startStr = toYMD(startD);
+            if (isForceRescan) {
+              IkgLog.warn("⚡ SHIFT-CLICK DETECTED: Clearing WFH cache flags.");
+              Object.keys(localCache).forEach((k) => {
+                if (localCache[k]) delete localCache[k].gasSynced;
+              });
+            }
 
-                    try {
-                      const res = await window.fetch(
-                        `${API_BASE}/attendance/range?from=${startStr}&to=${endStr}`,
-                        { method: "GET", headers: { accept: "*/*", authorization: authToken } }
-                      );
-                      const data = await res.json();
-                      const records = data.records || [];
-                      fillCacheGaps(startStr, endStr, records, localCache);
+            const todayReal = new Date();
+            const todayStr = toYMD(todayReal);
+            const tomorrowReal = new Date(todayReal);
+            tomorrowReal.setDate(tomorrowReal.getDate() + 1);
+            const tomorrowStr = toYMD(tomorrowReal);
 
-                      if (records.length === 0) break;
-                      const earliestRecordDateStr = records.reduce((min, r) => {
-                        const rDate = r.date || r.punchDate || r.PK || "9999-99-99";
-                        return rDate < min ? rDate : min;
-                      }, "9999-99-99");
+            // Dynamic boundary: Current year start (e.g. 2026-01-01) for optimal speed
+            const SYNC_CUTOFF_STR = `${todayReal.getFullYear()}-01-01`;
 
-                      if (earliestRecordDateStr === "9999-99-99" || !earliestRecordDateStr) break;
-                      if ((new Date(earliestRecordDateStr) - startD) / 86400000 >= 30) break;
-                    } catch (err) {
-                      break;
-                    }
-                    endD = new Date(startD.getTime() - 86400000);
+            // =========================================================================
+            // 🎯 TASK 1: AWS Attendance Sync (Hard Clamped to 90-Day AWS TTL Limit)
+            // =========================================================================
+            const runAttendanceSync = async () => {
+              syncStatus.aws = "🔄";
+              updateSyncProgressUI();
+
+              const didFullSync = localStorage.getItem(SYNC_FLAG_KEY);
+              
+              // 🎯 AWS TTL LIMIT: AWS purges data older than 90 days (~June 10 for Sept 8)
+              const MAX_AWS_TTL_DATE = new Date(todayReal.getTime() - 90 * 86400000);
+              const MAX_AWS_TTL_STR = toYMD(MAX_AWS_TTL_DATE);
+
+              if (!didFullSync) {
+                IkgLog.info(`Executing TTL-bounded Deep Sync (Cutoff: ${MAX_AWS_TTL_STR})...`);
+                let endD = new Date(tomorrowReal);
+
+                while (true) {
+                  let startD = new Date(endD.getTime() - 90 * 86400000);
+                  let startStr = toYMD(startD);
+                  const endStr = toYMD(endD);
+
+                  // 🎯 Clamp to 90-day AWS TTL boundary to avoid dead HTTP calls
+                  if (startStr < MAX_AWS_TTL_STR) startStr = MAX_AWS_TTL_STR;
+
+                  try {
+                    const res = await window.fetch(
+                      `${API_BASE}/attendance/range?from=${startStr}&to=${endStr}`,
+                      { method: "GET", headers: { accept: "*/*", authorization: authToken } }
+                    );
+                    const data = await res.json();
+                    const records = data.records || [];
+                    fillCacheGaps(startStr, endStr, records, localCache);
+
+                    // Stop immediately if AWS returns no records or we've reached the 90-day TTL floor
+                    if (records.length === 0 || startStr <= MAX_AWS_TTL_STR) break;
+                  } catch (err) {
+                    break;
                   }
-                  localStorage.setItem(SYNC_FLAG_KEY, "true");
-                } else {
-                  const settings = getSettings();
-                  let iterDate = new Date(todayReal);
-                  let wDaysCount = 0;
-                  while (wDaysCount < (settings.syncDays || 7)) {
-                    iterDate.setDate(iterDate.getDate() - 1);
-                    if (iterDate.getDay() !== 0 && iterDate.getDay() !== 6) wDaysCount++;
-                  }
-                  const startXStr = toYMD(iterDate);
+                  endD = new Date(new Date(startStr).getTime() - 86400000);
+                  if (toYMD(endD) < MAX_AWS_TTL_STR) break;
+                }
+                localStorage.setItem(SYNC_FLAG_KEY, "true");
+              } else {
+                const settings = getSettings();
+                let iterDate = new Date(todayReal);
+                let wDaysCount = 0;
+                while (wDaysCount < (settings.syncDays || 7)) {
+                  iterDate.setDate(iterDate.getDate() - 1);
+                  if (iterDate.getDay() !== 0 && iterDate.getDay() !== 6) wDaysCount++;
+                }
+                let startXStr = toYMD(iterDate);
+                if (startXStr < MAX_AWS_TTL_STR) startXStr = MAX_AWS_TTL_STR;
 
-                  const fetchTasks = [
+                const fetchTasks = [
+                  window
+                    .fetch(`${API_BASE}/attendance/range?from=${startXStr}&to=${tomorrowStr}`, {
+                      method: "GET",
+                      headers: { accept: "*/*", authorization: authToken },
+                    })
+                    .then((res) => res.json())
+                    .then((data) => fillCacheGaps(startXStr, todayStr, data.records || [], localCache))
+                    .catch(() => {}),
+                ];
+
+                const viewPrefix = `${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`;
+                let vStartStr = `${viewPrefix}-01`;
+                if (vStartStr < MAX_AWS_TTL_STR) vStartStr = MAX_AWS_TTL_STR;
+
+                const vEndD = new Date(currentViewYear, currentViewMonth, 0);
+                vEndD.setDate(vEndD.getDate() + 1);
+                const vEndStr = toYMD(vEndD);
+
+                if (vStartStr < startXStr || vEndStr > todayStr) {
+                  fetchTasks.push(
                     window
-                      .fetch(`${API_BASE}/attendance/range?from=${startXStr}&to=${tomorrowStr}`, {
+                      .fetch(`${API_BASE}/attendance/range?from=${vStartStr}&to=${vEndStr}`, {
                         method: "GET",
                         headers: { accept: "*/*", authorization: authToken },
                       })
                       .then((res) => res.json())
-                      .then((data) => fillCacheGaps(startXStr, todayStr, data.records || [], localCache))
-                      .catch(() => {}),
-                  ];
-
-                  const viewPrefix = `${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`;
-                  const vStartStr = `${viewPrefix}-01`;
-                  const vEndD = new Date(currentViewYear, currentViewMonth, 0);
-                  vEndD.setDate(vEndD.getDate() + 1);
-                  const vEndStr = toYMD(vEndD);
-
-                  if (vStartStr < startXStr || vEndStr > todayStr) {
-                    fetchTasks.push(
-                      window
-                        .fetch(`${API_BASE}/attendance/range?from=${vStartStr}&to=${vEndStr}`, {
-                          method: "GET",
-                          headers: { accept: "*/*", authorization: authToken },
-                        })
-                        .then((res) => res.json())
-                        .then((data) => {
-                          const fillEndStr =
-                            currentViewYear === todayReal.getFullYear() && currentViewMonth === todayReal.getMonth() + 1
-                              ? todayStr
-                              : toYMD(new Date(currentViewYear, currentViewMonth, 0));
-                          fillCacheGaps(vStartStr, fillEndStr, data.records || [], localCache);
-                        })
-                        .catch(() => {})
-                    );
-                  }
-                  await Promise.all(fetchTasks);
-                }
-                IkgLog.info("✅ AWS Attendance Sync Complete.");
-              };
-
-              const runWfhSync = async () => {
-                const gasData = await ensureGasToken();
-                if (!gasData || !gasData.token) {
-                  IkgLog.warn("⚠️ Skipping WFH Sync: No GAS token.");
-                  return;
-                }
-
-                const INIT_FLAG_KEY = `IKG_WFH_INITIALIZED_${APP_VER}`;
-                const isWfhInitialized = localStorage.getItem(INIT_FLAG_KEY) === "true";
-
-                const getWednesday = (d) => {
-                  const date = new Date(d);
-                  const day = date.getDay();
-                  const diff = date.getDate() - day + (day === 0 ? -4 : 3);
-                  return new Date(date.setDate(diff));
-                };
-
-                const currentWed = getWednesday(todayReal);
-                const targetDates = [];
-
-                if (isForceRescan || !isWfhInitialized) {
-                  IkgLog.info("First WFH sync detected. Target: 1 month of Wednesdays...");
-                  let iterWed = new Date(currentWed);
-                  const cutoff = new Date(todayReal.getTime() - 30 * 86400000);
-
-                  while (iterWed >= cutoff) {
-                    if (iterWed <= todayReal) {
-                      targetDates.push(toYMD(iterWed));
-                    }
-                    iterWed.setDate(iterWed.getDate() - 7);
-                  }
-                } else {
-                  if (currentWed <= todayReal) {
-                    targetDates.push(toYMD(currentWed));
-                  }
-                  const lastWed = new Date(currentWed);
-                  lastWed.setDate(lastWed.getDate() - 7);
-                  targetDates.push(toYMD(lastWed));
-                }
-
-                const missingDates = [];
-                let checkIter = new Date(todayReal);
-                const thirtyDaysAgo = new Date(todayReal.getTime() - 30 * 86400000);
-                const holidays = JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${todayReal.getFullYear()}`) || "{}");
-
-                while (checkIter >= thirtyDaysAgo) {
-                  const dStr = toYMD(checkIter);
-                  const dayOfWeek = checkIter.getDay();
-
-                  if (dayOfWeek !== 0 && dayOfWeek !== 6 && !holidays[dStr] && dStr < todayStr) {
-                    const record = localCache[dStr];
-                    const note = dayNotes[dStr];
-                    const hasPunches = record && (record.startTime || record.endTime || record.workHours > 0);
-                    const hasPto = note && (note.isPTO || note.isPartialPTO || note.deductedHours > 0);
-
-                    if (!hasPunches && !hasPto && (!record || !record.gasSynced || isForceRescan)) {
-                      missingDates.push(dStr);
-                    }
-                  }
-                  checkIter.setDate(checkIter.getDate() - 1);
-                }
-
-                if (missingDates.length > 0) {
-                  IkgLog.info(`🔍 Detected ${missingDates.length} missing working days without punches/PTO. Adding to WFH check:`, missingDates);
-                }
-
-                const datesToCheck = [...new Set([...targetDates, ...missingDates])].filter(
-                  (dStr) => !localCache[dStr] || !localCache[dStr].gasSynced || isForceRescan
-                );
-
-                if (datesToCheck.length === 0) {
-                  IkgLog.info("✅ WFH Data up-to-date. No dates need sync.");
-                  localStorage.setItem(INIT_FLAG_KEY, "true");
-                  return;
-                }
-
-                IkgLog.info(`⚡ Parallel-fetching WFH for ${datesToCheck.length} dates: ${datesToCheck.join(", ")}`);
-
-                let wfhMatches = 0;
-                await Promise.all(
-                  datesToCheck.map(async (dStr) => {
-                    try {
-                      const gasRecords = await fetchGasRecords(dStr, gasData);
-                      if (!localCache[dStr]) localCache[dStr] = {};
-                      localCache[dStr].gasSynced = true;
-
-                      if (gasRecords && gasRecords.length > 0) {
-                        let cIn = null, cOut = null;
-                        gasRecords.forEach((r) => {
-                          if (r.type === "Clock In") {
-                            if (!cIn || r.time < cIn) cIn = r.time;
-                          } else if (r.type === "Clock Out") {
-                            if (!cOut || r.time > cOut) cOut = r.time;
-                          }
-                        });
-
-                        if (cIn || cOut) {
-                          const [y, m, d] = dStr.split("-");
-                          if (cIn) localCache[dStr].startTime = new Date(y, m - 1, d, ...cIn.split(":")).getTime();
-                          if (cOut) localCache[dStr].endTime = new Date(y, m - 1, d, ...cOut.split(":")).getTime();
-
-                          if (localCache[dStr].startTime && localCache[dStr].endTime) {
-                            localCache[dStr].workHours = (localCache[dStr].endTime - localCache[dStr].startTime) / 3600000;
-                          }
-                          localCache[dStr].isWFH = true;
-                          wfhMatches++;
-                        }
-                      }
-                    } catch (e) {
-                      IkgLog.error(`Error fetching WFH for ${dStr}:`, e);
-                    }
-                  })
-                );
-
-                localStorage.setItem(INIT_FLAG_KEY, "true");
-                IkgLog.info(`✅ WFH Sync Complete. Matches found: ${wfhMatches}/${datesToCheck.length}`);
-              };
-
-              const runDeelSync = async () => {
-                const deelPto = await fetchAndParseDeelPTO();
-                if (deelPto && deelPto.ptoCalendar && Object.keys(deelPto.ptoCalendar).length > 0) {
-                  const dates = Object.keys(deelPto.ptoCalendar).sort();
-                  let fullCount = 0;
-                  let partialCount = 0;
-                  let totalHoursInjected = 0;
-
-                  dates.forEach((dateStr) => {
-                    const ptoInfo = deelPto.ptoCalendar[dateStr];
-                    dayNotes[dateStr] = {
-                      isPTO: ptoInfo.isFullDay,
-                      isPartialPTO: !ptoInfo.isFullDay,
-                      source: "Deel",
-                      type: ptoInfo.type,
-                      deductedHours: ptoInfo.hours,
-                    };
-
-                    if (ptoInfo.isFullDay) fullCount++;
-                    else partialCount++;
-                    totalHoursInjected += ptoInfo.hours;
-                  });
-
-                  localStorage.setItem(DAY_NOTES_KEY, JSON.stringify(dayNotes));
-
-                  const startDate = dates[0];
-                  const endDate = dates[dates.length - 1];
-                  IkgLog.info(
-                    `✅ Deel PTO Sync Complete | Records: ${dates.length} (${fullCount} Full, ${partialCount} Partial) | Total: ${totalHoursInjected.toFixed(1)}h | Range: [${startDate} ~ ${endDate}]`,
-                    { dates, ptoCalendar: deelPto.ptoCalendar }
+                      .then((data) => {
+                        const fillEndStr =
+                          currentViewYear === todayReal.getFullYear() && currentViewMonth === todayReal.getMonth() + 1
+                            ? todayStr
+                            : toYMD(new Date(currentViewYear, currentViewMonth, 0));
+                        fillCacheGaps(vStartStr, fillEndStr, data.records || [], localCache);
+                      })
+                      .catch(() => {})
                   );
-                } else {
-                  IkgLog.info("✅ Deel PTO Sync Complete | No active/approved PTO records returned.");
                 }
+                await Promise.all(fetchTasks);
+              }
+
+              syncStatus.aws = "✅";
+              updateSyncProgressUI();
+              IkgLog.info("✅ AWS Attendance Sync Complete.");
+            };
+
+            // =========================================================================
+            // 🎯 TASK 2: Smart WFH Sync (Missing Days Clamped to Current/Prev Month)
+            // =========================================================================
+            const runWfhSync = async () => {
+              syncStatus.wfh = "🔄";
+              updateSyncProgressUI();
+
+              const gasData = await ensureGasToken();
+              if (!gasData || !gasData.token) {
+                IkgLog.warn("⚠️ Skipping WFH Sync: No GAS token.");
+                syncStatus.wfh = "⚠️";
+                updateSyncProgressUI();
+                return;
+              }
+
+              const INIT_FLAG_KEY = `IKG_WFH_INITIALIZED_${APP_VER}`;
+              const isWfhInitialized = localStorage.getItem(INIT_FLAG_KEY) === "true";
+
+              const getWednesday = (d) => {
+                const date = new Date(d);
+                const day = date.getDay();
+                const diff = date.getDate() - day + (day === 0 ? -4 : 3);
+                return new Date(date.setDate(diff));
               };
 
-              updateHeaderStatus("⚡ Parallel Syncing...", "var(--primary)");
+              const currentWed = getWednesday(todayReal);
+              const targetDates = [];
 
-              await Promise.all([runAttendanceSync(), runWfhSync(), runDeelSync()]);
+              if (isForceRescan || !isWfhInitialized) {
+                IkgLog.info("First WFH sync detected. Target: 1 month of Wednesdays...");
+                let iterWed = new Date(currentWed);
+                const cutoff = new Date(todayReal.getTime() - 30 * 86400000);
 
-              localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
-
-              renderCalendar();
-              if (activeTab === "stats") renderAnalytics(localCache);
-              if (activeTab === "audit") renderAudit(localCache);
-
-              setTimeout(() => {
-                globalTotalDays = 0;
-                globalTotalHours = 0;
-                let earliestDate = "9999-99-99";
-                Object.keys(localCache).forEach((dateStr) => {
-                  const record = localCache[dateStr];
-                  if (record && record.startTime && record.workHours) {
-                    const hrs = parseFloat(record.workHours);
-                    if (dateStr !== todayStr || (dateStr === todayStr && hrs >= 9.0)) {
-                      globalTotalDays++;
-                      globalTotalHours = safeFloat(globalTotalHours + hrs);
-                      if (dateStr < earliestDate) earliestDate = dateStr;
-                    }
+                while (iterWed >= cutoff) {
+                  if (iterWed <= todayReal) {
+                    targetDates.push(toYMD(iterWed));
                   }
+                  iterWed.setDate(iterWed.getDate() - 7);
+                }
+              } else {
+                if (currentWed <= todayReal) {
+                  targetDates.push(toYMD(currentWed));
+                }
+                const lastWed = new Date(currentWed);
+                lastWed.setDate(lastWed.getDate() - 7);
+                targetDates.push(toYMD(lastWed));
+              }
+
+              // Clamp missing day checks strictly to start of previous month
+              const missingDates = [];
+              let checkIter = new Date(todayReal);
+              const searchCutoff = new Date(todayReal.getFullYear(), todayReal.getMonth() - 1, 1);
+              const holidays = JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${todayReal.getFullYear()}`) || "{}");
+
+              while (checkIter >= searchCutoff) {
+                const dStr = toYMD(checkIter);
+                const dayOfWeek = checkIter.getDay();
+
+                if (dayOfWeek !== 0 && dayOfWeek !== 6 && !holidays[dStr] && dStr < todayStr) {
+                  const record = localCache[dStr];
+                  const note = dayNotes[dStr];
+                  const hasPunches = record && (record.startTime || record.endTime || record.workHours > 0);
+                  const hasPto = note && (note.isPTO || note.isPartialPTO || note.deductedHours > 0);
+
+                  if (!hasPunches && !hasPto && (!record || !record.gasSynced || isForceRescan)) {
+                    missingDates.push(dStr);
+                  }
+                }
+                checkIter.setDate(checkIter.getDate() - 1);
+              }
+
+              const datesToCheck = [...new Set([...targetDates, ...missingDates])].filter(
+                (dStr) => !localCache[dStr] || !localCache[dStr].gasSynced || isForceRescan
+              );
+
+              if (datesToCheck.length === 0) {
+                syncStatus.wfh = "✅";
+                updateSyncProgressUI();
+                IkgLog.info("✅ WFH Data up-to-date.");
+                localStorage.setItem(INIT_FLAG_KEY, "true");
+                return;
+              }
+
+              IkgLog.info(`⚡ Parallel-fetching WFH for ${datesToCheck.length} dates...`);
+
+              let completedCount = 0;
+              let wfhMatches = 0;
+
+              await Promise.all(
+                datesToCheck.map(async (dStr) => {
+                  try {
+                    const gasRecords = await fetchGasRecords(dStr, gasData);
+                    if (!localCache[dStr]) localCache[dStr] = {};
+                    localCache[dStr].gasSynced = true;
+
+                    if (gasRecords && gasRecords.length > 0) {
+                      let cIn = null, cOut = null;
+                      gasRecords.forEach((r) => {
+                        if (r.type === "Clock In") {
+                          if (!cIn || r.time < cIn) cIn = r.time;
+                        } else if (r.type === "Clock Out") {
+                          if (!cOut || r.time > cOut) cOut = r.time;
+                        }
+                      });
+
+                      if (cIn || cOut) {
+                        const [y, m, d] = dStr.split("-");
+                        if (cIn) localCache[dStr].startTime = new Date(y, m - 1, d, ...cIn.split(":")).getTime();
+                        if (cOut) localCache[dStr].endTime = new Date(y, m - 1, d, ...cOut.split(":")).getTime();
+
+                        if (localCache[dStr].startTime && localCache[dStr].endTime) {
+                          localCache[dStr].workHours = (localCache[dStr].endTime - localCache[dStr].startTime) / 3600000;
+                        }
+                        localCache[dStr].isWFH = true;
+                        wfhMatches++;
+                      }
+                    }
+                  } catch (e) {
+                    IkgLog.error(`Error fetching WFH for ${dStr}:`, e);
+                  } finally {
+                    completedCount++;
+                    syncStatus.wfh = `(${completedCount}/${datesToCheck.length})`;
+                    updateSyncProgressUI();
+                  }
+                })
+              );
+
+              localStorage.setItem(INIT_FLAG_KEY, "true");
+              syncStatus.wfh = "✅";
+              updateSyncProgressUI();
+              IkgLog.info(`✅ WFH Sync Complete. Matches found: ${wfhMatches}/${datesToCheck.length}`);
+            };
+
+            // =========================================================================
+            // 🎯 TASK 3: Deel PTO Sync
+            // =========================================================================
+            const runDeelSync = async () => {
+              syncStatus.deel = "🔄";
+              updateSyncProgressUI();
+
+              const deelPto = await fetchAndParseDeelPTO();
+              if (deelPto && deelPto.ptoCalendar && Object.keys(deelPto.ptoCalendar).length > 0) {
+                const dates = Object.keys(deelPto.ptoCalendar).sort();
+                let fullCount = 0;
+                let partialCount = 0;
+                let totalHoursInjected = 0;
+
+                dates.forEach((dateStr) => {
+                  const ptoInfo = deelPto.ptoCalendar[dateStr];
+                  dayNotes[dateStr] = {
+                    isPTO: ptoInfo.isFullDay,
+                    isPartialPTO: !ptoInfo.isFullDay,
+                    source: "Deel",
+                    type: ptoInfo.type,
+                    deductedHours: ptoInfo.hours,
+                  };
+
+                  if (ptoInfo.isFullDay) fullCount++;
+                  else partialCount++;
+                  totalHoursInjected += ptoInfo.hours;
                 });
-                globalFirstDate = earliestDate === "9999-99-99" ? "--" : earliestDate;
-                localStorage.setItem(
-                  AGG_CACHE_KEY,
-                  JSON.stringify({ globalTotalDays, globalTotalHours, globalFirstDate })
-                );
 
-                const allDaysEl = document.getElementById("all-val-days");
-                if (allDaysEl) allDaysEl.innerText = globalTotalDays;
+                localStorage.setItem(DAY_NOTES_KEY, JSON.stringify(dayNotes));
+                IkgLog.info(`✅ Deel PTO Sync Complete | Records: ${dates.length}`);
+              } else {
+                IkgLog.info("✅ Deel PTO Sync Complete | No active/approved PTO records returned.");
+              }
 
-                const allHrsEl = document.getElementById("all-val-hours");
-                if (allHrsEl) allHrsEl.innerText = formatDurFromDec(globalTotalHours, false);
+              syncStatus.deel = "✅";
+              updateSyncProgressUI();
+            };
 
-                const allFirstEl = document.getElementById("all-val-first");
-                if (allFirstEl) allFirstEl.innerText = globalFirstDate;
+            updateSyncProgressUI();
 
-                updateHeaderStatus("✅ Synced", "var(--success)");
-              }, 0);
+            await Promise.all([runAttendanceSync(), runWfhSync(), runDeelSync()]);
 
-            } catch (err) {
-              IkgLog.error("Critical Sync Error", err);
-              updateHeaderStatus("❌ Sync Error", "var(--danger)");
-            } finally {
-              btn.disabled = false;
-              isFetchingData = false;
-            }
-          });
+            localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
+
+            renderCalendar();
+            if (activeTab === "stats") renderAnalytics(localCache);
+            if (activeTab === "audit") renderAudit(localCache);
+
+            setTimeout(() => {
+              globalTotalDays = 0;
+              globalTotalHours = 0;
+              let earliestDate = "9999-99-99";
+              Object.keys(localCache).forEach((dateStr) => {
+                const record = localCache[dateStr];
+                if (record && record.startTime && record.workHours) {
+                  const hrs = parseFloat(record.workHours);
+                  if (dateStr !== todayStr || (dateStr === todayStr && hrs >= 9.0)) {
+                    globalTotalDays++;
+                    globalTotalHours = safeFloat(globalTotalHours + hrs);
+                    if (dateStr < earliestDate) earliestDate = dateStr;
+                  }
+                }
+              });
+              globalFirstDate = earliestDate === "9999-99-99" ? "--" : earliestDate;
+              localStorage.setItem(
+                AGG_CACHE_KEY,
+                JSON.stringify({ globalTotalDays, globalTotalHours, globalFirstDate })
+              );
+
+              const allDaysEl = document.getElementById("all-val-days");
+              if (allDaysEl) allDaysEl.innerText = globalTotalDays;
+
+              const allHrsEl = document.getElementById("all-val-hours");
+              if (allHrsEl) allHrsEl.innerText = formatDurFromDec(globalTotalHours, false);
+
+              const allFirstEl = document.getElementById("all-val-first");
+              if (allFirstEl) allFirstEl.innerText = globalFirstDate;
+
+              updateHeaderStatus("✅ Synced", "var(--success)");
+            }, 0);
+
+          } catch (err) {
+            IkgLog.error("Critical Sync Error", err);
+            updateHeaderStatus("❌ Sync Error", "var(--danger)");
+          } finally {
+            btn.disabled = false;
+            isFetchingData = false;
+          }
+        });
       }
 
       if (document.readyState === "loading")
