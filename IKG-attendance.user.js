@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.120] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.121] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.120
+    // @version      7.121
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1522,16 +1522,33 @@
         });
       };
 
-    // 🎯 DDD REPOSITORY: Single Source of Truth for cross-tab synchronization
-        const IKG_DataStore = {
-          buildSnapshot: function() {
-              return { cache: JSON.parse(localStorage.getItem(CACHE_KEY) || "{}"), pto: JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}"), overrides: JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}"), settings: getSettings() };
-          },
-          getDayContext: function(dateStr, snapshot) {
-              const y = dateStr.split('-')[0];
-              return { dateStr, record: snapshot.cache[dateStr], note: snapshot.pto[dateStr], override: snapshot.overrides[dateStr], settings: snapshot.settings, holidays: JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${y}`) || "{}") };
-          }
-      };
+    // 🎯 DDD REPOSITORY: Optimized Single-Read Snapshot
+    const IKG_DataStore = {
+      buildSnapshot: function() {
+        const d = new Date();
+        const y = d.getFullYear();
+        // Read holiday JSON once per snapshot build
+        const currentHolidays = JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${y}`) || "{}");
+        
+        return { 
+          cache: JSON.parse(localStorage.getItem(CACHE_KEY) || "{}"), 
+          pto: JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}"), 
+          overrides: JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}"), 
+          settings: getSettings(),
+          holidays: currentHolidays
+        };
+      },
+      getDayContext: function(dateStr, snapshot) {
+        return { 
+          dateStr, 
+          record: snapshot.cache[dateStr], 
+          note: snapshot.pto[dateStr], 
+          override: snapshot.overrides[dateStr], 
+          settings: snapshot.settings, 
+          holidays: snapshot.holidays 
+        };
+      }
+    };
 
       // 🎯 DDD DOMAIN MODEL: Threshold Evaluation with 3 PM Yesterday Grace & Active Today Styling
         const evaluateDay = (ctx) => {
@@ -1582,9 +1599,9 @@
           yesterdayD.setDate(yesterdayD.getDate() - 1);
           const isYesterday = dateStr === toYMD(yesterdayD);
 
-          // Check 3:00 PM cutoff for yesterday's grace period
-          const isBefore3PM = nowReal.getHours() < 15;
-          const isYesterdayGraceActive = isYesterday && isBefore3PM;
+          // 🎯 UPDATED: Check 6:00 PM (18:00) cutoff for yesterday's grace period
+          const isBefore6PM = nowReal.getHours() < 18;
+          const isYesterdayGraceActive = isYesterday && isBefore6PM;
 
           if (hasNoPunches && ptoHrs === 0) { targetHrs = 0; isWorkingDay = false; } 
           else if (!isRestDay || ptoHrs > 0) { targetHrs = 9.0; if (dObj <= todayD) isWorkingDay = true; } 
@@ -2750,7 +2767,7 @@
 
             let graceBadge = "";
             if (evalDay.status === "yesterday-grace") {
-                graceBadge = `<span class="ikg-fast-tt no-dot" data-title="System checkout syncs lag by 1 day. Hour thresholds remain unpenalized until 3:00 PM today." style="font-size:9px; background:rgba(148,163,184,0.15); border:1px solid rgba(148,163,184,0.3); color:var(--text-muted); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⏳ LAG GRACE</span>`;
+                graceBadge = `<span class="ikg-fast-tt no-dot" data-title="System checkout syncs lag by 1 day. Hour thresholds remain unpenalized until 6:00 PM today." style="font-size:9px; background:rgba(148,163,184,0.15); border:1px solid rgba(148,163,184,0.3); color:var(--text-muted); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⏳ LAG GRACE</span>`;
             } else if (evalDay.status === "today-active") {
                 graceBadge = `<span class="ikg-fast-tt no-dot" data-title="Shift actively in progress today." style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⏱️ IN PROGRESS</span>`;
             }
@@ -3440,63 +3457,64 @@
       }
 
       function buildUI() {
-      // 🎯 DYNAMIC VERSION EXTRACTION (Tampermonkey Native API)
-      let SCRIPT_VER = "v7.118";
-      try {
-        if (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) {
-          SCRIPT_VER = GM_info.script.version.startsWith("v") ? GM_info.script.version : `v${GM_info.script.version}`;
+        // 🎯 DYNAMIC VERSION EXTRACTION (Tampermonkey Native API)
+        let SCRIPT_VER = "v7.120";
+        try {
+          if (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) {
+            SCRIPT_VER = GM_info.script.version.startsWith("v") ? GM_info.script.version : `v${GM_info.script.version}`;
+          }
+        } catch (e) {}
+
+        // 🎯 UNIVERSAL VERSION BADGE INJECTOR
+        const injectVerBadge = () => {
+          if (document.getElementById("ikg-ver-badge")) return true;
+
+          const titleContainer = 
+            document.querySelector(".ikg-title-area") || 
+            document.querySelector("#ikg-modal-header > div:first-child");
+
+          if (titleContainer) {
+            const badge = document.createElement("span");
+            badge.id = "ikg-ver-badge";
+            badge.style.cssText = "font-size:11px; font-weight:700; color:var(--text-muted); background:var(--bg-base); border:1px solid var(--border); padding:2px 8px; border-radius:12px; margin-left:8px; font-family:monospace; line-height:1.2; display:inline-block !important; vertical-align:middle;";
+            badge.innerText = SCRIPT_VER;
+            titleContainer.appendChild(badge);
+            IkgLog.info(`✅ Bound Version Badge to Header: ${SCRIPT_VER}`);
+            return true;
+          }
+          return false;
+        };
+
+        if (!injectVerBadge() && document.body) {
+          const verObserver = new MutationObserver((mutations, obs) => {
+            if (injectVerBadge()) obs.disconnect(); // Stop watching once bound
+          });
+          verObserver.observe(document.body, { childList: true, subtree: true });
         }
-      } catch (e) {}
 
-      // 🎯 UNIVERSAL VERSION BADGE INJECTOR (Works on Native React Header & Custom Modal)
-      const injectVerBadge = () => {
-        if (document.getElementById("ikg-ver-badge")) return;
+        IkgLog.info(`[UI Engine] Initializing Dashboard UI (${SCRIPT_VER})...`);
 
-        // Target either custom title area OR native app title container next to cat logo
-        const titleContainer = 
-          document.querySelector(".ikg-title-area") || 
-          document.querySelector("#ikg-modal-header > div:first-child") ||
-          Array.from(document.querySelectorAll("header div, div[class*='header']"))
-            .find(el => el.innerText && el.innerText.includes("Attendance Pro"));
-
-        if (titleContainer) {
-          const badge = document.createElement("span");
-          badge.id = "ikg-ver-badge";
-          badge.style.cssText = "font-size:11px; font-weight:700; color:var(--text-muted); background:var(--bg-base); border:1px solid var(--border); padding:2px 8px; border-radius:12px; margin-left:8px; font-family:monospace; line-height:1.2; display:inline-block !important; vertical-align:middle;";
-          badge.innerText = SCRIPT_VER;
-          
-          titleContainer.appendChild(badge);
-          IkgLog.info(`✅ Bound Version Badge to Header: ${SCRIPT_VER}`);
+        if (document.getElementById("ikg-fab")) {
+          injectVerBadge();
+          return;
         }
-      };
 
-      // Observe DOM to re-inject if React re-renders the header
-      const verObserver = new MutationObserver(injectVerBadge);
-      if (document.body) verObserver.observe(document.body, { childList: true, subtree: true });
+        const fab = document.createElement("button");
+        fab.id = "ikg-fab";
+        fab.innerHTML = "📊 Dashboard";
+        document.body.appendChild(fab);
 
-      IkgLog.info(`[UI Engine] Initializing Dashboard UI (${SCRIPT_VER})...`);
-
-      if (document.getElementById("ikg-fab")) {
-        injectVerBadge();
-        return;
-      }
-
-      const fab = document.createElement("button");
-      fab.id = "ikg-fab";
-      fab.innerHTML = "📊 Dashboard";
-      document.body.appendChild(fab);
-
-      const backdrop = document.createElement("div");
-      backdrop.id = "ikg-modal-backdrop";
-      backdrop.innerHTML = `
-              <div id="ikg-modal">
-                  <header id="ikg-modal-header">
-                      <div class="ikg-title-area" style="display: flex !important; align-items: center !important; gap: 8px !important; white-space: nowrap !important;">
-                          <img src="favicon.png" style="width: 28px; height: 28px; background: var(--primary); border-radius: 6px; flex-shrink: 0; object-fit: contain;" alt="IKG Logo">
-                          <span style="font-size:18px; font-weight:700; color:var(--text-main);">Attendance Pro</span>
-                          <span id="ikg-ver-badge" style="font-size:11px; font-weight:700; color:var(--text-muted); background:var(--bg-base); border:1px solid var(--border); padding:2px 8px; border-radius:12px; margin-left:4px; font-family:monospace; line-height:1.2; display:inline-block !important;">${SCRIPT_VER}</span>
-                      </div>
-                      <div class="ikg-tab-group">
+        const backdrop = document.createElement("div");
+        backdrop.id = "ikg-modal-backdrop";
+        backdrop.innerHTML = `
+                <div id="ikg-modal">
+                    <header id="ikg-modal-header">
+                        <div class="ikg-title-area" style="display: flex !important; align-items: center !important; gap: 8px !important; white-space: nowrap !important;">
+                            <img src="favicon.png" style="width: 28px; height: 28px; background: var(--primary); border-radius: 6px; flex-shrink: 0; object-fit: contain;" alt="IKG Logo">
+                            <span style="font-size:18px; font-weight:700; color:var(--text-main);">Attendance Pro</span>
+                            <span id="ikg-ver-badge" style="font-size:11px; font-weight:700; color:var(--text-muted); background:var(--bg-base); border:1px solid var(--border); padding:2px 8px; border-radius:12px; margin-left:4px; font-family:monospace; line-height:1.2; display:inline-block !important;">${SCRIPT_VER}</span>
+                        </div>
+                        <div class="ikg-tab-group">
                           <div class="ikg-tab active" id="tab-cal">🗓️ Calendar</div>
                           <div class="ikg-tab" id="tab-stats">📈 Analytics</div>
                           <div class="ikg-tab" id="tab-audit">🔍 Data Audit</div>
