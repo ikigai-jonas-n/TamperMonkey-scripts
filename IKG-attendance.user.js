@@ -1,7 +1,7 @@
   // ==UserScript==
-  // @name         [7.112] IKG Attendance Pro (Autopilot & Alarms)
+  // @name         [7.113] IKG Attendance Pro (Autopilot & Alarms)
   // @namespace    http://tampermonkey.net/
-  // @version      7.112
+  // @version      7.113
   // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
   // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
   // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -4304,7 +4304,7 @@
         }
       }, 500);
 
-      // 🎯 HIGH-SPEED PARALLEL SYNC WITH WEDNESDAY-ONLY WFH TARGETING
+      // 🎯 HIGH-SPEED PARALLEL SYNC WITH VERBOSE TASK LOGGING
       document
         .getElementById("ikg-btn-fetch")
         .addEventListener("click", async (e) => {
@@ -4415,15 +4415,16 @@
                 }
                 await Promise.all(fetchTasks);
               }
+              IkgLog.info("✅ AWS Attendance Sync Complete.");
             };
 
             // =========================================================================
-            // 🎯 TASK 2: Smart Wednesday WFH (GAS) Sync
+            // 🎯 TASK 2: Wednesday-Only Targeted WFH (GAS) Sync
             // =========================================================================
             const runWfhSync = async () => {
               const gasData = await ensureGasToken();
               if (!gasData || !gasData.token) {
-                IkgLog.warn("❌ Skipping WFH Sync: No valid Google Apps Script token available.");
+                IkgLog.warn("⚠️ Skipping WFH Sync: No GAS token.");
                 return;
               }
 
@@ -4465,52 +4466,65 @@
               );
 
               if (targetWednesdays.length === 0) {
+                IkgLog.info("✅ WFH Data up-to-date. No Wednesdays need sync.");
                 localStorage.setItem(INIT_FLAG_KEY, "true");
                 return;
               }
 
               IkgLog.info(`⚡ Parallel-fetching WFH for Wednesdays: ${targetWednesdays.join(", ")}`);
 
+              let wfhMatches = 0;
               await Promise.all(
                 targetWednesdays.map(async (dStr) => {
-                  const gasRecords = await fetchGasRecords(dStr, gasData);
-                  if (!localCache[dStr]) localCache[dStr] = {};
-                  localCache[dStr].gasSynced = true;
+                  try {
+                    const gasRecords = await fetchGasRecords(dStr, gasData);
+                    if (!localCache[dStr]) localCache[dStr] = {};
+                    localCache[dStr].gasSynced = true;
 
-                  if (gasRecords && gasRecords.length > 0) {
-                    let cIn = null, cOut = null;
-                    gasRecords.forEach((r) => {
-                      if (r.type === "Clock In") {
-                        if (!cIn || r.time < cIn) cIn = r.time;
-                      } else if (r.type === "Clock Out") {
-                        if (!cOut || r.time > cOut) cOut = r.time;
+                    if (gasRecords && gasRecords.length > 0) {
+                      let cIn = null, cOut = null;
+                      gasRecords.forEach((r) => {
+                        if (r.type === "Clock In") {
+                          if (!cIn || r.time < cIn) cIn = r.time;
+                        } else if (r.type === "Clock Out") {
+                          if (!cOut || r.time > cOut) cOut = r.time;
+                        }
+                      });
+
+                      if (cIn || cOut) {
+                        const [y, m, d] = dStr.split("-");
+                        if (cIn) localCache[dStr].startTime = new Date(y, m - 1, d, ...cIn.split(":")).getTime();
+                        if (cOut) localCache[dStr].endTime = new Date(y, m - 1, d, ...cOut.split(":")).getTime();
+
+                        if (localCache[dStr].startTime && localCache[dStr].endTime) {
+                          localCache[dStr].workHours = (localCache[dStr].endTime - localCache[dStr].startTime) / 3600000;
+                        }
+                        localCache[dStr].isWFH = true;
+                        wfhMatches++;
                       }
-                    });
-
-                    if (cIn || cOut) {
-                      const [y, m, d] = dStr.split("-");
-                      if (cIn) localCache[dStr].startTime = new Date(y, m - 1, d, ...cIn.split(":")).getTime();
-                      if (cOut) localCache[dStr].endTime = new Date(y, m - 1, d, ...cOut.split(":")).getTime();
-
-                      if (localCache[dStr].startTime && localCache[dStr].endTime) {
-                        localCache[dStr].workHours = (localCache[dStr].endTime - localCache[dStr].startTime) / 3600000;
-                      }
-                      localCache[dStr].isWFH = true;
                     }
+                  } catch (e) {
+                    IkgLog.error(`Error fetching WFH for ${dStr}:`, e);
                   }
                 })
               );
 
               localStorage.setItem(INIT_FLAG_KEY, "true");
+              IkgLog.info(`✅ WFH Sync Complete. Matches found: ${wfhMatches}/${targetWednesdays.length}`);
             };
 
             // =========================================================================
-            // 🎯 TASK 3: Deel PTO Sync
+            // 🎯 TASK 3: Deel PTO Sync (Detailed Telemetry)
             // =========================================================================
             const runDeelSync = async () => {
               const deelPto = await fetchAndParseDeelPTO();
-              if (deelPto && Object.keys(deelPto.ptoCalendar).length > 0) {
-                Object.keys(deelPto.ptoCalendar).forEach((dateStr) => {
+              if (deelPto && deelPto.ptoCalendar && Object.keys(deelPto.ptoCalendar).length > 0) {
+                const dates = Object.keys(deelPto.ptoCalendar).sort();
+                let fullCount = 0;
+                let partialCount = 0;
+                let totalHoursInjected = 0;
+
+                dates.forEach((dateStr) => {
                   const ptoInfo = deelPto.ptoCalendar[dateStr];
                   dayNotes[dateStr] = {
                     isPTO: ptoInfo.isFullDay,
@@ -4519,8 +4533,23 @@
                     type: ptoInfo.type,
                     deductedHours: ptoInfo.hours,
                   };
+
+                  if (ptoInfo.isFullDay) fullCount++;
+                  else partialCount++;
+                  totalHoursInjected += ptoInfo.hours;
                 });
+
                 localStorage.setItem(DAY_NOTES_KEY, JSON.stringify(dayNotes));
+
+                // 🎯 Detailed Console Output
+                const startDate = dates[0];
+                const endDate = dates[dates.length - 1];
+                IkgLog.info(
+                  `✅ Deel PTO Sync Complete | Records: ${dates.length} (${fullCount} Full, ${partialCount} Partial) | Total: ${totalHoursInjected.toFixed(1)}h | Range: [${startDate} ~ ${endDate}]`,
+                  { dates, ptoCalendar: deelPto.ptoCalendar }
+                );
+              } else {
+                IkgLog.info("✅ Deel PTO Sync Complete | No active/approved PTO records returned.");
               }
             };
 
@@ -4531,15 +4560,12 @@
 
             await Promise.all([runAttendanceSync(), runWfhSync(), runDeelSync()]);
 
-            // Save combined cache
             localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
 
-            // Immediate UI update
             renderCalendar();
             if (activeTab === "stats") renderAnalytics(localCache);
             if (activeTab === "audit") renderAudit(localCache);
 
-            // Calculate aggregate stats asynchronously
             setTimeout(() => {
               globalTotalDays = 0;
               globalTotalHours = 0;
