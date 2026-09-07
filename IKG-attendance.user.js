@@ -1,7 +1,7 @@
   // ==UserScript==
-  // @name         [7.113] IKG Attendance Pro (Autopilot & Alarms)
+  // @name         [7.114] IKG Attendance Pro (Autopilot & Alarms)
   // @namespace    http://tampermonkey.net/
-  // @version      7.113
+  // @version      7.114
   // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
   // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
   // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -431,6 +431,7 @@
         pulseSpeed: 4.0,
         volume: 0.8,
         useManualOverrides: true,
+        includeWfhInHours: true, // 🎯 DEFAULT: ON
         syncDays: 7,
       };
       try {
@@ -1529,7 +1530,7 @@
         }
     };
 
-      // 🎯 DDD DOMAIN MODEL: Pure, Strict, and Clean
+      // 🎯 DDD DOMAIN MODEL: Evaluates WFH Toggle Settings
       const evaluateDay = (ctx) => {
         const { dateStr, record, note, override, settings, holidays } = ctx;
         let ptoHrs = note ? (parseFloat(note.deductedHours) || 0) : 0;
@@ -1540,10 +1541,15 @@
         if (isFullPTO) ptoHrs = 9.0; 
 
         const isIgnored = settings.useManualOverrides !== false && override && override.isIgnored;
-        const isWFH = !!(record && record.isWFH); // 🎯 Track WFH from Cache
+        const isWFH = !!(record && record.isWFH);
 
-        let actualHrs = (record && record.workHours) ? parseFloat(record.workHours) : 0;
-        let effStart = record ? record.startTime : null; let effEnd = record ? record.endTime : null; let isSpoofed = false;
+        // 🎯 WFH TOGGLE CHECK: If WFH calculation is toggled off, force actual worked hours to 0
+        let rawActualHrs = (record && record.workHours) ? parseFloat(record.workHours) : 0;
+        let actualHrs = (isWFH && settings.includeWfhInHours === false) ? 0 : rawActualHrs;
+
+        let effStart = record ? record.startTime : null; 
+        let effEnd = record ? record.endTime : null; 
+        let isSpoofed = false;
 
         if (settings.useManualOverrides !== false && override && (override.manualIn || override.manualOut)) {
             const [y, m, d] = dateStr.split('-');
@@ -1554,11 +1560,16 @@
             else if (effStartD) { actualHrs = 0; effStart = effStartD.getTime(); effEnd = null; isSpoofed = true; }
         }
 
-        const [y, m, d] = dateStr.split('-'); const dObj = new Date(parseInt(y, 10), parseInt(m, 10)-1, parseInt(d, 10));
-        const isPublicHoliday = !!holidays[dateStr]; const holidayName = holidays[dateStr] || '';
-        const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6; const isRestDay = isWeekend || isPublicHoliday;
+        const [y, m, d] = dateStr.split('-'); 
+        const dObj = new Date(parseInt(y, 10), parseInt(m, 10)-1, parseInt(d, 10));
+        const isPublicHoliday = !!holidays[dateStr]; 
+        const holidayName = holidays[dateStr] || '';
+        const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6; 
+        const isRestDay = isWeekend || isPublicHoliday;
 
-        let targetHrs = 0; let isWorkingDay = false; const hasNoPunches = !effStart && !effEnd && actualHrs === 0;
+        let targetHrs = 0; 
+        let isWorkingDay = false; 
+        const hasNoPunches = !effStart && !effEnd && actualHrs === 0;
 
         if (hasNoPunches && ptoHrs === 0) { targetHrs = 0; isWorkingDay = false; } 
         else if (!isRestDay || ptoHrs > 0) { targetHrs = 9.0; const todayD = new Date(); todayD.setHours(0,0,0,0); if (dObj <= todayD) isWorkingDay = true; } 
@@ -1569,27 +1580,47 @@
 
         let status = 'none', color = 'var(--text-muted)', chartColor = 'transparent', heatmapBg = 'transparent', reason = '';
 
+        const COLOR_RED = '#EF4444';
+        const COLOR_GREENISH_YELLOW = '#84CC16';
+        const COLOR_CORE_GREEN = '#10B981';
+        const COLOR_DEEP_GREEN = '#059669';
+
         if (hasNoPunches && ptoHrs === 0) {
             if (isPublicHoliday) { status = 'holiday'; color = 'var(--primary)'; reason = holidayName; } 
             else if (isWeekend) { status = 'weekend-empty'; color = 'transparent'; reason = ''; } 
             else { status = 'omitted'; color = 'var(--text-muted)'; reason = 'No Punches'; }
-        } else if (isFullPTO && hasNoPunches) { status = 'full-pto'; color = 'var(--pto)'; chartColor = '#8B5CF6'; heatmapBg = '#8B5CF6'; reason = 'Full Day PTO'; } 
-        else if (actualHrs === 0 && effStart && !effEnd) { status = 'pending'; color = 'var(--warn)'; chartColor = '#F59E0B'; heatmapBg = '#F59E0B'; reason = 'Pending Checkout'; isWorkingDay = false; } 
-        else if (actualHrs > 0 || ptoHrs > 0) {
-            if (isPartialPTO) {
-                if (effectiveHrs >= targetHrs) { status = 'partial-pto-pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = 'linear-gradient(135deg, #10B981 50%, #8B5CF6 50%)'; reason = `Goal passed`; } 
-                else { status = 'partial-pto-fail'; color = 'var(--danger)'; chartColor = '#EF4444'; heatmapBg = 'linear-gradient(135deg, #EF4444 50%, #8B5CF6 50%)'; reason = `Short`; }
+        } else if (isFullPTO && hasNoPunches) { 
+            status = 'full-pto'; color = 'var(--pto)'; chartColor = '#8B5CF6'; heatmapBg = '#8B5CF6'; reason = 'Full Day PTO'; 
+        } else if (actualHrs === 0 && effStart && !effEnd) { 
+            status = 'pending'; color = 'var(--warn)'; chartColor = '#F59E0B'; heatmapBg = '#F59E0B'; reason = 'Pending Checkout'; isWorkingDay = false; 
+        } else if (actualHrs > 0 || ptoHrs > 0) {
+            if (effectiveHrs > 9.0) {
+                status = 'pass';
+                color = COLOR_CORE_GREEN;
+                chartColor = effectiveHrs >= 10.0 ? COLOR_DEEP_GREEN : COLOR_CORE_GREEN;
+                heatmapBg = isPartialPTO ? `linear-gradient(135deg, ${color} 50%, #8B5CF6 50%)` : color;
+                reason = 'Goal met';
+            } else if (effectiveHrs >= 8.5 && effectiveHrs <= 9.0) {
+                status = 'pass-acceptable';
+                color = COLOR_GREENISH_YELLOW;
+                chartColor = COLOR_GREENISH_YELLOW;
+                heatmapBg = isPartialPTO ? `linear-gradient(135deg, ${COLOR_GREENISH_YELLOW} 50%, #8B5CF6 50%)` : COLOR_GREENISH_YELLOW;
+                reason = 'Acceptable (8.5-9h)';
             } else {
-                if (actualHrs >= targetHrs) { status = 'pass'; color = 'var(--success)'; chartColor = '#10B981'; heatmapBg = '#10B981'; reason = 'Goal met'; } 
-                else { status = 'fail'; color = 'var(--danger)'; chartColor = '#EF4444'; heatmapBg = '#EF4444'; reason = `Short`; }
+                status = 'fail';
+                color = COLOR_RED;
+                chartColor = COLOR_RED;
+                heatmapBg = isPartialPTO ? `linear-gradient(135deg, ${COLOR_RED} 50%, #8B5CF6 50%)` : COLOR_RED;
+                reason = 'Short (<8.5h)';
             }
         }
 
-        if (isIgnored) { status = 'ignored'; color = 'var(--text-muted)'; chartColor = 'var(--border)'; heatmapBg = 'var(--border)'; reason = 'Ignored Day'; targetHrs = 0; flexHrs = 0; isWorkingDay = false; }
-        if ((status === 'pass' || status === 'partial-pto-pass') && actualHrs >= 10.0 && !isIgnored) { chartColor = '#059669'; heatmapBg = status === 'pass' ? '#059669' : 'linear-gradient(135deg, #059669 50%, #8B5CF6 50%)'; }
+        if (isIgnored) { 
+            status = 'ignored'; color = 'var(--text-muted)'; chartColor = 'var(--border)'; heatmapBg = 'var(--border)'; reason = 'Ignored Day'; targetHrs = 0; flexHrs = 0; isWorkingDay = false; 
+        }
 
         return { isFullPTO, isPartialPTO, ptoHrs, ptoType, isIgnored, isWFH, actualHrs, effStart, effEnd, effectiveHrs, targetHrs, flexHrs, isWorkingDay, isPublicHoliday, holidayName, status, color, chartColor, heatmapBg, reason, isSpoofed };
-    };
+      };
 
     let chartHoverHandler = null;
 
@@ -2036,7 +2067,6 @@
         "13:00 ~ 22:00": 0,
       };
 
-      // 🎯 DDD Implementation
       const snapshot = IKG_DataStore.buildSnapshot();
 
       for (let i = 1; i <= 31; i++) {
@@ -2101,7 +2131,6 @@
       baseShiftEndD.setHours(shiftEndHour, shiftEndMin, 0, 0);
       const baseShiftEndMs = baseShiftEndD.getTime();
 
-      // 🎯 CLEAN DDD: Use the snapshot we already built at the top of updateActiveShiftUI!
       const todaysEval = evaluateDay(IKG_DataStore.getDayContext(todayStr, snapshot));
       
       let todaysFlexGoal = safeFloat(9.0 - todaysEval.ptoHrs);
@@ -2110,7 +2139,6 @@
       let container = document.getElementById("ikg-active-shift-container");
       if (!container) return;
 
-      // 🎯 FIX: Rely on the evaluated start time (which supports Overrides) instead of the raw API record
       if (todaysEval.effStart && !todaysEval.isIgnored) {
         const startMs = todaysEval.effStart;
         const minCheckoutMs = baseShiftEndMs - todaysEval.ptoHrs * 3600000;
@@ -2136,7 +2164,6 @@
           todaysFlexGoal = (targetMs - startMs) / 3600000;
         }
 
-        // 🎯 FIX: Use the evaluated actual hours so overrides can trigger completion
         const isCompleted = todaysEval.actualHrs >= todaysFlexGoal && todaysEval.actualHrs > 0;
         const gcalStart = new Date(targetMs).toISOString().replace(/[-:]|\.\d{3}/g, "");
         const gcalEnd = new Date(targetMs + 15 * 60000).toISOString().replace(/[-:]|\.\d{3}/g, "");
@@ -2281,35 +2308,6 @@
         }
       } else {
         container.innerHTML = "";
-      }
-
-      const balanceEl = document.getElementById("side-val-net");
-      if (balanceEl) {
-        let insightEl = document.getElementById("ikg-flex-insight");
-        if (!insightEl) {
-          insightEl = document.createElement("div");
-          insightEl.id = "ikg-flex-insight";
-          balanceEl.parentNode.insertAdjacentElement("afterend", insightEl);
-        }
-
-        if (realMonthBalance > 0) {
-          const burnDays = Math.ceil(realMonthBalance / 0.5); // 0.5h (30m) max burn per day
-          insightEl.innerHTML = `
-                      <div style="font-size:11px; color:var(--warn); background:var(--warn-bg); border:1px solid rgba(245, 158, 11, 0.3); padding:8px 10px; border-radius:6px; margin-top:12px; display:flex; gap:8px; align-items:flex-start; line-height:1.4;">
-                          <span style="font-size:14px;">💡</span>
-                          <span>Flex burns max <b>30m/day</b> to offset late arrivals.<br>Requires <b>~${burnDays} planned late-ins</b> (e.g. 09:30) to clear.</span>
-                      </div>
-                  `;
-        } else if (realMonthBalance < 0) {
-          insightEl.innerHTML = `
-                      <div style="font-size:11px; color:var(--danger); background:var(--danger-bg); border:1px solid rgba(239, 68, 68, 0.3); padding:8px 10px; border-radius:6px; margin-top:12px; display:flex; gap:8px; align-items:flex-start; line-height:1.4;">
-                          <span style="font-size:14px;">⚠️</span>
-                          <span>You have a deficit. You must work <b>more than 9.0 hours</b> to restore your balance.</span>
-                      </div>
-                  `;
-        } else {
-          insightEl.innerHTML = "";
-        }
       }
     };
 
@@ -2506,200 +2504,344 @@
     let statsCalInstance = null;
     let auditCalInstance = null;
 
-    // --- RENDER LOGIC ---
+    // --- RENDER CALENDAR ENGINE (WITH 3-DAY GRACE PERIOD & PTO WARNINGS) ---
     async function renderCalendar() {
-    try { await ensureHolidaysSecured(currentViewYear); } catch(e) { return; }
+      try { await ensureHolidaysSecured(currentViewYear); } catch(e) { return; }
 
-    const grid = document.getElementById('ikg-cal-grid');
-    const headerText = document.getElementById("ikg-cal-month-text");
-    const prevBtn = document.getElementById("ikg-prev-month");
-    const nextBtn = document.getElementById("ikg-next-month");
+      const grid = document.getElementById('ikg-cal-grid');
+      const headerText = document.getElementById("ikg-cal-month-text");
+      const prevBtn = document.getElementById("ikg-prev-month");
+      const nextBtn = document.getElementById("ikg-next-month");
 
-    if (!grid) return;
+      if (!grid) return;
 
-    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-    headerText.innerText = `${monthNames[currentViewMonth - 1]} ${currentViewYear}`;
+      const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+      headerText.innerText = `${monthNames[currentViewMonth - 1]} ${currentViewYear}`;
 
-    const todayReal = new Date();
-    nextBtn.classList.toggle("hidden", currentViewYear === todayReal.getFullYear() && currentViewMonth === todayReal.getMonth() + 1);
-    if (globalFirstDate !== "--") {
-      const fd = new Date(globalFirstDate);
-      prevBtn.classList.toggle("hidden", currentViewYear === fd.getFullYear() && currentViewMonth === fd.getMonth() + 1);
-    }
-
-    const firstDay = new Date(currentViewYear, currentViewMonth - 1, 1).getDay();
-    const daysInMonth = new Date(currentViewYear, currentViewMonth, 0).getDate();
-
-    const monthStr = `${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`;
-    const todayStr = `${todayReal.getFullYear()}-${String(todayReal.getMonth() + 1).padStart(2, "0")}-${String(todayReal.getDate()).padStart(2, "0")}`;
-
-    const snapshot = IKG_DataStore.buildSnapshot();
-
-    let monthWorkedDays = 0, monthTotalHours = 0, monthTargetHours = 0, monthFullPTODays = 0, monthPartialPTODays = 0;
-    let monthWFHHours = 0, monthOfficeHours = 0, monthPTOHours = 0;
-    let monthWFHDays = 0, monthOfficeDays = 0;
-
-    let htmlBuffer = "";
-    for (let i = 0; i < firstDay; i++) htmlBuffer += `<div class="ikg-day empty"></div>`;
-
-    for (let i = 1; i <= daysInMonth; i++) {
-      const dateStr = `${monthStr}-${String(i).padStart(2, "0")}`;
-      const record = snapshot.cache[dateStr];
-      const evalDay = evaluateDay(IKG_DataStore.getDayContext(dateStr, snapshot));
-
-      let isToday = dateStr === todayStr;
-      let cellContent = "";
-      let partialPill = "";
-
-      if (evalDay.isWorkingDay && !isToday) {
-        monthWorkedDays++;
-        monthTotalHours = safeFloat(monthTotalHours + evalDay.effectiveHrs);
-        monthTargetHours = safeFloat(monthTargetHours + evalDay.targetHrs);
-        monthPTOHours = safeFloat(monthPTOHours + evalDay.ptoHrs);
-        
-        if (evalDay.isFullPTO) {
-            monthFullPTODays++;
-        } else {
-            if (evalDay.isPartialPTO) monthPartialPTODays++;
-            if (evalDay.actualHrs > 0) {
-                if (evalDay.isWFH) {
-                    monthWFHHours = safeFloat(monthWFHHours + evalDay.actualHrs);
-                    monthWFHDays++;
-                } else {
-                    monthOfficeHours = safeFloat(monthOfficeHours + evalDay.actualHrs);
-                    monthOfficeDays++;
-                }
-            }
-        }
+      const todayReal = new Date();
+      nextBtn.classList.toggle("hidden", currentViewYear === todayReal.getFullYear() && currentViewMonth === todayReal.getMonth() + 1);
+      if (globalFirstDate !== "--") {
+        const fd = new Date(globalFirstDate);
+        prevBtn.classList.toggle("hidden", currentViewYear === fd.getFullYear() && currentViewMonth === fd.getMonth() + 1);
       }
 
-      if (isFetchingData && dateStr <= todayStr && record === undefined && !evalDay.isFullPTO) {
-          cellContent = `<div class="ikg-cell-data"><div class="skeleton skel-hrs"></div><div class="skeleton skel-box"></div></div>`;
-      } else if (evalDay.status === 'holiday') {
-          cellContent = `<div class="pto-pill" style="background:rgba(59,130,246,0.1); color:var(--primary); border-color:var(--primary);">🎊 ${evalDay.holidayName}</div>`;
-      } else if (evalDay.status === 'weekend-empty') {
-          cellContent = ``; 
-      } else if (evalDay.status === 'omitted') {
-          if (evalDay.ptoType) {
-              cellContent = `<div class="pto-pill" style="background:rgba(245, 158, 11, 0.1); color:var(--warn); border-color:var(--warn);">🌴 ${evalDay.ptoType}</div>`;
+      const firstDay = new Date(currentViewYear, currentViewMonth - 1, 1).getDay();
+      const daysInMonth = new Date(currentViewYear, currentViewMonth, 0).getDate();
+
+      const monthStr = `${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`;
+      const todayStr = `${todayReal.getFullYear()}-${String(todayReal.getMonth() + 1).padStart(2, "0")}-${String(todayReal.getDate()).padStart(2, "0")}`;
+
+      const snapshot = IKG_DataStore.buildSnapshot();
+
+      let monthWorkedDays = 0, monthTotalHours = 0, monthTargetHours = 0, monthFullPTODays = 0, monthPartialPTODays = 0;
+      let monthWFHHours = 0, monthOfficeHours = 0, monthPTOHours = 0;
+      let monthWFHDays = 0, monthOfficeDays = 0;
+      const missingDays = [];
+
+      // 🎯 DYNAMIC MONTH EVALUATION RULES (Grace Period Checks)
+      const currentRealMonthStr = `${todayReal.getFullYear()}-${String(todayReal.getMonth() + 1).padStart(2, "0")}`;
+      const prevMonthD = new Date(todayReal.getFullYear(), todayReal.getMonth() - 1, 1);
+      const prevMonthStr = `${prevMonthD.getFullYear()}-${String(prevMonthD.getMonth() + 1).padStart(2, "0")}`;
+
+      // Calculate working days elapsed in the current real month
+      let workingDaysElapsedInCurrentMonth = 0;
+      let checkIter = new Date(todayReal.getFullYear(), todayReal.getMonth(), 1);
+      const currentHolidays = JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${todayReal.getFullYear()}`) || "{}");
+
+      while (checkIter <= todayReal) {
+        const dStr = toYMD(checkIter);
+        const dayOfWeek = checkIter.getDay();
+        if (dayOfWeek !== 0 && dayOfWeek !== 6 && !currentHolidays[dStr]) {
+          workingDaysElapsedInCurrentMonth++;
+        }
+        checkIter.setDate(checkIter.getDate() + 1);
+      }
+
+      // Determine if the currently viewed month should be evaluated for warnings
+      let isTargetForWarning = false;
+      if (monthStr === currentRealMonthStr) {
+        isTargetForWarning = true; // Current month always evaluates
+      } else if (monthStr === prevMonthStr && workingDaysElapsedInCurrentMonth <= 3) {
+        isTargetForWarning = true; // Previous month evaluates ONLY if <= 3 working days into current month
+      }
+
+      let htmlBuffer = "";
+      for (let i = 0; i < firstDay; i++) htmlBuffer += `<div class="ikg-day empty"></div>`;
+
+      for (let i = 1; i <= daysInMonth; i++) {
+        const dateStr = `${monthStr}-${String(i).padStart(2, "0")}`;
+        const record = snapshot.cache[dateStr];
+        const evalDay = evaluateDay(IKG_DataStore.getDayContext(dateStr, snapshot));
+
+        let isToday = dateStr === todayStr;
+        let cellContent = "";
+        let partialPill = "";
+
+        // 🎯 MISSING-DAY EVALUATION
+        if (isTargetForWarning && evalDay.isWorkingDay && !isToday && evalDay.actualHrs === 0 && !evalDay.isFullPTO && evalDay.ptoHrs === 0) {
+          missingDays.push(dateStr);
+        }
+
+        if (evalDay.isWorkingDay && !isToday) {
+          monthWorkedDays++;
+          monthTotalHours = safeFloat(monthTotalHours + evalDay.effectiveHrs);
+          monthTargetHours = safeFloat(monthTargetHours + evalDay.targetHrs);
+          monthPTOHours = safeFloat(monthPTOHours + evalDay.ptoHrs);
+          
+          if (evalDay.isFullPTO) {
+              monthFullPTODays++;
           } else {
-              cellContent = `<div style="margin:auto; color:var(--text-muted); font-size:11px; font-weight:600; text-align:center; opacity: 0.5;">No Punches</div>`;
+              if (evalDay.isPartialPTO) monthPartialPTODays++;
+              if (evalDay.actualHrs > 0) {
+                  if (evalDay.isWFH) {
+                      monthWFHHours = safeFloat(monthWFHHours + evalDay.actualHrs);
+                      monthWFHDays++;
+                  } else {
+                      monthOfficeHours = safeFloat(monthOfficeHours + evalDay.actualHrs);
+                      monthOfficeDays++;
+                  }
+              }
           }
-      } else if (evalDay.isFullPTO) {
-          cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
-      } else if (evalDay.effStart || evalDay.effEnd || evalDay.isSpoofed || evalDay.actualHrs > 0) {
-          let pendingIcon = ""; let timesClass = "";
+        }
 
-          const inTimeDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : (record?.startTime ? formatTime(record.startTime) : "--:--");
-          let outTimeDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : (record?.endTime ? formatTime(record.endTime) : "--:--");
+        if (isFetchingData && dateStr <= todayStr && record === undefined && !evalDay.isFullPTO) {
+            cellContent = `<div class="ikg-cell-data"><div class="skeleton skel-hrs"></div><div class="skeleton skel-box"></div></div>`;
+        } else if (evalDay.status === 'holiday') {
+            cellContent = `<div class="pto-pill" style="background:rgba(59,130,246,0.1); color:var(--primary); border-color:var(--primary);">🎊 ${evalDay.holidayName}</div>`;
+        } else if (evalDay.status === 'weekend-empty') {
+            cellContent = ``; 
+        } else if (evalDay.status === 'omitted') {
+            if (evalDay.ptoType) {
+                cellContent = `<div class="pto-pill" style="background:rgba(245, 158, 11, 0.1); color:var(--warn); border-color:var(--warn);">🌴 ${evalDay.ptoType}</div>`;
+            } else {
+                cellContent = `<div style="margin:auto; color:var(--text-muted); font-size:11px; font-weight:600; text-align:center; opacity: 0.5;">No Punches</div>`;
+            }
+        } else if (evalDay.isFullPTO) {
+            cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
+        } else if (evalDay.effStart || evalDay.effEnd || evalDay.isSpoofed || evalDay.actualHrs > 0) {
+            let pendingIcon = ""; let timesClass = "";
 
-          if (evalDay.status === "pending") {
-              timesClass = "pending"; pendingIcon = ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>'; outTimeDisplay = "Pending";
-          }
+            const inTimeDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : (record?.startTime ? formatTime(record.startTime) : "--:--");
+            let outTimeDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : (record?.endTime ? formatTime(record.endTime) : "--:--");
 
-          if (evalDay.isWFH) {
-              partialPill += `<div class="ikg-fast-tt no-dot" data-title="Work From Home" style="font-size:9px; background:var(--primary); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; box-shadow: 0 2px 4px rgba(59,130,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;">🏠 WFH</div>`;
-          }
+            if (evalDay.status === "pending") {
+                timesClass = "pending"; pendingIcon = ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>'; outTimeDisplay = "Pending";
+            }
 
-          const shortPtoName = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
-          if (evalDay.isPartialPTO) {
-              partialPill += `<div class="ikg-fast-tt no-dot" data-title="${evalDay.ptoType}" style="font-size:9px; background:var(--pto); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70px; box-shadow: 0 2px 4px rgba(139,92,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;">+${evalDay.ptoHrs}h ${shortPtoName}</div>`;
-          }
+            if (evalDay.isWFH) {
+                partialPill += `<div class="ikg-fast-tt no-dot" data-title="Work From Home" style="font-size:9px; background:var(--primary); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; box-shadow: 0 2px 4px rgba(59,130,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;">🏠 WFH</div>`;
+            }
 
-          const ignoredBadge = evalDay.isIgnored ? `<span class="ikg-fast-tt" data-title="Omitted from System Totals" style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⚠️ IGNORED</span>` : '';
-          const flexTooltip = evalDay.flexHrs >= 0 ? `+${formatDurFromDec(evalDay.flexHrs, false)}` : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
-          let activeShiftStyles = isToday && evalDay.status !== "pass" && evalDay.status !== "partial-pto-pass" ? "background:var(--primary-glow); border:1px solid var(--border);" : "";
+            const shortPtoName = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
+            if (evalDay.isPartialPTO) {
+                partialPill += `<div class="ikg-fast-tt no-dot" data-title="${evalDay.ptoType}" style="font-size:9px; background:var(--pto); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70px; box-shadow: 0 2px 4px rgba(139,92,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;">+${evalDay.ptoHrs}h ${shortPtoName}</div>`;
+            }
 
-          cellContent = `
-              <div class="ikg-cell-data">
-                  <div class="ikg-total-hrs ikg-fast-tt" data-title="${flexTooltip}" style="color:${evalDay.color}; width:fit-content; cursor:help; margin-bottom:4px; min-height:22px; display:flex; align-items:center;">
-                      ${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"} ${pendingIcon} ${ignoredBadge}
-                  </div>
-                  <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
-                      <div>IN <span>${inTimeDisplay}</span></div>
-                      <div>OUT <span>${outTimeDisplay}</span></div>
-                  </div>
-              </div>`;
+            const ignoredBadge = evalDay.isIgnored ? `<span class="ikg-fast-tt" data-title="Omitted from System Totals" style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">⚠️ IGNORED</span>` : '';
+            const flexTooltip = evalDay.flexHrs >= 0 ? `+${formatDurFromDec(evalDay.flexHrs, false)}` : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
+            let activeShiftStyles = isToday && evalDay.status !== "pass" && evalDay.status !== "partial-pto-pass" ? "background:var(--primary-glow); border:1px solid var(--border);" : "";
+
+            cellContent = `
+                <div class="ikg-cell-data">
+                    <div class="ikg-total-hrs ikg-fast-tt" data-title="${flexTooltip}" style="color:${evalDay.color}; width:fit-content; cursor:help; margin-bottom:4px; min-height:22px; display:flex; align-items:center;">
+                        ${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"} ${pendingIcon} ${ignoredBadge}
+                    </div>
+                    <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
+                        <div>IN <span>${inTimeDisplay}</span></div>
+                        <div>OUT <span>${outTimeDisplay}</span></div>
+                    </div>
+                </div>`;
+        }
+
+        htmlBuffer += `
+            <div class="ikg-day ${isToday ? "today" : ""}" data-date="${dateStr}">
+                <div class="ikg-date-header" style="align-items: center; justify-content: flex-end;">
+                    ${partialPill}
+                    <div class="ikg-date-num">${i}</div>
+                </div>
+                ${cellContent}
+            </div>`;
       }
 
-      htmlBuffer += `
-          <div class="ikg-day ${isToday ? "today" : ""}" data-date="${dateStr}">
-              <div class="ikg-date-header" style="align-items: center; justify-content: flex-end;">
-                  ${partialPill}
-                  <div class="ikg-date-num">${i}</div>
-              </div>
-              ${cellContent}
-          </div>`;
+      const totalCells = firstDay + daysInMonth;
+      for (let i = 0; i < 42 - totalCells; i++) htmlBuffer += `<div class="ikg-day empty"></div>`;
+
+      requestAnimationFrame(() => {
+        grid.innerHTML = htmlBuffer;
+
+        const netBalance = safeFloat(monthTotalHours - monthTargetHours);
+        let subDays = [];
+        if (monthOfficeDays > 0) subDays.push(`🏢 ${monthOfficeDays}`);
+        if (monthWFHDays > 0) subDays.push(`🏠 ${monthWFHDays}`);
+        let ptoTxt = [];
+        if (monthFullPTODays > 0) ptoTxt.push(`${monthFullPTODays} Full`);
+        if (monthPartialPTODays > 0) ptoTxt.push(`${monthPartialPTODays} Part`);
+        if (ptoTxt.length > 0) subDays.push(`🏝️ ${ptoTxt.join(', ')}`);
+
+        let daysHtml = `<div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;"><div style="white-space:nowrap;">${monthWorkedDays}</div>`;
+        if (subDays.length > 0) {
+            daysHtml += `<div style="font-size:10px; color:var(--text-muted); font-weight:500; text-align:right;">${subDays.join(' | ')}</div>`;
+        }
+        daysHtml += `</div>`;
+
+        const sideDaysEl = document.getElementById("side-val-days");
+        if (sideDaysEl) {
+          sideDaysEl.innerHTML = daysHtml;
+          if (sideDaysEl.parentElement) {
+              sideDaysEl.parentElement.style.alignItems = "flex-start";
+              sideDaysEl.parentElement.style.gap = "12px";
+          }
+        }
+        
+        const sideActualEl = document.getElementById("side-val-actual");
+        if (sideActualEl) {
+          sideActualEl.innerHTML = `
+              <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+                  <div style="white-space:nowrap;">${formatDurFromDec(monthTotalHours, false)}</div>
+                  <div style="font-size:10px; color:var(--text-muted); font-weight:500; text-align:right;">🏢 ${formatDurFromDec(monthOfficeHours, false)} | 🏠 ${formatDurFromDec(monthWFHHours, false)} | 🏝️ ${formatDurFromDec(monthPTOHours, false)}</div>
+              </div>`;
+          if (sideActualEl.parentElement) {
+              sideActualEl.parentElement.style.alignItems = "flex-start";
+              sideActualEl.parentElement.style.gap = "12px";
+          }
+        }
+
+        const targetEl = document.getElementById("side-val-target");
+        if (targetEl) targetEl.innerText = formatDurFromDec(monthTargetHours, false);
+
+        const balanceEl = document.getElementById("side-val-net");
+        if (balanceEl) {
+          let insightEl = document.getElementById("ikg-flex-insight");
+          if (!insightEl) { insightEl = document.createElement("div"); insightEl.id = "ikg-flex-insight"; balanceEl.parentNode.insertAdjacentElement("afterend", insightEl); }
+
+          if (netBalance > 0) {
+            balanceEl.innerHTML = `<span class="good">${formatDurFromDec(netBalance, true)}</span>`;
+            const burnDays = Math.ceil(netBalance / 0.5);
+            insightEl.innerHTML = `<div style="font-size:11px; color:var(--warn); background:var(--warn-bg); border:1px solid rgba(245, 158, 11, 0.3); padding:8px 10px; border-radius:6px; margin-top:12px; display:flex; gap:8px; align-items:flex-start; line-height:1.4;"><span style="font-size:14px;">💡</span><span>Flex burns max <b>30m/day</b> to offset late arrivals.<br>Requires <b>~${burnDays} planned late-ins</b> to clear.</span></div>`;
+          } else if (netBalance < 0) {
+            balanceEl.innerHTML = `<span class="bad">${formatDurFromDec(netBalance, true)}</span>`;
+            insightEl.innerHTML = "";
+          } else {
+            balanceEl.innerHTML = `<span style="color:var(--text-muted)">Perfect</span>`;
+            insightEl.innerHTML = "";
+          }
+        }
+
+        // 🎯 RENDER INTERACTIVE WARNING CARD WITH UN-IGNORE TRAY
+        renderMissingDaysWarning(missingDays);
+
+        updateActiveShiftUI();
+      });
     }
 
-    const totalCells = firstDay + daysInMonth;
-    for (let i = 0; i < 42 - totalCells; i++) htmlBuffer += `<div class="ikg-day empty"></div>`;
+    // 🎯 INTERACTIVE SIDEBAR WARNING CARD (WITH UN-IGNORE MANAGEMENT)
+    const IGNORED_WARNINGS_KEY = `IKG_IGNORED_MISSING_DAYS_${APP_VER}`;
 
-    // Schedule paint asynchronously
-    requestAnimationFrame(() => {
-      grid.innerHTML = htmlBuffer;
+    const renderMissingDaysWarning = (missingDays = []) => {
+      let warnContainer = document.getElementById("ikg-missing-days-card");
+      let userIgnoredDays = [];
+      try { userIgnoredDays = JSON.parse(localStorage.getItem(IGNORED_WARNINGS_KEY) || "[]"); } catch(e){}
 
-      const netBalance = safeFloat(monthTotalHours - monthTargetHours);
-      let subDays = [];
-      if (monthOfficeDays > 0) subDays.push(`🏢 ${monthOfficeDays}`);
-      if (monthWFHDays > 0) subDays.push(`🏠 ${monthWFHDays}`);
-      let ptoTxt = [];
-      if (monthFullPTODays > 0) ptoTxt.push(`${monthFullPTODays} Full`);
-      if (monthPartialPTODays > 0) ptoTxt.push(`${monthPartialPTODays} Part`);
-      if (ptoTxt.length > 0) subDays.push(`🏝️ ${ptoTxt.join(', ')}`);
+      // Filter out user-ignored dates from active warnings
+      const activeMissing = missingDays.filter(d => !userIgnoredDays.includes(d));
+      const monthIgnored = userIgnoredDays.filter(d => missingDays.includes(d));
 
-      let daysHtml = `<div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;"><div style="white-space:nowrap;">${monthWorkedDays}</div>`;
-      if (subDays.length > 0) {
-          daysHtml += `<div style="font-size:10px; color:var(--text-muted); font-weight:500; text-align:right;">${subDays.join(' | ')}</div>`;
-      }
-      daysHtml += `</div>`;
-
-      const sideDaysEl = document.getElementById("side-val-days");
-      if (sideDaysEl) {
-        sideDaysEl.innerHTML = daysHtml;
-        if (sideDaysEl.parentElement) {
-            sideDaysEl.parentElement.style.alignItems = "flex-start";
-            sideDaysEl.parentElement.style.gap = "12px";
-        }
-      }
-      
-      const sideActualEl = document.getElementById("side-val-actual");
-      if (sideActualEl) {
-        sideActualEl.innerHTML = `
-            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
-                <div style="white-space:nowrap;">${formatDurFromDec(monthTotalHours, false)}</div>
-                <div style="font-size:10px; color:var(--text-muted); font-weight:500; text-align:right;">🏢 ${formatDurFromDec(monthOfficeHours, false)} | 🏠 ${formatDurFromDec(monthWFHHours, false)} | 🏝️ ${formatDurFromDec(monthPTOHours, false)}</div>
-            </div>`;
-        if (sideActualEl.parentElement) {
-            sideActualEl.parentElement.style.alignItems = "flex-start";
-            sideActualEl.parentElement.style.gap = "12px";
-        }
+      if (activeMissing.length === 0 && monthIgnored.length === 0) {
+        if (warnContainer) warnContainer.remove();
+        return;
       }
 
-      const targetEl = document.getElementById("side-val-target");
-      if (targetEl) targetEl.innerText = formatDurFromDec(monthTargetHours, false);
+      if (!warnContainer) {
+        warnContainer = document.createElement("div");
+        warnContainer.id = "ikg-missing-days-card";
+        warnContainer.className = "ikg-card";
+        warnContainer.style.cssText = "background: rgba(239, 68, 68, 0.08); border: 1px solid var(--danger); margin-top: 16px;";
 
-      const balanceEl = document.getElementById("side-val-net");
-      if (balanceEl) {
-        let insightEl = document.getElementById("ikg-flex-insight");
-        if (!insightEl) { insightEl = document.createElement("div"); insightEl.id = "ikg-flex-insight"; balanceEl.parentNode.insertAdjacentElement("afterend", insightEl); }
-
-        if (netBalance > 0) {
-          balanceEl.innerHTML = `<span class="good">${formatDurFromDec(netBalance, true)}</span>`;
-          const burnDays = Math.ceil(netBalance / 0.5);
-          insightEl.innerHTML = `<div style="font-size:11px; color:var(--warn); background:var(--warn-bg); border:1px solid rgba(245, 158, 11, 0.3); padding:8px 10px; border-radius:6px; margin-top:12px; display:flex; gap:8px; align-items:flex-start; line-height:1.4;"><span style="font-size:14px;">💡</span><span>Flex burns max <b>30m/day</b> to offset late arrivals.<br>Requires <b>~${burnDays} planned late-ins</b> to clear.</span></div>`;
-        } else if (netBalance < 0) {
-          balanceEl.innerHTML = `<span class="bad">${formatDurFromDec(netBalance, true)}</span>`;
-          insightEl.innerHTML = "";
-        } else {
-          balanceEl.innerHTML = `<span style="color:var(--text-muted)">Perfect</span>`;
-          insightEl.innerHTML = "";
-        }
+        const summaryPane = document.querySelector(".ikg-summary-pane");
+        if (summaryPane) summaryPane.appendChild(warnContainer);
       }
 
-      updateActiveShiftUI();
-    });
-  }
+      // HTML template for active warnings
+      const activeBadgesHtml = activeMissing.map(d => `
+        <span style="display:inline-flex; align-items:center; gap:4px; background:rgba(239,68,68,0.2); padding:2px 6px; border-radius:4px; font-size:11px;">
+            <b style="color:var(--text-main); font-family:monospace;">${d}</b>
+            <button class="ikg-ignore-date-btn" data-date="${d}" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:10px; padding:0 2px; line-height:1;" title="Ignore warning for ${d}">✕</button>
+        </span>
+      `).join(" ");
+
+      // HTML template for un-ignoring dates
+      const ignoredBadgesHtml = monthIgnored.map(d => `
+        <span style="display:inline-flex; align-items:center; gap:4px; background:var(--bg-elevated); border:1px solid var(--border); padding:2px 6px; border-radius:4px; font-size:11px;">
+            <span style="color:var(--text-muted); font-family:monospace;">${d}</span>
+            <button class="ikg-unignore-date-btn" data-date="${d}" style="background:none; border:none; color:var(--success); cursor:pointer; font-size:11px; font-weight:bold; padding:0 2px; line-height:1;" title="Restore warning for ${d}">+ Restore</button>
+        </span>
+      `).join(" ");
+
+      const activeSectionHtml = activeMissing.length > 0 ? `
+        <div class="ikg-card-title" style="color: var(--danger); display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+            ⚠️ Missing Attendance (${activeMissing.length} Days)
+        </div>
+        <div style="font-size: 12px; color: var(--text-main); line-height: 1.5; display:flex; flex-direction:column; gap:10px;">
+            <div>
+                Working day(s) with <b>no punches, no WFH, and no PTO</b>:
+                <div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px;">${activeBadgesHtml}</div>
+            </div>
+            <div style="border-top:1px dashed rgba(239,68,68,0.3); padding-top:8px;">
+                <b style="color:var(--warn);">Required Action:</b>
+                <ol style="margin:4px 0 0 16px; padding:0; display:flex; flex-direction:column; gap:4px; color:var(--text-muted); font-size:11px;">
+                    <li><b>Forgot PTO?</b> Apply on Deel for these date(s).</li>
+                    <li><b>Forgot Punchcard?</b> Report to HR with browser history or colleague vouch via Slack.</li>
+                </ol>
+            </div>
+        </div>
+      ` : `<div style="font-size:12px; color:var(--success); font-weight:600;">✅ All active warnings resolved or ignored.</div>`;
+
+      const ignoredSectionHtml = monthIgnored.length > 0 ? `
+        <div style="border-top:1px solid var(--border); margin-top:12px; padding-top:8px;">
+            <details style="cursor:pointer;">
+                <summary style="font-size:11px; color:var(--text-muted); font-weight:600; user-select:none;">🙈 Ignored Warnings (${monthIgnored.length})</summary>
+                <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">${ignoredBadgesHtml}</div>
+            </details>
+        </div>
+      ` : '';
+
+      warnContainer.innerHTML = activeSectionHtml + ignoredSectionHtml;
+
+      // 🎯 EVENT LISTENERS FOR IGNORE / UN-IGNORE BUTTONS
+      warnContainer.querySelectorAll(".ikg-ignore-date-btn").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+          const dateToIgnore = e.target.getAttribute("data-date");
+          if (!dateToIgnore) return;
+
+          let list = [];
+          try { list = JSON.parse(localStorage.getItem(IGNORED_WARNINGS_KEY) || "[]"); } catch(err){}
+          if (!list.includes(dateToIgnore)) list.push(dateToIgnore);
+          localStorage.setItem(IGNORED_WARNINGS_KEY, JSON.stringify(list));
+
+          alert(
+            `Attendance Pro:\n\n` +
+            `Warning for [${dateToIgnore}] has been suppressed.\n\n` +
+            `If you want to un-ignore this date later, expand the "🙈 Ignored Warnings" section at the bottom of the warning card and click "Restore".`
+          );
+
+          renderCalendar();
+        });
+      });
+
+      warnContainer.querySelectorAll(".ikg-unignore-date-btn").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+          const dateToRestore = e.target.getAttribute("data-date");
+          if (!dateToRestore) return;
+
+          let list = [];
+          try { list = JSON.parse(localStorage.getItem(IGNORED_WARNINGS_KEY) || "[]"); } catch(err){}
+          list = list.filter(d => d !== dateToRestore);
+          localStorage.setItem(IGNORED_WARNINGS_KEY, JSON.stringify(list));
+
+          renderCalendar();
+        });
+      });
+    };
 
     function renderSettings() {
       const settings = getSettings();
@@ -2724,6 +2866,12 @@
       const overrideCheckbox = document.getElementById("set-use-overrides");
       if (overrideCheckbox) {
         overrideCheckbox.checked = settings.useManualOverrides !== false;
+      }
+
+      // 🎯 NEW: WFH Toggle State Binding
+      const wfhCheckbox = document.getElementById("set-include-wfh");
+      if (wfhCheckbox) {
+        wfhCheckbox.checked = settings.includeWfhInHours !== false;
       }
 
       const syncDaysEl = document.getElementById("set-sync-days");
@@ -3361,154 +3509,156 @@
                           </table>
                       </div>
 
-                      <div id="view-settings" class="ikg-view" style="padding: 32px 48px; background: var(--bg-surface); justify-content: center; align-items: flex-start;">
-                          <div style="width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 20px;">
+                      <div id="view-settings" class="ikg-view" style="padding: 32px 48px; overflow-y: auto; background: var(--bg-surface); justify-content: center; align-items: flex-start;">
+                          <div class="set-container">
 
                               <div class="set-header-wrap">
                                   <div class="set-header">⚙️ Preferences & Customization</div>
-                                  <div style="font-size:14px; color:var(--text-muted);">Configure how Attendance Pro behaves. (Changes save automatically)</div>
+                                  <div style="font-size:14px; color:var(--text-muted); margin-bottom: 8px;">Configure how Attendance Pro behaves. (Changes save automatically)</div>
                               </div>
 
-                              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                                  <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; gap: 16px;">
-                                      <div class="ikg-card-title">General & Display</div>
-                                      <label class="checkbox-label">
-                                          <input type="checkbox" id="set-use-flex" style="width:16px; height:16px; accent-color: var(--primary);">
-                                          <span>Auto-subtract banked Flex from Goal Out</span>
-                                      </label>
-                                      <label class="checkbox-label">
-                                          <input type="checkbox" id="set-show-secs" style="width:16px; height:16px; accent-color: var(--primary);">
-                                          <span>Show exact seconds (HH:MM:SS)</span>
-                                      </label>
-                                      <label class="checkbox-label" style="margin-bottom: 8px;">
-                                          <input type="checkbox" id="set-use-overrides" style="width:16px; height:16px; accent-color: var(--primary);">
-                                          <span><b style="color:var(--warn);">Enable Override:</b> Force app to use my Manual Inputs</span>
-                                      </label>
-                                      <div class="set-group" style="margin-top: auto; margin-bottom: 0;">
-                                          <label class="set-label">Monthly Shift Override</label>
-                                          <select id="set-manual-shift" class="set-select" style="padding: 8px;">
-                                              <option value="auto">🤖 Auto-Detect (1st Check-in)</option>
-                                              <option value="09:00 ~ 18:00">09:00 ~ 18:00</option>
-                                              <option value="09:30 ~ 18:30">09:30 ~ 18:30</option>
-                                              <option value="10:00 ~ 19:00">10:00 ~ 19:00</option>
-                                              <option value="13:00 ~ 22:00">13:00 ~ 22:00</option>
-                                          </select>
-                                      </div>
+                              <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; gap: 16px;">
+                                  <div class="ikg-card-title">General & Display</div>
+                                  <label class="checkbox-label">
+                                      <input type="checkbox" id="set-use-flex" style="width:16px; height:16px; accent-color: var(--primary);">
+                                      <span>Auto-subtract banked Flex from Goal Out</span>
+                                  </label>
+                                  <label class="checkbox-label">
+                                      <input type="checkbox" id="set-show-secs" style="width:16px; height:16px; accent-color: var(--primary);">
+                                      <span>Show exact seconds (HH:MM:SS)</span>
+                                  </label>
+                                  <label class="checkbox-label">
+                                      <input type="checkbox" id="set-include-wfh" style="width:16px; height:16px; accent-color: var(--primary);">
+                                      <span>Calculate WFH hours into Work Totals & Flex</span>
+                                  </label>
+                                  <label class="checkbox-label" style="margin-bottom: 8px;">
+                                      <input type="checkbox" id="set-use-overrides" style="width:16px; height:16px; accent-color: var(--primary);">
+                                      <span><b style="color:var(--warn);">Enable Override:</b> Force app to use my Manual Inputs</span>
+                                  </label>
+                                  <div class="set-group" style="margin-top: auto; margin-bottom: 0;">
+                                      <label class="set-label">Monthly Shift Override</label>
+                                      <select id="set-manual-shift" class="set-select" style="padding: 8px;">
+                                          <option value="auto">🤖 Auto-Detect (1st Check-in)</option>
+                                          <option value="09:00 ~ 18:00">09:00 ~ 18:00</option>
+                                          <option value="09:30 ~ 18:30">09:30 ~ 18:30</option>
+                                          <option value="10:00 ~ 19:00">10:00 ~ 19:00</option>
+                                          <option value="13:00 ~ 22:00">13:00 ~ 22:00</option>
+                                      </select>
                                   </div>
+                              </div>
 
-                                  <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; gap: 16px;">
-                                      <div class="ikg-card-title">Alarm Behavior</div>
-                                      <label class="checkbox-label">
-                                          <input type="checkbox" id="set-auto-alarm" style="width:16px; height:16px; accent-color: var(--primary);">
-                                          <span>Auto-set background alarm for shifts</span>
-                                      </label>
-                                      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                                          <div class="set-group" style="margin-bottom:0;">
-                                              <label class="set-label" style="font-size: 10px;">Triggers (- Before / + After)</label>
-                                              <div class="set-row" style="gap: 4px;">
-                                                  <input type="text" id="set-triggers" class="set-input" placeholder="-15, 0, 5" style="padding: 8px;">
-                                                  <select id="set-trigger-unit" class="set-select" style="padding: 8px 4px; width: 55px; flex: none;">
-                                                      <option value="m">Min</option>
-                                                      <option value="s">Sec</option>
-                                                  </select>
-                                              </div>
-                                          </div>
-                                          <div class="set-group" style="margin-bottom:0;">
-                                              <label class="set-label" style="font-size: 10px;">Snooze Duration</label>
-                                              <div class="set-row" style="gap: 4px;">
-                                                  <input type="number" id="set-snooze" class="set-input" min="1" style="padding: 8px;">
-                                                  <select id="set-snooze-unit" class="set-select" style="padding: 8px 4px; width: 55px; flex: none;">
-                                                      <option value="m">Min</option>
-                                                      <option value="s">Sec</option>
-                                                  </select>
-                                              </div>
+                              <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; gap: 16px;">
+                                  <div class="ikg-card-title">Alarm Behavior</div>
+                                  <label class="checkbox-label">
+                                      <input type="checkbox" id="set-auto-alarm" style="width:16px; height:16px; accent-color: var(--primary);">
+                                      <span>Auto-set background alarm for shifts</span>
+                                  </label>
+                                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                      <div class="set-group" style="margin-bottom:0;">
+                                          <label class="set-label" style="font-size: 10px;">Triggers (- Before / + After)</label>
+                                          <div class="set-row" style="gap: 4px;">
+                                              <input type="text" id="set-triggers" class="set-input" placeholder="-15, 0, 5" style="padding: 8px;">
+                                              <select id="set-trigger-unit" class="set-select" style="padding: 8px 4px; width: 55px; flex: none;">
+                                                  <option value="m">Min</option>
+                                                  <option value="s">Sec</option>
+                                              </select>
                                           </div>
                                       </div>
-                                      <div class="set-group" style="margin-top: auto; margin-bottom: 0;">
-                                          <label class="set-label">Test Alarm (Audio + Visual)</label>
-                                          <div class="set-row">
-                                              <input type="number" id="ikg-test-sec" class="set-input" value="5" min="1" max="60" style="width: 60px; padding: 8px;">
-                                              <button id="ikg-btn-test-alarm" class="ikg-btn-outline" style="margin-top:0; flex: 1; padding: 8px;">🧪 Run Test</button>
+                                      <div class="set-group" style="margin-bottom:0;">
+                                          <label class="set-label" style="font-size: 10px;">Snooze Duration</label>
+                                          <div class="set-row" style="gap: 4px;">
+                                              <input type="number" id="set-snooze" class="set-input" min="1" style="padding: 8px;">
+                                              <select id="set-snooze-unit" class="set-select" style="padding: 8px 4px; width: 55px; flex: none;">
+                                                  <option value="m">Min</option>
+                                                  <option value="s">Sec</option>
+                                              </select>
                                           </div>
                                       </div>
                                   </div>
-
-                                  <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; gap: 12px;">
-                                      <div class="ikg-card-title" style="margin-bottom: 0;">Alarm Media</div>
-
-                                      <div style="font-size:11px; color:var(--warn); padding:6px 8px; background:var(--warn-bg); border-radius:6px; border:1px solid var(--warn); line-height: 1.3;">
-                                          💡 <b>Mac sleep blocks alarms.</b> Use GCal to push to phone.
-                                      </div>
-
-                                      <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
-                                          <select id="set-sound" class="set-select" style="padding: 6px 8px; font-size: 12px; height: 32px;">
-                                              <option value="pro_fkj">🎹 FKJ - Just Piano (Def)</option>
-                                              <option value="pro_misch">🎸 Tom Misch</option>
-                                              <option value="chime">🔔 Joyful Chime</option>
-                                              <option value="gentle">🌅 Gentle Wake</option>
-                                              <option value="beep">⏰ Classic Beep</option>
-                                              <option value="custom">📁 Custom Audio</option>
-                                          </select>
-                                          <button id="ikg-btn-preview" class="ikg-btn-outline" style="margin: 0; padding: 6px 10px; font-size: 12px; height: 32px; flex-shrink: 0;">▶️ Play</button>
-                                      </div>
-
-                                      <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px; padding: 0 4px;">
-                                          <span style="font-size: 11px; color: var(--text-muted); font-weight: 600;">VOL</span>
-                                          <input type="range" id="set-volume" min="0" max="1" step="0.05" value="0.8" style="flex: 1; accent-color: var(--primary); height: 4px; border-radius: 2px; cursor: pointer;">
-                                          <span id="set-volume-val" style="font-size: 11px; color: var(--text-main); font-family: monospace; width: 32px; text-align: right;">80%</span>
-                                      </div>
-
-                                      <div id="set-upload-wrap" class="file-upload-wrapper" style="padding: 8px; margin: 0;">
-                                          <label class="file-upload-label" for="set-file-input" style="padding: 4px 12px; font-size: 11px;">Upload MP3</label>
-                                          <input type="file" id="set-file-input" accept="audio/*" style="display:none;">
-                                          <div class="file-name" id="set-file-name" style="margin-top: 4px;">Max size: 15MB</div>
-                                      </div>
-
-                                      <hr style="border: 0; border-top: 1px dashed var(--border); margin: 4px 0;">
-
-                                      <div style="display: flex; gap: 8px; align-items: center;">
-                                          <img id="set-img-preview" src="https://attendance.iki-utl.cc/favicon.png" style="width: 32px; height: 32px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border); background: var(--bg-base); flex-shrink: 0;">
-                                          <select id="set-img-type" class="set-select" style="padding: 6px 8px; font-size: 12px; height: 32px;">
-                                              <option value="default">Default GIF</option>
-                                              <option value="custom">🖼️ Custom Img</option>
-                                          </select>
-                                          <div class="ikg-fast-tt no-dot" data-title="Pulse Animation Speed (0 to disable)" style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
-                                              <input type="number" id="set-pulse-speed" class="set-input" step="0.1" min="0" placeholder="Speed" style="padding: 6px; font-size: 12px; width: 50px; height: 32px; text-align: center;">
-                                              <span style="font-size: 11px; color: var(--text-muted);">sec</span>
-                                          </div>
-                                      </div>
-                                      <div id="set-img-upload-wrap" class="file-upload-wrapper" style="padding: 8px; margin: 0;">
-                                          <label class="file-upload-label" for="set-img-input" style="padding: 4px 12px; font-size: 11px;">Upload Image/GIF</label>
-                                          <input type="file" id="set-img-input" accept="image/*" style="display:none;">
-                                          <div class="file-name" id="set-img-name" style="margin-top: 4px;">GIFs supported!</div>
+                                  <div class="set-group" style="margin-top: auto; margin-bottom: 0;">
+                                      <label class="set-label">Test Alarm (Audio + Visual)</label>
+                                      <div class="set-row">
+                                          <input type="number" id="ikg-test-sec" class="set-input" value="5" min="1" max="60" style="width: 60px; padding: 8px;">
+                                          <button id="ikg-btn-test-alarm" class="ikg-btn-outline" style="margin-top:0; flex: 1; padding: 8px;">🧪 Run Test</button>
                                       </div>
                                   </div>
+                              </div>
 
-                                  <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; gap: 12px;">
-                                      <div class="ikg-card-title">Data Synchronization</div>
+                              <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; gap: 12px;">
+                                  <div class="ikg-card-title" style="margin-bottom: 0;">Alarm Media</div>
 
-                                      <div class="set-group" style="margin-bottom: 8px;">
-                                          <label class="set-label">Auto-Sync History</label>
-                                          <select id="set-sync-days" class="set-select" style="padding: 8px;">
-                                              <option value="7">Past 7 Working Days</option>
-                                              <option value="14">Past 14 Working Days</option>
-                                              <option value="30">Past 30 Working Days</option>
-                                              <option value="60">Past 60 Working Days</option>
-                                          </select>
-                                      </div>
-
-                                      <div style="font-size:11px; color:var(--text-muted); line-height:1.5;">
-                                          Data syncs <b>automatically</b>. Use this button to force a manual hard-refresh.
-                                      </div>
-                                      <button class="ikg-sync-btn" id="ikg-btn-fetch" disabled style="margin-top: auto; padding: 10px;">Manual Sync Data</button>
+                                  <div style="font-size:11px; color:var(--warn); padding:6px 8px; background:var(--warn-bg); border-radius:6px; border:1px solid var(--warn); line-height: 1.3;">
+                                      💡 <b>Mac sleep blocks alarms.</b> Use GCal to push to phone.
                                   </div>
+
+                                  <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+                                      <select id="set-sound" class="set-select" style="padding: 6px 8px; font-size: 12px; height: 32px;">
+                                          <option value="pro_fkj">🎹 FKJ - Just Piano (Def)</option>
+                                          <option value="pro_misch">🎸 Tom Misch</option>
+                                          <option value="chime">🔔 Joyful Chime</option>
+                                          <option value="gentle">🌅 Gentle Wake</option>
+                                          <option value="beep">⏰ Classic Beep</option>
+                                          <option value="custom">📁 Custom Audio</option>
+                                      </select>
+                                      <button id="ikg-btn-preview" class="ikg-btn-outline" style="margin: 0; padding: 6px 10px; font-size: 12px; height: 32px; flex-shrink: 0;">▶️ Play</button>
+                                  </div>
+
+                                  <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px; padding: 0 4px;">
+                                      <span style="font-size: 11px; color: var(--text-muted); font-weight: 600;">VOL</span>
+                                      <input type="range" id="set-volume" min="0" max="1" step="0.05" value="0.8" style="flex: 1; accent-color: var(--primary); height: 4px; border-radius: 2px; cursor: pointer;">
+                                      <span id="set-volume-val" style="font-size: 11px; color: var(--text-main); font-family: monospace; width: 32px; text-align: right;">80%</span>
+                                  </div>
+
+                                  <div id="set-upload-wrap" class="file-upload-wrapper" style="padding: 8px; margin: 0;">
+                                      <label class="file-upload-label" for="set-file-input" style="padding: 4px 12px; font-size: 11px;">Upload MP3</label>
+                                      <input type="file" id="set-file-input" accept="audio/*" style="display:none;">
+                                      <div class="file-name" id="set-file-name" style="margin-top: 4px;">Max size: 15MB</div>
+                                  </div>
+
+                                  <hr style="border: 0; border-top: 1px dashed var(--border); margin: 4px 0;">
+
+                                  <div style="display: flex; gap: 8px; align-items: center;">
+                                      <img id="set-img-preview" src="https://attendance.iki-utl.cc/favicon.png" style="width: 32px; height: 32px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border); background: var(--bg-base); flex-shrink: 0;">
+                                      <select id="set-img-type" class="set-select" style="padding: 6px 8px; font-size: 12px; height: 32px;">
+                                          <option value="default">Default GIF</option>
+                                          <option value="custom">🖼️ Custom Img</option>
+                                      </select>
+                                      <div class="ikg-fast-tt no-dot" data-title="Pulse Animation Speed (0 to disable)" style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+                                          <input type="number" id="set-pulse-speed" class="set-input" step="0.1" min="0" placeholder="Speed" style="padding: 6px; font-size: 12px; width: 50px; height: 32px; text-align: center;">
+                                          <span style="font-size: 11px; color: var(--text-muted);">sec</span>
+                                      </div>
+                                  </div>
+                                  <div id="set-img-upload-wrap" class="file-upload-wrapper" style="padding: 8px; margin: 0;">
+                                      <label class="file-upload-label" for="set-img-input" style="padding: 4px 12px; font-size: 11px;">Upload Image/GIF</label>
+                                      <input type="file" id="set-img-input" accept="image/*" style="display:none;">
+                                      <div class="file-name" id="set-img-name" style="margin-top: 4px;">GIFs supported!</div>
+                                  </div>
+                              </div>
+
+                              <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; gap: 12px;">
+                                  <div class="ikg-card-title">Data Synchronization</div>
+
+                                  <div class="set-group" style="margin-bottom: 8px;">
+                                      <label class="set-label">Auto-Sync History</label>
+                                      <select id="set-sync-days" class="set-select" style="padding: 8px;">
+                                          <option value="7">Past 7 Working Days</option>
+                                          <option value="14">Past 14 Working Days</option>
+                                          <option value="30">Past 30 Working Days</option>
+                                          <option value="60">Past 60 Working Days</option>
+                                      </select>
+                                  </div>
+
+                                  <div style="font-size:11px; color:var(--text-muted); line-height:1.5;">
+                                      Data syncs <b>automatically</b>. Use this button to force a manual hard-refresh.
+                                  </div>
+                                  <button class="ikg-sync-btn" id="ikg-btn-fetch" disabled style="margin-top: auto; padding: 10px;">Manual Sync Data</button>
                               </div>
 
                           </div>
                       </div>
 
-                      <div id="view-rules" class="ikg-view" style="padding: 32px 48px; overflow-y: auto; background: var(--bg-surface); align-items: flex-start; justify-content: center;">
-                          <div style="width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 20px;">
+                      <div id="view-rules" class="ikg-view" style="padding: 32px 48px; overflow-y: auto; background: var(--bg-surface);">
+                          <div style="width: 100%; max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px;">
 
                               <div class="set-header-wrap">
                                   <div class="set-header">📜 Shift & Flex Rules</div>
@@ -3563,6 +3713,7 @@
                                       </div>
                                   </div>
                               </div>
+
                           </div>
                       </div>
 
@@ -3572,7 +3723,7 @@
           `;
       document.body.appendChild(backdrop);
 
-      // Instantiate Custom Calendars (Removed redundant initializations to fix duplicate popups)
+      // Instantiate Custom Calendars
       statsCalInstance = new IkgDualCal(
         "stats-cal-container",
         "stats-date-start",
@@ -3850,7 +4001,6 @@
 
       const heatmapGridEl = document.getElementById("ikg-heatmap-grid");
       if (heatmapGridEl) {
-        // Keep your existing click handler to navigate back to calendar cells
         heatmapGridEl.addEventListener("click", (e) => {
           const heatSq = e.target.closest(".ikg-heat-sq");
           if (heatSq) {
@@ -3867,7 +4017,6 @@
           }
         });
 
-        // 🎯 NEW: DYNAMIC MULTI-LINE HOVER CARD FOR GRID ENTRIES
         let gridTooltip = document.getElementById("ikg-grid-tooltip");
 
         heatmapGridEl.addEventListener("mousemove", (e) => {
@@ -3879,7 +4028,6 @@
               return;
             }
 
-            // 🎯 CLEAN DDD: Fetch snapshot and evaluate safely!
             const snapshot = IKG_DataStore.buildSnapshot();
             const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, snapshot));
 
@@ -3891,22 +4039,11 @@
             const cleanPtoLabel = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
             const dObj = new Date(dStr);
             const monthNames = [
-              "JAN",
-              "FEB",
-              "MAR",
-              "APR",
-              "MAY",
-              "JUN",
-              "JUL",
-              "AUG",
-              "SEP",
-              "OCT",
-              "NOV",
-              "DEC",
+              "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+              "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
             ];
             const formattedDateLabel = `${monthNames[dObj.getMonth()]} ${dObj.getDate()}`;
 
-            // 🎯 MINIMALIST GRID HOVER CARD (Emoji Only)
             let text = `<div style="color:var(--text-muted); font-size:11px; margin-bottom:8px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase;">${formattedDateLabel}</div>`;
 
             const totalHrs = evalDay.actualHrs + evalDay.ptoHrs;
@@ -3917,23 +4054,23 @@
 
             if (evalDay.actualHrs > 0) {
               text += `
-                                    <div style="text-align:center; font-size:14px;" title="Worked">⏱️</div>
-                                    <div style="color:var(--text-main);"><b>${evalDay.actualHrs.toFixed(2)}h</b></div>
-                                `;
+                  <div style="text-align:center; font-size:14px;" title="Worked">⏱️</div>
+                  <div style="color:var(--text-main);"><b>${evalDay.actualHrs.toFixed(2)}h</b></div>
+              `;
             }
             if (evalDay.ptoHrs > 0 && !evalDay.isFullPTO) {
               text += `
-                                    <div style="text-align:center; font-size:14px;" title="PTO">🏝️</div>
-                                    <div style="color:var(--pto);"><b>${evalDay.ptoHrs.toFixed(2)}h</b> <span style="font-size:10px; opacity:0.75;">(${cleanPtoLabel})</span></div>
-                                `;
+                  <div style="text-align:center; font-size:14px;" title="PTO">🏝️</div>
+                  <div style="color:var(--pto);"><b>${evalDay.ptoHrs.toFixed(2)}h</b> <span style="font-size:10px; opacity:0.75;">(${cleanPtoLabel})</span></div>
+              `;
             }
 
             if (totalHrs > 0 && !evalDay.isIgnored) {
               text += `<div style="grid-column: 1 / -1; margin: 4px 0; border-top: 1px dashed var(--border);"></div>`;
               text += `
-                                    <div style="text-align:center; font-size:14px;" title="Total">📊</div>
-                                    <div style="color:${totalColor}; font-weight:700;">${totalHrs.toFixed(2)}h</div>
-                                `;
+                  <div style="text-align:center; font-size:14px;" title="Total">📊</div>
+                  <div style="color:${totalColor}; font-weight:700;">${totalHrs.toFixed(2)}h</div>
+              `;
             } else if (evalDay.isFullPTO) {
               text += `<div style="grid-column: 1 / -1; color:var(--pto); font-weight:700; margin-top:4px;">🏝️ Full Day PTO</div>`;
             } else if (evalDay.status === "pending") {
@@ -3942,7 +4079,7 @@
               text += `<div style="grid-column: 1 / -1; color:var(--text-muted); font-weight: 600; margin-top:4px;">⚠️ Ignored Day</div>`;
             }
 
-            text += `</div>`; // Close grid
+            text += `</div>`;
 
             if (evalDay.isSpoofed) {
               text += `<div style="color:var(--warn); font-size:10px; margin-top:8px; font-weight:600;">⚠️ Manual Override Active</div>`;
@@ -4082,7 +4219,6 @@
         }
       });
 
-      // 📊 Hook up the Chart/Grid View Toggle
       document.querySelectorAll(".view-toggle").forEach((btn) => {
         btn.addEventListener("click", (e) => {
           document
@@ -4094,7 +4230,6 @@
         });
       });
 
-      // 2. Hook up the Settings Checkbox
       const overrideCheckbox = document.getElementById("set-use-overrides");
       if (overrideCheckbox) {
         overrideCheckbox.checked = getSettings().useManualOverrides;
@@ -4111,7 +4246,6 @@
         dmModal.classList.remove("open");
       });
 
-      // 🎯 SETTINGS AUTOSAVE LOGIC
       let tempMp3Data = null;
       let tempMp3Name = "";
       let tempImgData = null;
@@ -4136,6 +4270,10 @@
         if (overrideCheckbox)
           settings.useManualOverrides = overrideCheckbox.checked;
 
+        const wfhCheckbox = document.getElementById("set-include-wfh");
+        if (wfhCheckbox)
+          settings.includeWfhInHours = wfhCheckbox.checked;
+
         const syncDaysEl = document.getElementById("set-sync-days");
         if (syncDaysEl) settings.syncDays = parseInt(syncDaysEl.value, 10) || 7;
 
@@ -4143,7 +4281,6 @@
         settings.volume = isNaN(volVal) ? 0.8 : volVal;
 
         const triggersStr = document.getElementById("set-triggers").value;
-        // Sort lowest to highest so earlier warnings fire first
         settings.triggers = triggersStr
           .split(",")
           .map((s) => parseFloat(s.trim()))
@@ -4176,16 +4313,17 @@
         "set-trigger-unit",
         "set-use-flex",
         "set-show-secs",
+        "set-include-wfh",
         "set-auto-alarm",
         "set-manual-shift",
         "set-volume",
         "set-use-overrides",
         "set-sync-days",
       ].forEach((id) => {
-        document.getElementById(id).addEventListener("change", autoSaveSettings);
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("change", autoSaveSettings);
       });
 
-      // Live Volume Update
       document.getElementById("set-volume").addEventListener("input", (e) => {
         const val = parseFloat(e.target.value);
         document.getElementById("set-volume-val").innerText =
@@ -4195,7 +4333,6 @@
         }
       });
 
-      // UI Toggles for Audio/Image Dropdowns
       document.getElementById("set-sound").addEventListener("change", (e) => {
         const wrap = document.getElementById("set-upload-wrap");
         if (e.target.value === "custom") wrap.classList.add("visible");
@@ -4217,11 +4354,10 @@
             }
           } else {
             wrap.classList.remove("visible");
-            preview.src = DEFAULT_GIF_URL; // Native URL
+            preview.src = DEFAULT_GIF_URL;
           }
         });
 
-      // The Audio File Uploader
       document
         .getElementById("set-file-input")
         .addEventListener("change", (e) => {
@@ -4238,7 +4374,6 @@
           reader.readAsDataURL(file);
         });
 
-      // The Image File Uploader
       document.getElementById("set-img-input").addEventListener("change", (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -4248,7 +4383,7 @@
           tempImgName = file.name;
           document.getElementById("set-img-name").innerText =
             `Selected: ${file.name}`;
-          document.getElementById("set-img-preview").src = tempImgData; // Live preview update
+          document.getElementById("set-img-preview").src = tempImgData;
           autoSaveSettings();
         };
         reader.readAsDataURL(file);
@@ -4284,12 +4419,8 @@
           }
         });
 
-      // ==========================================
-      // 6. SINGLE AUTO-SYNC ON PAGE LOAD
-      // ==========================================
       let hasAutoSynced = false;
 
-      // 🎯 FIX 1: Robust Token Checking that never abandons the button state
       setInterval(() => {
         const fetchBtn = document.getElementById("ikg-btn-fetch");
         if (authToken && fetchBtn && fetchBtn.disabled && !isFetchingData) {
@@ -4304,7 +4435,6 @@
         }
       }, 500);
 
-      // 🎯 HIGH-SPEED PARALLEL SYNC WITH VERBOSE TASK LOGGING
       document
         .getElementById("ikg-btn-fetch")
         .addEventListener("click", async (e) => {
@@ -4332,9 +4462,6 @@
             tomorrowReal.setDate(tomorrowReal.getDate() + 1);
             const tomorrowStr = toYMD(tomorrowReal);
 
-            // =========================================================================
-            // 🎯 TASK 1: AWS Attendance Sync
-            // =========================================================================
             const runAttendanceSync = async () => {
               const didFullSync = localStorage.getItem(SYNC_FLAG_KEY);
               if (!didFullSync) {
@@ -4418,9 +4545,6 @@
               IkgLog.info("✅ AWS Attendance Sync Complete.");
             };
 
-            // =========================================================================
-            // 🎯 TASK 2: Wednesday-Only Targeted WFH (GAS) Sync
-            // =========================================================================
             const runWfhSync = async () => {
               const gasData = await ensureGasToken();
               if (!gasData || !gasData.token) {
@@ -4439,7 +4563,7 @@
               };
 
               const currentWed = getWednesday(todayReal);
-              const wednesdayList = [];
+              const targetDates = [];
 
               if (isForceRescan || !isWfhInitialized) {
                 IkgLog.info("First WFH sync detected. Target: 1 month of Wednesdays...");
@@ -4448,34 +4572,60 @@
 
                 while (iterWed >= cutoff) {
                   if (iterWed <= todayReal) {
-                    wednesdayList.push(toYMD(iterWed));
+                    targetDates.push(toYMD(iterWed));
                   }
                   iterWed.setDate(iterWed.getDate() - 7);
                 }
               } else {
                 if (currentWed <= todayReal) {
-                  wednesdayList.push(toYMD(currentWed));
+                  targetDates.push(toYMD(currentWed));
                 }
                 const lastWed = new Date(currentWed);
                 lastWed.setDate(lastWed.getDate() - 7);
-                wednesdayList.push(toYMD(lastWed));
+                targetDates.push(toYMD(lastWed));
               }
 
-              const targetWednesdays = [...new Set(wednesdayList)].filter(
+              const missingDates = [];
+              let checkIter = new Date(todayReal);
+              const thirtyDaysAgo = new Date(todayReal.getTime() - 30 * 86400000);
+              const holidays = JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${todayReal.getFullYear()}`) || "{}");
+
+              while (checkIter >= thirtyDaysAgo) {
+                const dStr = toYMD(checkIter);
+                const dayOfWeek = checkIter.getDay();
+
+                if (dayOfWeek !== 0 && dayOfWeek !== 6 && !holidays[dStr] && dStr < todayStr) {
+                  const record = localCache[dStr];
+                  const note = dayNotes[dStr];
+                  const hasPunches = record && (record.startTime || record.endTime || record.workHours > 0);
+                  const hasPto = note && (note.isPTO || note.isPartialPTO || note.deductedHours > 0);
+
+                  if (!hasPunches && !hasPto && (!record || !record.gasSynced || isForceRescan)) {
+                    missingDates.push(dStr);
+                  }
+                }
+                checkIter.setDate(checkIter.getDate() - 1);
+              }
+
+              if (missingDates.length > 0) {
+                IkgLog.info(`🔍 Detected ${missingDates.length} missing working days without punches/PTO. Adding to WFH check:`, missingDates);
+              }
+
+              const datesToCheck = [...new Set([...targetDates, ...missingDates])].filter(
                 (dStr) => !localCache[dStr] || !localCache[dStr].gasSynced || isForceRescan
               );
 
-              if (targetWednesdays.length === 0) {
-                IkgLog.info("✅ WFH Data up-to-date. No Wednesdays need sync.");
+              if (datesToCheck.length === 0) {
+                IkgLog.info("✅ WFH Data up-to-date. No dates need sync.");
                 localStorage.setItem(INIT_FLAG_KEY, "true");
                 return;
               }
 
-              IkgLog.info(`⚡ Parallel-fetching WFH for Wednesdays: ${targetWednesdays.join(", ")}`);
+              IkgLog.info(`⚡ Parallel-fetching WFH for ${datesToCheck.length} dates: ${datesToCheck.join(", ")}`);
 
               let wfhMatches = 0;
               await Promise.all(
-                targetWednesdays.map(async (dStr) => {
+                datesToCheck.map(async (dStr) => {
                   try {
                     const gasRecords = await fetchGasRecords(dStr, gasData);
                     if (!localCache[dStr]) localCache[dStr] = {};
@@ -4510,12 +4660,9 @@
               );
 
               localStorage.setItem(INIT_FLAG_KEY, "true");
-              IkgLog.info(`✅ WFH Sync Complete. Matches found: ${wfhMatches}/${targetWednesdays.length}`);
+              IkgLog.info(`✅ WFH Sync Complete. Matches found: ${wfhMatches}/${datesToCheck.length}`);
             };
 
-            // =========================================================================
-            // 🎯 TASK 3: Deel PTO Sync (Detailed Telemetry)
-            // =========================================================================
             const runDeelSync = async () => {
               const deelPto = await fetchAndParseDeelPTO();
               if (deelPto && deelPto.ptoCalendar && Object.keys(deelPto.ptoCalendar).length > 0) {
@@ -4541,7 +4688,6 @@
 
                 localStorage.setItem(DAY_NOTES_KEY, JSON.stringify(dayNotes));
 
-                // 🎯 Detailed Console Output
                 const startDate = dates[0];
                 const endDate = dates[dates.length - 1];
                 IkgLog.info(
@@ -4553,9 +4699,6 @@
               }
             };
 
-            // =========================================================================
-            // 🎯 EXECUTE ALL 3 TASKS SIMULTANEOUSLY
-            // =========================================================================
             updateHeaderStatus("⚡ Parallel Syncing...", "var(--primary)");
 
             await Promise.all([runAttendanceSync(), runWfhSync(), runDeelSync()]);
