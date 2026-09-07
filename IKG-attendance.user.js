@@ -1,7 +1,7 @@
   // ==UserScript==
-  // @name         [7.109] IKG Attendance Pro (Autopilot & Alarms)
+  // @name         [7.110] IKG Attendance Pro (Autopilot & Alarms)
   // @namespace    http://tampermonkey.net/
-  // @version      7.109
+  // @version      7.110
   // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
   // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
   // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -4419,37 +4419,58 @@
             };
 
             // =========================================================================
-            // 🎯 TASK 2: Wednesday-Only Targeted WFH (GAS) Sync
+            // 🎯 TASK 2: Smart Wednesday WFH (GAS) Sync
             // =========================================================================
             const runWfhSync = async () => {
               const gasData = await ensureGasToken();
               if (!gasData || !gasData.token) return;
 
+              const INIT_FLAG_KEY = `IKG_WFH_INITIALIZED_${APP_VER}`;
+              const isWfhInitialized = localStorage.getItem(INIT_FLAG_KEY) === "true";
+
               const getWednesday = (d) => {
                 const date = new Date(d);
                 const day = date.getDay();
-                const diff = date.getDate() - day + (day === 0 ? -4 : 3);
+                const diff = date.getDate() - day + (day === 0 ? -4 : 3); // Resolve Wednesday of given week
                 return new Date(date.setDate(diff));
               };
 
               const currentWed = getWednesday(todayReal);
               const wednesdayList = [];
 
-              if (currentWed <= todayReal) {
-                wednesdayList.push(toYMD(currentWed));
-              }
+              if (isForceRescan || !isWfhInitialized) {
+                // 🚀 FIRST TIME SYNC: Fetch all Wednesdays for the past 30 days (~4-5 Wednesdays)
+                IkgLog.info("First WFH sync detected (or force rescan). Target: 1 month of Wednesdays...");
+                let iterWed = new Date(currentWed);
+                const cutoff = new Date(todayReal.getTime() - 30 * 86400000);
 
-              const lastWed = new Date(currentWed);
-              lastWed.setDate(lastWed.getDate() - 7);
-              wednesdayList.push(toYMD(lastWed));
+                while (iterWed >= cutoff) {
+                  if (iterWed <= todayReal) {
+                    wednesdayList.push(toYMD(iterWed));
+                  }
+                  iterWed.setDate(iterWed.getDate() - 7);
+                }
+              } else {
+                // ⚡ NORMAL SYNC: Only fetch this Wednesday and last Wednesday (1 <= x <= 2 gap)
+                if (currentWed <= todayReal) {
+                  wednesdayList.push(toYMD(currentWed));
+                }
+
+                const lastWed = new Date(currentWed);
+                lastWed.setDate(lastWed.getDate() - 7);
+                wednesdayList.push(toYMD(lastWed));
+              }
 
               const targetWednesdays = [...new Set(wednesdayList)].filter(
                 (dStr) => !localCache[dStr] || !localCache[dStr].gasSynced || isForceRescan
               );
 
-              if (targetWednesdays.length === 0) return;
+              if (targetWednesdays.length === 0) {
+                localStorage.setItem(INIT_FLAG_KEY, "true");
+                return;
+              }
 
-              IkgLog.info(`⚡ Parallel-fetching WFH for: ${targetWednesdays.join(", ")}`);
+              IkgLog.info(`⚡ Parallel-fetching WFH for Wednesdays: ${targetWednesdays.join(", ")}`);
 
               await Promise.all(
                 targetWednesdays.map(async (dStr) => {
@@ -4458,7 +4479,8 @@
                   localCache[dStr].gasSynced = true;
 
                   if (gasRecords && gasRecords.length > 0) {
-                    let cIn = null, cOut = null;
+                    let cIn = null,
+                      cOut = null;
                     gasRecords.forEach((r) => {
                       if (r.type === "Clock In") {
                         if (!cIn || r.time < cIn) cIn = r.time;
@@ -4480,6 +4502,9 @@
                   }
                 })
               );
+
+              // Mark initial sync complete
+              localStorage.setItem(INIT_FLAG_KEY, "true");
             };
 
             // =========================================================================
