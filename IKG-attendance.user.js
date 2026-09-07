@@ -1,7 +1,7 @@
   // ==UserScript==
-  // @name         [7.111] IKG Attendance Pro (Autopilot & Alarms)
+  // @name         [7.112] IKG Attendance Pro (Autopilot & Alarms)
   // @namespace    http://tampermonkey.net/
-  // @version      7.111
+  // @version      7.112
   // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
   // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
   // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1282,48 +1282,67 @@
       if (authToken) { IkgLog.warn("API returned 401. Fast session death detected!"); authToken = null; autopilotEnabled = true; attemptAppClick(); }
     });
 
-    // --- GAS DATA FETCHER (Silent Scraper Mode) ---
+    // --- GAS DATA FETCHER (Silent Scraper Mode with Explicit Alerts) ---
     const ensureGasToken = () => {
       return new Promise((resolve) => {
-          let gasData = null;
-          try { gasData = JSON.parse(GM_getValue("IKG_GAS_DATA", "null")); } catch(e){}
-          // Reuse token if it hasn't expired yet
-          if (gasData && gasData.token && gasData.exp > Date.now()) return resolve(gasData);
+        let gasData = null;
+        try { gasData = JSON.parse(GM_getValue("IKG_GAS_DATA", "null")); } catch(e){}
+        // Reuse token if valid
+        if (gasData && gasData.token && gasData.exp > Date.now()) return resolve(gasData);
 
-          IkgLog.info("No active GAS token. Silently scraping from HTML...");
-          updateHeaderStatus("Securing WFH Token...", "var(--warn)");
+        const errorMsg = "⚠️ WFH (Google Apps Script) Token missing! You might not be logged into your Google Workspace account on script.google.com.";
+        IkgLog.warn(`${errorMsg} Silently scraping token...`);
+        updateHeaderStatus("Securing WFH Token...", "var(--warn)");
 
-          const gasUrl = "https://script.google.com/a/macros/ikigai.team/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/exec";
-          
-          GM_xmlhttpRequest({
-              method: "GET",
-              url: gasUrl,
-              withCredentials: true, // 🔑 This automatically applies your Google Session Cookies!
-              onload: (res) => {
-                  if (res.status === 200) {
-                      // 🎯 Regex to scrape the hidden Execution Token (Format: ACHNx...:1785...)
-                      const match = res.responseText.match(/(ACHNx[a-zA-Z0-9_\-]+(?:%3A|:)[0-9]+)/);
-                      if (match && match[1]) {
-                          const rawToken = decodeURIComponent(match[1]); // Clean up encoding
-                          IkgLog.info("✅ Silently secured GAS Token from HTML!");
-                          
-                          const newGasData = {
-                              token: rawToken,
-                              callbackUrl: "https://script.google.com/a/ikigai.team/macros/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/callback",
-                              exp: Date.now() + 3300000 // Valid for ~55 mins
-                          };
-                          GM_setValue("IKG_GAS_DATA", JSON.stringify(newGasData));
-                          return resolve(newGasData);
-                      }
-                  }
-                  IkgLog.error("Failed to scrape GAS Token. Status:", res.status);
-                  resolve(null);
-              },
-              onerror: () => {
-                  IkgLog.error("Network error while securing GAS token.");
-                  resolve(null);
+        const gasUrl = "https://script.google.com/a/macros/ikigai.team/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/exec";
+
+        GM_xmlhttpRequest({
+          method: "GET",
+          url: gasUrl,
+          withCredentials: true, // Automatically sends Google Session Cookies
+          onload: (res) => {
+            if (res.status === 200) {
+              const match = res.responseText.match(/(ACHNx[a-zA-Z0-9_\-]+(?:%3A|:)[0-9]+)/);
+              if (match && match[1]) {
+                const rawToken = decodeURIComponent(match[1]);
+                IkgLog.info("✅ Silently secured WFH Token from Google script!");
+
+                const newGasData = {
+                  token: rawToken,
+                  callbackUrl: "https://script.google.com/a/ikigai.team/macros/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/callback",
+                  exp: Date.now() + 3300000 // Valid ~55 mins
+                };
+                GM_setValue("IKG_GAS_DATA", JSON.stringify(newGasData));
+                return resolve(newGasData);
               }
-          });
+            }
+
+            // ❌ FAILURE HANDLER
+            IkgLog.error(`❌ ${errorMsg} HTTP Status: ${res.status}`);
+            updateHeaderStatus("❌ WFH Token Failed!", "var(--danger)");
+
+            alert(
+              "Attendance Pro Alert:\n\n" +
+              "Could not retrieve your WFH (Google Apps Script) token automatically.\n" +
+              "Reason: You haven't authenticated or opened the Google script macro in this browser session.\n\n" +
+              "Please make sure you are logged into your Google account (@ikigai.team) and try syncing again."
+            );
+
+            resolve(null);
+          },
+          onerror: (err) => {
+            IkgLog.error("❌ Network error while securing WFH token.", err);
+            updateHeaderStatus("❌ WFH Network Error", "var(--danger)");
+
+            alert(
+              "Attendance Pro Alert:\n\n" +
+              "Network failure while reaching Google Apps Script.\n" +
+              "Please check your internet connection and verify you are logged into Google."
+            );
+
+            resolve(null);
+          }
+        });
       });
     };
 
@@ -4403,7 +4422,10 @@
             // =========================================================================
             const runWfhSync = async () => {
               const gasData = await ensureGasToken();
-              if (!gasData || !gasData.token) return;
+              if (!gasData || !gasData.token) {
+                IkgLog.warn("❌ Skipping WFH Sync: No valid Google Apps Script token available.");
+                return;
+              }
 
               const INIT_FLAG_KEY = `IKG_WFH_INITIALIZED_${APP_VER}`;
               const isWfhInitialized = localStorage.getItem(INIT_FLAG_KEY) === "true";
@@ -4411,7 +4433,7 @@
               const getWednesday = (d) => {
                 const date = new Date(d);
                 const day = date.getDay();
-                const diff = date.getDate() - day + (day === 0 ? -4 : 3); // Resolve Wednesday of given week
+                const diff = date.getDate() - day + (day === 0 ? -4 : 3);
                 return new Date(date.setDate(diff));
               };
 
@@ -4419,8 +4441,7 @@
               const wednesdayList = [];
 
               if (isForceRescan || !isWfhInitialized) {
-                // 🚀 FIRST TIME SYNC: Fetch all Wednesdays for the past 30 days (~4-5 Wednesdays)
-                IkgLog.info("First WFH sync detected (or force rescan). Target: 1 month of Wednesdays...");
+                IkgLog.info("First WFH sync detected. Target: 1 month of Wednesdays...");
                 let iterWed = new Date(currentWed);
                 const cutoff = new Date(todayReal.getTime() - 30 * 86400000);
 
@@ -4431,11 +4452,9 @@
                   iterWed.setDate(iterWed.getDate() - 7);
                 }
               } else {
-                // ⚡ NORMAL SYNC: Only fetch this Wednesday and last Wednesday (1 <= x <= 2 gap)
                 if (currentWed <= todayReal) {
                   wednesdayList.push(toYMD(currentWed));
                 }
-
                 const lastWed = new Date(currentWed);
                 lastWed.setDate(lastWed.getDate() - 7);
                 wednesdayList.push(toYMD(lastWed));
@@ -4459,8 +4478,7 @@
                   localCache[dStr].gasSynced = true;
 
                   if (gasRecords && gasRecords.length > 0) {
-                    let cIn = null,
-                      cOut = null;
+                    let cIn = null, cOut = null;
                     gasRecords.forEach((r) => {
                       if (r.type === "Clock In") {
                         if (!cIn || r.time < cIn) cIn = r.time;
@@ -4483,7 +4501,6 @@
                 })
               );
 
-              // Mark initial sync complete
               localStorage.setItem(INIT_FLAG_KEY, "true");
             };
 
