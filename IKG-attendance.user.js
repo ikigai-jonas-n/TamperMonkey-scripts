@@ -1,7 +1,7 @@
   // ==UserScript==
-  // @name         [7.110] IKG Attendance Pro (Autopilot & Alarms)
+  // @name         [7.111] IKG Attendance Pro (Autopilot & Alarms)
   // @namespace    http://tampermonkey.net/
-  // @version      7.110
+  // @version      7.111
   // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
   // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
   // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1052,10 +1052,12 @@
         const existingToken = GM_getValue("IKG_DEEL_TOKEN", null);
         if (existingToken) return resolve(existingToken);
 
-        IkgLog.warn(
-          "No Deel token found. Opening background tab to auto-snatch...",
-        );
+        const errorMsg = "⚠️ Deel Auth Token missing! You might not have logged into Deel (ikg.deel.team) in this browser before.";
+        IkgLog.warn(`${errorMsg} Opening background tab to auto-snatch...`);
         updateHeaderStatus("Auto-Syncing PTO...", "var(--warn)");
+
+        // 🎟️ Enable SSO Autopilot Pass for Deel + Google SSO
+        GM_setValue("IKG_SSO_TRIGGERED", Date.now());
 
         const deelTab = GM_openInTab("https://ikg.deel.team/", {
           active: false,
@@ -1063,54 +1065,49 @@
         });
 
         if (!deelTab) {
-          IkgLog.error(
-            "Failed to open background tab. Check Tampermonkey permissions.",
-          );
+          IkgLog.error("❌ Failed to open Deel background tab. Check Tampermonkey popup/tab permissions.");
+          alert(`${errorMsg}\n\nPlease open https://ikg.deel.team/ in a new tab, log in once manually, then try syncing again.`);
           return resolve(null);
         }
 
         const listenerId = GM_addValueChangeListener(
           "IKG_DEEL_TOKEN",
-          function (name, old_value, new_value, remote) {
+          function (name, old_value, new_value) {
             if (new_value) {
-              IkgLog.info("Token caught from Deel tab! Killing background tab...");
+              IkgLog.info("✅ Token caught from Deel tab! Closing background tab...");
               GM_removeValueChangeListener(listenerId);
-              // 🎯 FIX: Actively assassinate the background tab from the parent
               try { deelTab.close(); } catch (e) {} 
               resolve(new_value);
             }
-          },
+          }
         );
 
         setTimeout(() => {
           GM_removeValueChangeListener(listenerId);
           if (!GM_getValue("IKG_DEEL_TOKEN", null)) {
-            IkgLog.error("Timeout waiting for Deel tab.");
-            updateHeaderStatus(
-              "❌ Deel Auth Failed. Log in manually!",
-              "var(--danger)",
+            IkgLog.error(`❌ ${errorMsg} Auto-snatch timed out after 30s.`);
+            updateHeaderStatus("❌ Deel Auth Failed. Log in manually!", "var(--danger)");
+
+            alert(
+              "Attendance Pro Alert:\n\n" +
+              "Could not retrieve your Deel PTO token automatically.\n" +
+              "Reason: You haven't logged into Deel (ikg.deel.team) in this browser session, or SSO timed out.\n\n" +
+              "Please open https://ikg.deel.team/ and log in once manually."
             );
 
-            if (
-              confirm(
-                "Attendance Pro:\n\nAuto-Login to Deel failed or took too long.\nPlease open Deel, log in manually once, then return here to sync.\n\nOpen Deel now?",
-              )
-            ) {
-              window.open("https://ikg.deel.team/", "_blank");
-            }
-
-            try {
-              deelTab.close();
-            } catch (e) {}
+            try { deelTab.close(); } catch (e) {}
             resolve(null);
           }
-        }, 60000); // 60 seconds timeout
+        }, 30000); // 30 seconds timeout
       });
     };
 
     const fetchAndParseDeelPTO = async (isRetry = false) => {
       const token = await ensureDeelToken();
-      if (!token) return null;
+      if (!token) {
+        IkgLog.error("❌ Skipping Deel PTO Sync: No valid Deel Auth Token available.");
+        return null;
+      }
 
       const fetchDeel = (path) =>
         new Promise((resolve, reject) => {
@@ -1149,30 +1146,19 @@
           profileId = timeOffsMe?.profile?.id;
 
           if (!profileId)
-            throw new Error(
-              "Could not find profile.id in /time_offs/me response.",
-            );
+            throw new Error("Could not find profile.id in /time_offs/me response.");
 
           GM_setValue("IKG_DEEL_PROFILE_ID", profileId);
-          IkgLog.info(
-            `✅ Successfully resolved Time-Off Profile UUID: ${profileId}`,
-          );
+          IkgLog.info(`✅ Resolved Time-Off Profile UUID: ${profileId}`);
         }
 
         try {
-          entData = await fetchDeel(
-            `time_offs/profile/${profileId}/entitlements`,
-          );
+          entData = await fetchDeel(`time_offs/profile/${profileId}/entitlements`);
         } catch (entErr) {
-          IkgLog.warn(
-            "Could not fetch entitlements (Deel may have changed this API), skipping...",
-            entErr,
-          );
+          IkgLog.warn("Could not fetch entitlements, skipping...", entErr);
         }
 
-        const toData = await fetchDeel(
-          `time_offs/profile/${profileId}/time_off?orderType=DESC&lightweight=true`,
-        );
+        const toData = await fetchDeel(`time_offs/profile/${profileId}/time_off?orderType=DESC&lightweight=true`);
         const ptoCalendar = {};
         const syncLog = [];
 
@@ -1192,8 +1178,7 @@
             const startStr = req.startDate.substring(0, 10);
             const endStr = req.endDate.substring(0, 10);
             const typeName = req.timeOffType?.name || "Leave";
-            const unit =
-              req.timeOffType?.policy?.entitlementUnit || "BUSINESS_DAY";
+            const unit = req.timeOffType?.policy?.entitlementUnit || "BUSINESS_DAY";
             const totalAmt = parseFloat(req.amount) || 0;
 
             let curr = new Date(startStr + "T00:00:00");
@@ -1204,9 +1189,7 @@
             while (curr <= end) {
               const pad = (n) => String(n).padStart(2, "0");
               const dStr = `${curr.getFullYear()}-${pad(curr.getMonth() + 1)}-${pad(curr.getDate())}`;
-
-              const isFullDay =
-                unit === "BUSINESS_DAY" || unit === "CALENDAR_DAY";
+              const isFullDay = unit === "BUSINESS_DAY" || unit === "CALENDAR_DAY";
 
               ptoCalendar[dStr] = {
                 isFullDay: isFullDay,
@@ -1220,15 +1203,12 @@
         return { ptoCalendar, syncLog };
       } catch (e) {
         if (e.status === 401 && !isRetry) {
-          IkgLog.warn("Deel Token expired. Clearing and retrying...");
+          IkgLog.warn("Deel Token expired or invalid. Clearing saved token & retrying...");
           GM_setValue("IKG_DEEL_TOKEN", null);
           GM_setValue("IKG_DEEL_PROFILE_ID", null);
           return await fetchAndParseDeelPTO(true);
         }
-        IkgLog.error(
-          "Deel PTO Sync Failed:",
-          e.status ? `HTTP Status ${e.status}` : e.message || JSON.stringify(e),
-        );
+        IkgLog.error("❌ Deel PTO Sync Failed:", e.status ? `HTTP Status ${e.status}` : e.message || JSON.stringify(e));
         return null;
       }
     };
