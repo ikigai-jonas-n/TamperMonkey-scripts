@@ -1,7 +1,7 @@
-    // ==UserScript==
-    // @name         [7.118] IKG Attendance Pro (Autopilot & Alarms)
+// ==UserScript==
+    // @name         [7.119] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.118
+    // @version      7.119
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -16,6 +16,7 @@
     // @grant        GM_addValueChangeListener
     // @grant        GM_removeValueChangeListener
     // @grant        GM_openInTab
+    // @grant        GM_info
     // @connect      gist.github.com
     // @connect      gist.githubusercontent.com
     // @connect      github.com
@@ -25,7 +26,7 @@
     // @connect      script.google.com
     // @run-at       document-start
     // ==/UserScript==
-
+    
     (function () {
       "use strict";
 
@@ -55,7 +56,8 @@
         error: (msg, data) => IkgLog._log("ERROR", msg, data),
       };
 
-      IkgLog.info("Attendance Pro Script Initialized v38.16 (CSP Worker Bypass)");
+      const RUNTIME_VER = (typeof GM_info !== "undefined" && GM_info.script) ? GM_info.script.version : "7.118";
+      IkgLog.info(`Attendance Pro Script Initialized v${RUNTIME_VER} (CSP Worker Bypass)`);
 
       // ==========================================
       // 1. GOOGLE SSO AUTOPILOT (Bypasses Worker CSP)
@@ -1872,7 +1874,15 @@
             #ikg-modal { width: 1300px; max-width: 95vw; height: 850px; max-height: 90vh; background: var(--bg-base); border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 32px 64px rgba(0,0,0,0.8); display: flex; flex-direction: column; overflow: hidden; color: var(--text-main); transform: scale(0.97); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
             #ikg-modal-backdrop.open #ikg-modal { transform: scale(1); }
             #ikg-modal-header { padding: 0 32px; height: 72px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-surface); }
-            .ikg-title-area { display: flex; align-items: center; gap: 12px; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+            .ikg-title-area { 
+              display: flex; 
+              align-items: center; 
+              gap: 8px; 
+              font-size: 18px; 
+              font-weight: 700; 
+              letter-spacing: -0.02em; 
+              white-space: nowrap; 
+          }
             .ikg-tab-group { display: flex; gap: 8px; height: 100%; align-items: center; margin-left: 40px; }
             .ikg-tab { height: 100%; display: flex; align-items: center; padding: 0 20px; cursor: pointer; font-weight: 600; color: var(--text-muted); border-bottom: 3px solid transparent; transition: 0.2s; user-select: none; }
             .ikg-tab:hover { color: var(--text-main); }
@@ -2118,7 +2128,7 @@
               transform: translateX(0) translateY(0);
           }
 
-          /* 🎯 TOP RIGHT CORNER FIX (Sat/Fri): Offset left to prevent clipping off screen */
+          /* 🎯 TOP RIGHT CORNER FIX (Fri/Sat): Offset left to prevent clipping off screen */
           .ikg-grid > .ikg-day:nth-child(6) .ikg-fast-tt::after,
           .ikg-grid > .ikg-day:nth-child(7) .ikg-fast-tt::after {
               left: auto;
@@ -3430,31 +3440,74 @@
       }
 
       function buildUI() {
-        if (document.getElementById("ikg-fab")) return;
+      // 🎯 DYNAMIC VERSION EXTRACTION (Tampermonkey Native API)
+      let SCRIPT_VER = "v7.118";
+      try {
+        if (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) {
+          SCRIPT_VER = GM_info.script.version.startsWith("v") ? GM_info.script.version : `v${GM_info.script.version}`;
+        }
+      } catch (e) {}
 
-        const fab = document.createElement("button");
-        fab.id = "ikg-fab";
-        fab.innerHTML = "📊 Dashboard";
-        document.body.appendChild(fab);
+      // 🎯 UNIVERSAL VERSION BADGE INJECTOR (Works on Native React Header & Custom Modal)
+      const injectVerBadge = () => {
+        if (document.getElementById("ikg-ver-badge")) return;
 
-        const backdrop = document.createElement("div");
-        backdrop.id = "ikg-modal-backdrop";
-        backdrop.innerHTML = `
-                <div id="ikg-modal">
-                    <header id="ikg-modal-header">
-                        <div class="ikg-title-area"><img src="/favicon.png" style="width:28px; border-radius:6px;"> Attendance Pro</div>
-                        <div class="ikg-tab-group">
-                            <div class="ikg-tab active" id="tab-cal">🗓️ Calendar</div>
-                            <div class="ikg-tab" id="tab-stats">📈 Analytics</div>
-                            <div class="ikg-tab" id="tab-audit">🔍 Data Audit</div>
-                            <div class="ikg-tab" id="tab-rules">📜 Rules</div>
-                            <div class="ikg-tab" id="tab-settings">⚙️ Settings</div>
-                        </div>
-                        <div class="ikg-header-actions">
-                            <div id="ikg-header-status" class="ikg-header-status">🤖 Autopilot engaging...</div>
-                            <div id="ikg-close">&times;</div>
-                        </div>
-                    </header>
+        // Target either custom title area OR native app title container next to cat logo
+        const titleContainer = 
+          document.querySelector(".ikg-title-area") || 
+          document.querySelector("#ikg-modal-header > div:first-child") ||
+          Array.from(document.querySelectorAll("header div, div[class*='header']"))
+            .find(el => el.innerText && el.innerText.includes("Attendance Pro"));
+
+        if (titleContainer) {
+          const badge = document.createElement("span");
+          badge.id = "ikg-ver-badge";
+          badge.style.cssText = "font-size:11px; font-weight:700; color:var(--text-muted); background:var(--bg-base); border:1px solid var(--border); padding:2px 8px; border-radius:12px; margin-left:8px; font-family:monospace; line-height:1.2; display:inline-block !important; vertical-align:middle;";
+          badge.innerText = SCRIPT_VER;
+          
+          titleContainer.appendChild(badge);
+          IkgLog.info(`✅ Bound Version Badge to Header: ${SCRIPT_VER}`);
+        }
+      };
+
+      // Observe DOM to re-inject if React re-renders the header
+      const verObserver = new MutationObserver(injectVerBadge);
+      if (document.body) verObserver.observe(document.body, { childList: true, subtree: true });
+
+      IkgLog.info(`[UI Engine] Initializing Dashboard UI (${SCRIPT_VER})...`);
+
+      if (document.getElementById("ikg-fab")) {
+        injectVerBadge();
+        return;
+      }
+
+      const fab = document.createElement("button");
+      fab.id = "ikg-fab";
+      fab.innerHTML = "📊 Dashboard";
+      document.body.appendChild(fab);
+
+      const backdrop = document.createElement("div");
+      backdrop.id = "ikg-modal-backdrop";
+      backdrop.innerHTML = `
+              <div id="ikg-modal">
+                  <header id="ikg-modal-header">
+                      <div class="ikg-title-area" style="display: flex !important; align-items: center !important; gap: 8px !important; white-space: nowrap !important;">
+                          <div style="width:28px; height:28px; background:var(--primary); color:#fff; border-radius:6px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; flex-shrink:0;">IKG</div>
+                          <span style="font-size:18px; font-weight:700; color:var(--text-main);">Attendance Pro</span>
+                          <span id="ikg-ver-badge" style="font-size:11px; font-weight:700; color:var(--text-muted); background:var(--bg-base); border:1px solid var(--border); padding:2px 8px; border-radius:12px; margin-left:4px; font-family:monospace; line-height:1.2; display:inline-block !important;">${SCRIPT_VER}</span>
+                      </div>
+                      <div class="ikg-tab-group">
+                          <div class="ikg-tab active" id="tab-cal">🗓️ Calendar</div>
+                          <div class="ikg-tab" id="tab-stats">📈 Analytics</div>
+                          <div class="ikg-tab" id="tab-audit">🔍 Data Audit</div>
+                          <div class="ikg-tab" id="tab-rules">📜 Rules</div>
+                          <div class="ikg-tab" id="tab-settings">⚙️ Settings</div>
+                      </div>
+                      <div class="ikg-header-actions">
+                          <div id="ikg-header-status" class="ikg-header-status">🤖 Autopilot engaging...</div>
+                          <div id="ikg-close">&times;</div>
+                      </div>
+                  </header>
 
                     <div id="ikg-modal-body">
                         <div id="view-cal" class="ikg-view active">
@@ -3830,6 +3883,14 @@
                 <div class="modal-overlay"></div>
             `;
         document.body.appendChild(backdrop);
+
+        // 🎯 DOM TELEMETRY VERIFICATION
+      const badgeEl = document.getElementById("ikg-ver-badge");
+      if (badgeEl) {
+        IkgLog.info(`✅ Version badge successfully rendered into DOM with text: "${badgeEl.innerText}"`);
+      } else {
+        IkgLog.error("❌ Version badge element (#ikg-ver-badge) failed to inject into DOM.");
+      }
 
         // Instantiate Custom Calendars
         statsCalInstance = new IkgDualCal(
