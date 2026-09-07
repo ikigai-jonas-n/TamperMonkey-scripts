@@ -1,7 +1,7 @@
     // ==UserScript==
-    // @name         [7.117] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.118] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.117
+    // @version      7.118
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -2066,7 +2066,10 @@
             .audit-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--text-main); font-family: monospace; font-size: 12px; }
             .audit-table tr:hover { background: var(--bg-elevated); }
 
-            .ikg-fast-tt { position: relative; cursor: help; border-bottom: 1px dotted rgba(148, 163, 184, 0.5); display: inline-block; }
+            /* 🎯 TOOLTIP BASE & BOUNDARY BREAKOUT FIX */
+          .ikg-day { overflow: visible !important; }
+          
+          .ikg-fast-tt { position: relative; cursor: help; border-bottom: 1px dotted rgba(148, 163, 184, 0.5); display: inline-block; }
           .ikg-fast-tt.no-dot { border-bottom: none; }
           .ikg-fast-tt::after { 
               content: attr(data-title); 
@@ -2075,19 +2078,18 @@
               left: 50%; 
               transform: translateX(-50%) translateY(4px); 
               width: max-content; 
-              max-width: 280px; 
+              max-width: 260px; 
               background: var(--bg-elevated); 
               color: var(--text-main); 
               font-family: var(--font-family); 
-              font-size: 12px; 
-              font-weight: 600; 
-              padding: 8px 12px; 
-              border-radius: 8px; 
+              font-size: 11px; 
+              font-weight: 500; 
+              padding: 6px 10px; 
+              border-radius: 6px; 
               border: 1px solid var(--border); 
-              box-shadow: 0 12px 28px rgba(0,0,0,0.8); 
+              box-shadow: 0 12px 28px rgba(0,0,0,0.95); 
               opacity: 0; 
               visibility: hidden; 
-              /* 🎯 INSTANT 0s DELAY HOVER ENGINE */
               transition: opacity 0.05s linear 0s, transform 0.05s linear 0s;
               will-change: opacity, transform;
               z-index: 100001; 
@@ -2102,6 +2104,35 @@
               visibility: visible; 
               transform: translateX(-50%) translateY(0); 
           }
+
+          /* 🎯 TOP ROW FIX: Offset tooltips horizontally right to prevent blocking IN/OUT times */
+          .ikg-grid > .ikg-day:nth-child(-n+7) .ikg-fast-tt::after {
+              bottom: auto;
+              top: -4px;
+              left: 100%;
+              margin-bottom: 0;
+              margin-left: 8px;
+              transform: translateX(-4px) translateY(0);
+          }
+          .ikg-grid > .ikg-day:nth-child(-n+7) .ikg-fast-tt:hover::after {
+              transform: translateX(0) translateY(0);
+          }
+
+          /* 🎯 TOP RIGHT CORNER FIX (Sat/Fri): Offset left to prevent clipping off screen */
+          .ikg-grid > .ikg-day:nth-child(6) .ikg-fast-tt::after,
+          .ikg-grid > .ikg-day:nth-child(7) .ikg-fast-tt::after {
+              left: auto;
+              right: 100%;
+              margin-left: 0;
+              margin-right: 8px;
+              transform: translateX(4px) translateY(0);
+          }
+          .ikg-grid > .ikg-day:nth-child(6) .ikg-fast-tt:hover::after,
+          .ikg-grid > .ikg-day:nth-child(7) .ikg-fast-tt:hover::after {
+              transform: translateX(0) translateY(0);
+          }
+
+          /* Left & Right Edge Alignments */
           .ikg-fast-tt.tt-right::after { left: auto; right: 0; transform: translateX(0) translateY(4px); }
           .ikg-fast-tt.tt-right:hover::after { transform: translateX(0) translateY(0); }
 
