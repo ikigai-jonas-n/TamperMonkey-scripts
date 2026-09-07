@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.119] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.120] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.119
+    // @version      7.120
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -3492,7 +3492,7 @@
               <div id="ikg-modal">
                   <header id="ikg-modal-header">
                       <div class="ikg-title-area" style="display: flex !important; align-items: center !important; gap: 8px !important; white-space: nowrap !important;">
-                          <div style="width:28px; height:28px; background:var(--primary); color:#fff; border-radius:6px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; flex-shrink:0;">IKG</div>
+                          <img src="favicon.png" style="width: 28px; height: 28px; background: var(--primary); border-radius: 6px; flex-shrink: 0; object-fit: contain;" alt="IKG Logo">
                           <span style="font-size:18px; font-weight:700; color:var(--text-main);">Attendance Pro</span>
                           <span id="ikg-ver-badge" style="font-size:11px; font-weight:700; color:var(--text-muted); background:var(--bg-base); border:1px solid var(--border); padding:2px 8px; border-radius:12px; margin-left:4px; font-family:monospace; line-height:1.2; display:inline-block !important;">${SCRIPT_VER}</span>
                       </div>
