@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.121] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.122] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.121
+    // @version      7.122
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1221,7 +1221,7 @@
       // 4. CORE LOGIC & STATE (WITH GAS SUPPORT)
       // ==========================================
 
-      // --- GAS INJECTION INTERCEPTOR ---
+// --- GAS INJECTION INTERCEPTOR ---
       const injectScript = document.createElement("script");
       injectScript.textContent = `
             (function() {
@@ -1270,20 +1270,55 @@
       document.documentElement.appendChild(injectScript);
       injectScript.remove();
 
+      // 🎯 AUTO-RECOVERY RELOAD ENGINE (Exponential Backoff, Max 10 Attempts)
+      const handle401Recovery = () => {
+        const MAX_RELOAD_ATTEMPTS = 10;
+        let attempts = parseInt(sessionStorage.getItem("IKG_RELOAD_ATTEMPTS") || "0", 10);
+
+        if (attempts < MAX_RELOAD_ATTEMPTS) {
+          attempts++;
+          sessionStorage.setItem("IKG_RELOAD_ATTEMPTS", attempts.toString());
+          
+          // Exponential backoff: 1s, 2s, 4s, 8s, 16s... (capped at 30s)
+          const delayMs = Math.min(30000, Math.pow(2, attempts - 1) * 1000);
+          IkgLog.warn(`⚠️ HTTP 401 Auth Error! Auto-reloading in ${(delayMs / 1000).toFixed(1)}s (Attempt ${attempts}/${MAX_RELOAD_ATTEMPTS})...`);
+          updateHeaderStatus(`🔄 Auth Error: Reloading in ${(delayMs / 1000).toFixed(0)}s (${attempts}/10)...`, "var(--danger)");
+
+          setTimeout(() => {
+            window.location.reload();
+          }, delayMs);
+        } else {
+          IkgLog.error(`❌ Reached max reload limit (${MAX_RELOAD_ATTEMPTS}). Reload halted.`);
+          updateHeaderStatus("❌ Session Expired: Please re-login", "var(--danger)");
+        }
+      };
+
       let gasAuthToken = null;
+
+      // Reset reload attempts counter whenever a valid token is intercepted
       window.addEventListener("IKG_Token_Found", function (e) {
-        if (!authToken) { authToken = e.detail; autopilotEnabled = false; IkgLog.info("AWS Token Intercepted."); }
+        if (!authToken) { 
+          authToken = e.detail; 
+          autopilotEnabled = false; 
+          sessionStorage.removeItem("IKG_RELOAD_ATTEMPTS"); // Clear backoff count on valid token
+          IkgLog.info("AWS Token Intercepted."); 
+        }
       });
 
       window.addEventListener("IKG_GAS_Token_Found", function(e) {
-          if (gasAuthToken !== e.detail) { 
-              gasAuthToken = e.detail; 
-              IkgLog.info("✅ Google Apps Script (WFH) Token Intercepted!"); 
-          }
+        if (gasAuthToken !== e.detail) { 
+          gasAuthToken = e.detail; 
+          IkgLog.info("✅ Google Apps Script (WFH) Token Intercepted!"); 
+        }
       });
 
       window.addEventListener("IKG_Session_Death", function () {
-        if (authToken) { IkgLog.warn("API returned 401. Fast session death detected!"); authToken = null; autopilotEnabled = true; attemptAppClick(); }
+        if (authToken) { 
+          IkgLog.warn("API returned 401. Fast session death detected!"); 
+          authToken = null; 
+          autopilotEnabled = true; 
+          handle401Recovery();
+        }
       });
 
       // --- GAS DATA FETCHER (Silent Scraper Mode with Explicit Alerts) ---
@@ -4668,15 +4703,13 @@
             const SYNC_CUTOFF_STR = `${todayReal.getFullYear()}-01-01`;
 
             // =========================================================================
-            // 🎯 TASK 1: AWS Attendance Sync (Hard Clamped to 90-Day AWS TTL Limit)
+            // 🎯 TASK 1: AWS Attendance Sync (TTL Clamped + 401 Error Catch)
             // =========================================================================
             const runAttendanceSync = async () => {
               syncStatus.aws = "🔄";
               updateSyncProgressUI();
 
               const didFullSync = localStorage.getItem(SYNC_FLAG_KEY);
-              
-              // 🎯 AWS TTL LIMIT: AWS purges data older than 90 days (~June 10 for Sept 8)
               const MAX_AWS_TTL_DATE = new Date(todayReal.getTime() - 90 * 86400000);
               const MAX_AWS_TTL_STR = toYMD(MAX_AWS_TTL_DATE);
 
@@ -4689,7 +4722,6 @@
                   let startStr = toYMD(startD);
                   const endStr = toYMD(endD);
 
-                  // 🎯 Clamp to 90-day AWS TTL boundary to avoid dead HTTP calls
                   if (startStr < MAX_AWS_TTL_STR) startStr = MAX_AWS_TTL_STR;
 
                   try {
@@ -4697,11 +4729,16 @@
                       `${API_BASE}/attendance/range?from=${startStr}&to=${endStr}`,
                       { method: "GET", headers: { accept: "*/*", authorization: authToken } }
                     );
+
+                    if (res.status === 401) {
+                      handle401Recovery();
+                      break;
+                    }
+
                     const data = await res.json();
                     const records = data.records || [];
                     fillCacheGaps(startStr, endStr, records, localCache);
 
-                    // Stop immediately if AWS returns no records or we've reached the 90-day TTL floor
                     if (records.length === 0 || startStr <= MAX_AWS_TTL_STR) break;
                   } catch (err) {
                     break;
@@ -4727,7 +4764,10 @@
                       method: "GET",
                       headers: { accept: "*/*", authorization: authToken },
                     })
-                    .then((res) => res.json())
+                    .then((res) => {
+                      if (res.status === 401) handle401Recovery();
+                      return res.json();
+                    })
                     .then((data) => fillCacheGaps(startXStr, todayStr, data.records || [], localCache))
                     .catch(() => {}),
                 ];
@@ -4747,7 +4787,10 @@
                         method: "GET",
                         headers: { accept: "*/*", authorization: authToken },
                       })
-                      .then((res) => res.json())
+                      .then((res) => {
+                        if (res.status === 401) handle401Recovery();
+                        return res.json();
+                      })
                       .then((data) => {
                         const fillEndStr =
                           currentViewYear === todayReal.getFullYear() && currentViewMonth === todayReal.getMonth() + 1
@@ -4761,6 +4804,8 @@
                 await Promise.all(fetchTasks);
               }
 
+              // Reset backoff attempts on complete sync success
+              sessionStorage.removeItem("IKG_RELOAD_ATTEMPTS");
               syncStatus.aws = "✅";
               updateSyncProgressUI();
               IkgLog.info("✅ AWS Attendance Sync Complete.");
