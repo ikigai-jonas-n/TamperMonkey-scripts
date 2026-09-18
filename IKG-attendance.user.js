@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.123] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.124] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.123
+    // @version      7.124
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1346,69 +1346,63 @@
         }
       });
 
-      // --- GAS DATA FETCHER (Silent Scraper Mode with Explicit Alerts) ---
-      const ensureGasToken = () => {
-        return new Promise((resolve) => {
-          let gasData = null;
-          try { gasData = JSON.parse(GM_getValue("IKG_GAS_DATA", "null")); } catch(e){}
-          // Reuse token if valid
-          if (gasData && gasData.token && gasData.exp > Date.now()) return resolve(gasData);
+      // --- GAS DATA FETCHER (Silent Scraper - Supports ACHNx & AEDo Tokens) ---
+  const ensureGasToken = () => {
+    return new Promise((resolve) => {
+      let gasData = null;
+      try { gasData = JSON.parse(GM_getValue("IKG_GAS_DATA", "null")); } catch(e){}
+      
+      // Reuse token if valid
+      if (gasData && gasData.token && gasData.exp > Date.now()) return resolve(gasData);
 
-          const errorMsg = "⚠️ WFH (Google Apps Script) Token missing! You might not be logged into your Google Workspace account on script.google.com.";
-          IkgLog.warn(`${errorMsg} Silently scraping token...`);
-          updateHeaderStatus("Securing WFH Token...", "var(--warn)");
+      IkgLog.info("No active WFH Token. Silently scraping from Google Apps Script HTML...");
+      updateHeaderStatus("Securing WFH Token...", "var(--warn)");
 
-          const gasUrl = "https://script.google.com/a/macros/ikigai.team/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/exec";
+      const gasUrl = "https://script.google.com/a/macros/ikigai.team/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/exec";
 
-          GM_xmlhttpRequest({
-            method: "GET",
-            url: gasUrl,
-            withCredentials: true, // Automatically sends Google Session Cookies
-            onload: (res) => {
-              if (res.status === 200) {
-                const match = res.responseText.match(/(ACHNx[a-zA-Z0-9_\-]+(?:%3A|:)[0-9]+)/);
-                if (match && match[1]) {
-                  const rawToken = decodeURIComponent(match[1]);
-                  IkgLog.info("✅ Silently secured WFH Token from Google script!");
-
-                  const newGasData = {
-                    token: rawToken,
-                    callbackUrl: "https://script.google.com/a/ikigai.team/macros/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/callback",
-                    exp: Date.now() + 3300000 // Valid ~55 mins
-                  };
-                  GM_setValue("IKG_GAS_DATA", JSON.stringify(newGasData));
-                  return resolve(newGasData);
-                }
+      GM_xmlhttpRequest({
+        method: "GET",
+        url: gasUrl,
+        withCredentials: true, // Applies session cookies automatically
+        onload: (res) => {
+          if (res.status === 200) {
+            // 🎯 UPDATED REGEX: Matches both old ACHNx... and new AEDo... token formats
+            const match = res.responseText.match(/((?:ACHNx|AEDo|A[a-zA-Z0-9_\-]{5,})[a-zA-Z0-9_\-]+(?:%3A|:)[0-9]+)/);
+            
+            let rawToken = null;
+            if (match && match[1]) {
+              rawToken = decodeURIComponent(match[1]);
+            } else {
+              // Fallback: Look for encoded tokens inside callback URLs embedded in script tags
+              const fallbackMatch = res.responseText.match(/token=([A-Za-z0-9_\-%]+)/);
+              if (fallbackMatch && fallbackMatch[1]) {
+                rawToken = decodeURIComponent(fallbackMatch[1]);
               }
-
-              // ❌ FAILURE HANDLER
-              IkgLog.error(`❌ ${errorMsg} HTTP Status: ${res.status}`);
-              updateHeaderStatus("❌ WFH Token Failed!", "var(--danger)");
-
-              alert(
-                "Attendance Pro Alert:\n\n" +
-                "Could not retrieve your WFH (Google Apps Script) token automatically.\n" +
-                "Reason: You haven't authenticated or opened the Google script macro in this browser session.\n\n" +
-                "Please make sure you are logged into your Google account (@ikigai.team) and try syncing again."
-              );
-
-              resolve(null);
-            },
-            onerror: (err) => {
-              IkgLog.error("❌ Network error while securing WFH token.", err);
-              updateHeaderStatus("❌ WFH Network Error", "var(--danger)");
-
-              alert(
-                "Attendance Pro Alert:\n\n" +
-                "Network failure while reaching Google Apps Script.\n" +
-                "Please check your internet connection and verify you are logged into Google."
-              );
-
-              resolve(null);
             }
-          });
-        });
-      };
+
+            if (rawToken) {
+              IkgLog.info(`✅ WFH Token Secured: ${rawToken.substring(0, 12)}...`);
+              const newGasData = {
+                token: rawToken,
+                callbackUrl: "https://script.google.com/a/ikigai.team/macros/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/callback",
+                exp: Date.now() + 3300000 // Valid ~55 mins
+              };
+              GM_setValue("IKG_GAS_DATA", JSON.stringify(newGasData));
+              return resolve(newGasData);
+            }
+          }
+
+          IkgLog.error(`❌ Failed to extract WFH token. Status: ${res.status}`);
+          updateHeaderStatus("❌ WFH Token Error", "var(--danger)");
+          resolve(null);
+        },
+        onerror: (err) => {
+          IkgLog.error("❌ Network error fetching WFH token", err);
+          resolve(null);
+        }
+      });
+    });
+  };
 
       const fetchGasRecords = async (dateStr, gasData) => {
         return new Promise((resolve) => {
@@ -4855,7 +4849,7 @@
           };
 
           // =========================================================================
-          // 🎯 TASK 3: WFH Sync (Fires AFTER AWS & PTO populate cache)
+          // 🎯 TASK 3: WFH Sync (7-Working-Day Rolling Force Window + Deep Missing Scan)
           // =========================================================================
           const runWfhSync = async () => {
             syncStatus.wfh = "🔄";
@@ -4868,66 +4862,61 @@
               return;
             }
 
-            const INIT_FLAG_KEY = `IKG_WFH_INITIALIZED_${APP_VER}`;
-            const isWfhInitialized = localStorage.getItem(INIT_FLAG_KEY) === "true";
+            const settings = getSettings();
+            const syncDaysCount = settings.syncDays || 7;
 
-            const getWednesday = (d) => {
-              const date = new Date(d);
-              const day = date.getDay();
-              const diff = date.getDate() - day + (day === 0 ? -4 : 3);
-              return new Date(date.setDate(diff));
-            };
+            // 🎯 1. FORCE WINDOW: Always re-scan the past N working days (Just like AWS!)
+            const forceDates = [];
+            let iterDateGas = new Date(todayReal);
+            let wDaysCountGas = 0;
 
-            const currentWed = getWednesday(todayReal);
-            const targetDates = [];
-
-            if (isForceRescan || !isWfhInitialized) {
-              let iterWed = new Date(currentWed);
-              const cutoff = new Date(todayReal.getTime() - 30 * 86400000);
-              while (iterWed >= cutoff) {
-                if (iterWed <= todayReal) targetDates.push(toYMD(iterWed));
-                iterWed.setDate(iterWed.getDate() - 7);
+            while (wDaysCountGas < syncDaysCount) {
+              const dStr = toYMD(iterDateGas);
+              forceDates.push(dStr);
+              iterDateGas.setDate(iterDateGas.getDate() - 1);
+              if (iterDateGas.getDay() !== 0 && iterDateGas.getDay() !== 6) {
+                wDaysCountGas++;
               }
-            } else {
-              if (currentWed <= todayReal) targetDates.push(toYMD(currentWed));
-              const lastWed = new Date(currentWed);
-              lastWed.setDate(lastWed.getDate() - 7);
-              targetDates.push(toYMD(lastWed));
             }
 
-            const freshNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
+            // 🎯 2. DEEP HISTORICAL WINDOW: Scan missing dates back to July 1, 2026
+            const searchCutoff = new Date(2026, 6, 1); // July 1, 2026
             const missingDates = [];
             let checkIter = new Date(todayReal);
-            const searchCutoff = new Date(todayReal.getFullYear(), todayReal.getMonth() - 1, 1);
             const holidays = JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${todayReal.getFullYear()}`) || "{}");
 
             while (checkIter >= searchCutoff) {
               const dStr = toYMD(checkIter);
               const dayOfWeek = checkIter.getDay();
 
+              // If it's a weekday and not a public holiday
               if (dayOfWeek !== 0 && dayOfWeek !== 6 && !holidays[dStr] && dStr < todayStr) {
-                const record = localCache[dStr];
-                const note = freshNotes[dStr];
-                const hasPunches = record && (record.startTime || record.endTime || record.workHours > 0);
-                const hasPto = note && (note.isPTO || note.isPartialPTO || note.deductedHours > 0);
+                // If this date is NOT in the recent 7-day force window
+                if (!forceDates.includes(dStr)) {
+                  const record = localCache[dStr];
+                  const note = dayNotes[dStr];
+                  const hasPunches = record && (record.startTime || record.endTime || record.workHours > 0);
+                  const hasPto = note && (note.isPTO || note.isPartialPTO || note.deductedHours > 0);
 
-                if (!hasPunches && !hasPto && (!record || !record.gasSynced || isForceRescan)) {
-                  missingDates.push(dStr);
+                  // Query if it has no punches, no PTO, OR hasn't been synced yet
+                  if ((!hasPunches && !hasPto) || !record || !record.gasSynced || isForceRescan) {
+                    missingDates.push(dStr);
+                  }
                 }
               }
               checkIter.setDate(checkIter.getDate() - 1);
             }
 
-            const datesToCheck = [...new Set([...targetDates, ...missingDates])].filter(
-              (dStr) => !localCache[dStr] || !localCache[dStr].gasSynced || isForceRescan
-            );
+            // Combine Force Dates + Historical Missing Dates
+            const datesToCheck = [...new Set([...forceDates, ...missingDates])].sort().reverse();
 
             if (datesToCheck.length === 0) {
               syncStatus.wfh = "✅";
               updateSyncProgressUI();
-              localStorage.setItem(INIT_FLAG_KEY, "true");
               return;
             }
+
+            IkgLog.info(`⚡ Fetching WFH for ${datesToCheck.length} dates (Past ${syncDaysCount} working days forced):`, datesToCheck);
 
             let completedCount = 0;
 
@@ -4958,6 +4947,7 @@
                       const isEndChanged = cOut && existingEndStr !== cOut;
                       const wasAlreadyWFH = !!existingRecord.isWFH;
 
+                      // 🎯 True Update Check
                       const isTrulyUpdated = (isStartChanged || isEndChanged) || (!wasAlreadyWFH && !isForceRescan);
 
                       if (cIn) localCache[dStr].startTime = newStartMs;
@@ -4970,10 +4960,12 @@
                       if (isTrulyUpdated) {
                         if (!window.ikgUpdatedDates) window.ikgUpdatedDates = new Set();
                         window.ikgUpdatedDates.add(dStr);
+                        IkgLog.info(`✨ WFH RECORD CHANGED [${dStr}]: IN ${cIn || '--'} | OUT ${cOut || '--'}`);
                       }
                     }
                   }
                 } catch (e) {
+                  IkgLog.error(`Error fetching WFH for ${dStr}:`, e);
                 } finally {
                   completedCount++;
                   syncStatus.wfh = `(${completedCount}/${datesToCheck.length})`;
@@ -4982,12 +4974,10 @@
               })
             );
 
-            localStorage.setItem(INIT_FLAG_KEY, "true");
             localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
             syncStatus.wfh = "✅";
             updateSyncProgressUI();
             
-            // 🎯 IMMEDIATE UI RENDER (Users see WFH updates right away!)
             triggerUIRefresh();
           };
 
