@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.125] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.126] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.125
+    // @version      7.126
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1594,10 +1594,10 @@
     };
 
 // ==========================================
-  // 1. REFINED LUNCH & FLEX-AWARE PTO ENGINE (8.5h BASE)
+  // 1. REFINED LUNCH-AWARE PTO ENGINE (9.0h GROSS BASE)
   // ==========================================
   const calculateDailyTarget = (ptoHrs, ptoType = "", isFullPTO = false) => {
-    let finalTarget = 8.5; // Base required daily target (allows 0.5h flex payback)
+    let finalTarget = 9.0; // Standard Gross Shift (8.0h net work + 1.0h mandatory lunch)
     let calculationReason = "";
 
     if (isFullPTO || ptoHrs >= 8.0) {
@@ -1605,8 +1605,8 @@
       calculationReason = "Full-day PTO (Target = 0h)";
     } 
     else if (ptoHrs === 0) {
-      finalTarget = 8.5;
-      calculationReason = "Standard Gross Shift (8.0h work + 0.5h flex threshold)";
+      finalTarget = 9.0;
+      calculationReason = "Standard Gross Shift (8.0h work + 1.0h lunch)";
     } 
     else if (ptoHrs >= 4.25 && ptoHrs <= 5.25) {
       const typeLower = (ptoType || '').toLowerCase();
@@ -1614,13 +1614,13 @@
         finalTarget = 2.75; // 09:00 to 11:45 AM (Exempt from lunch)
         calculationReason = `Afternoon PTO (${ptoHrs}h). User works 09:00~11:45 AM`;
       } else {
-        finalTarget = 4.5; // 13:00 to 17:30 PM
-        calculationReason = `Morning PTO (${ptoHrs}h). User works 13:00~17:30 PM`;
+        finalTarget = 5.0; // 13:00 to 18:00 PM
+        calculationReason = `Morning PTO (${ptoHrs}h). User works 13:00~18:00 PM`;
       }
     } 
     else {
-      finalTarget = Math.max(0, 8.5 - ptoHrs);
-      calculationReason = `Direct Partial PTO Deduction: 8.5h - ${ptoHrs}h PTO`;
+      finalTarget = Math.max(0, 9.0 - ptoHrs);
+      calculationReason = `Direct Partial PTO Deduction: 9.0h - ${ptoHrs}h PTO`;
     }
 
     if (ptoHrs > 0 || isFullPTO) {
@@ -1630,7 +1630,7 @@
     return finalTarget;
   };
 
-  // 🎯 UNIFIED COLOR TONE CALCULATOR
+  // 🎯 UNIFIED COLOR TONE CALCULATOR (8.5h Lime Green / 9.0h Green Thresholds)
   const getDailyColorGrade = (effectiveHrs, targetHrs, isToday, isYesterdayGrace) => {
     if (targetHrs === 0 && effectiveHrs === 0) return { color: 'var(--text-muted)', label: 'none' };
     
@@ -1641,20 +1641,19 @@
       return { color: 'var(--text-muted)', label: 'yesterday-grace' }; // Suppressed
     }
 
-    const delta = effectiveHrs - targetHrs;
-
-    if (delta < -0.01) {
-      return { color: '#EF4444', label: 'deficit' }; // 🔴 Red (Short)
-    } else if (delta >= 0 && delta < 0.5) {
-      return { color: '#84CC16', label: 'acceptable' }; // 🟢 Lime Green (Met Goal)
-    } else if (delta >= 0.5 && delta < 1.0) {
-      return { color: '#10B981', label: 'surplus' }; // 🟢 Core Green (Flex Banked)
+    // 🔑 COLOR-CODING THRESHOLDS BASED ON EFFECTIVE HOURS WORKED
+    if (effectiveHrs < 8.5) {
+      return { color: '#EF4444', label: 'deficit' }; // 🔴 Red (Short < 8.5h)
+    } else if (effectiveHrs >= 8.5 && effectiveHrs < 9.0) {
+      return { color: '#84CC16', label: 'acceptable' }; // 🟢 Lime Green (8.5h <= x < 9.0h)
+    } else if (effectiveHrs >= 9.0 && effectiveHrs < 10.0) {
+      return { color: '#10B981', label: 'surplus' }; // 🟢 Core Green (x >= 9.0h)
     } else {
-      return { color: '#059669', label: 'overachiever' }; // 🟢 Deep Emerald (OT)
+      return { color: '#059669', label: 'overachiever' }; // 🟢 Deep Emerald (x >= 10.0h)
     }
   };
 
-  // 🎯 DDD DOMAIN MODEL: Evaluates whole day context with Strict Override & Net Balance Rules
+  // 🎯 DDD DOMAIN MODEL: Evaluates day context using 9.0h Gross Shift Baseline
   const evaluateDay = (ctx) => {
     const { dateStr, record, note, override, settings, holidays } = ctx;
     let ptoHrs = note ? (parseFloat(note.deductedHours) || 0) : 0;
@@ -1662,7 +1661,7 @@
 
     const isFullPTO = !!(note && note.isPTO) || ptoHrs >= 8.0;
     const isPartialPTO = !isFullPTO && ptoHrs > 0;
-    if (isFullPTO) ptoHrs = 8.5;
+    if (isFullPTO) ptoHrs = 9.0;
 
     const isIgnored = settings.useManualOverrides !== false && !!(override && override.isIgnored);
     const isWFH = !!(record && record.isWFH);
@@ -1676,7 +1675,7 @@
 
     let actualHrs = (isWFH && settings.includeWfhInHours === false) ? 0 : rawActualHrs;
     
-    // 🔑 STRICT SPOOFED CHECK: ONLY true if manual In/Out time strings are explicitly provided
+    // Strict Spoofed Check: Only true when explicit manual times exist
     let isSpoofed = false;
     if (settings.useManualOverrides !== false && override && (override.manualIn || override.manualOut)) {
       const [y, m, d] = dateStr.split('-');
@@ -1712,7 +1711,6 @@
     const yesterdayD = new Date(todayD);
     yesterdayD.setDate(yesterdayD.getDate() - 1);
     
-    // 🔑 LAG GRACE: Yesterday before 6:00 PM
     const isYesterdayGrace = (dateStr === toYMD(yesterdayD)) && (nowReal.getHours() < 18);
 
     let targetHrs = 0;
@@ -1728,16 +1726,15 @@
       targetHrs = 0; isWorkingDay = true; 
     }
 
-    const effectiveHrs = isFullPTO ? 8.5 : (actualHrs + ptoHrs);
+    const effectiveHrs = isFullPTO ? 9.0 : (actualHrs + ptoHrs);
 
-    // 🔑 EXCLUDE TODAY, LAG GRACE, AND IGNORED DAYS FROM NET FLEX CALCULATIONS
+    // Flex Delta calculated against 9.0h gross daily baseline
     let flexHrs = (isWorkingDay && !isToday && !isYesterdayGrace && !isIgnored) 
-      ? (effectiveHrs - (isFullPTO ? 8.5 : targetHrs)) 
+      ? (effectiveHrs - (isFullPTO ? 9.0 : targetHrs)) 
       : 0;
 
     const grade = getDailyColorGrade(effectiveHrs, targetHrs, isToday, isYesterdayGrace);
 
-    // 🔑 SET HOLIDAY & WEEKEND DISPLAY STATUS
     let dayStatus = grade.label;
     if (isPublicHoliday && hasNoPunches) {
       dayStatus = 'holiday';
@@ -2871,26 +2868,31 @@
             missingDays.push(dateStr);
           }
 
-          // 🔑 LAG GRACE & IGNORED FILTER FOR MONTHLY TOTALS
+          // 🔑 ACCUMULATE MONTHLY TOTALS (Fixed PTO Ghost Hours in July)
           if (evalDay.isWorkingDay && !isToday && !evalDay.isYesterdayGrace && !evalDay.isIgnored) {
             monthWorkedDays++;
-            monthTotalHours = safeFloat(monthTotalHours + evalDay.effectiveHrs);
-            monthTargetHours = safeFloat(monthTargetHours + evalDay.targetHrs);
-            monthPTOHours = safeFloat(monthPTOHours + evalDay.ptoHrs);
-            
+
             if (evalDay.isFullPTO) {
-                monthFullPTODays++;
+              monthFullPTODays++;
+              // 🎯 Full PTO days add 0h to Actual Worked Hours & 0h to Target
+              // Net Flex balance for a Full PTO day is exactly 0.0h
             } else {
-                if (evalDay.isPartialPTO) monthPartialPTODays++;
-                if (evalDay.actualHrs > 0) {
-                    if (evalDay.isWFH) {
-                        monthWFHHours = safeFloat(monthWFHHours + evalDay.actualHrs);
-                        monthWFHDays++;
-                    } else {
-                        monthOfficeHours = safeFloat(monthOfficeHours + evalDay.actualHrs);
-                        monthOfficeDays++;
-                    }
+              // Real Worked Days: Add actual worked hours + partial PTO
+              monthTotalHours = safeFloat(monthTotalHours + evalDay.effectiveHrs);
+              monthTargetHours = safeFloat(monthTargetHours + evalDay.targetHrs);
+
+              if (evalDay.isPartialPTO) monthPartialPTODays++;
+              monthPTOHours = safeFloat(monthPTOHours + evalDay.ptoHrs);
+
+              if (evalDay.actualHrs > 0) {
+                if (evalDay.isWFH) {
+                  monthWFHHours = safeFloat(monthWFHHours + evalDay.actualHrs);
+                  monthWFHDays++;
+                } else {
+                  monthOfficeHours = safeFloat(monthOfficeHours + evalDay.actualHrs);
+                  monthOfficeDays++;
                 }
+              }
             }
           }
 
