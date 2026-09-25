@@ -1,7 +1,7 @@
 # TamperMonkey-scripts
 
 - Never commit and never bump `@version` / `@name` — the user releases via `deploy.sh` / the pre-commit hook.
-- Tests: `node --test` from repo root (auto-discovers `tests/*.test.mjs`; no build, no deps).
+- Tests: `node --test` from repo root (auto-discovers root `*.test.mjs`; no build, no deps). Keep every file at the repo root: `origin` also pushes to the gist, and gists reject directories.
 
 ## IKG-attendance.user.js — three layers, keep them separate
 
@@ -16,7 +16,7 @@
 ## Time model
 - Shifts (9h gross): `09:00~18:00`, `09:30~18:30`, `10:00~19:00` → meal 11:45–13:00; `13:00~22:00` → meal 17:45–19:00. Shift = settings `manualShift`, else most frequent check-in bucket of that month.
 - Partial PTO with a parsed window: span = first-to-last remaining work minute of (shift − meal − PTO windows). Without a window: legacy `9 − ptoHrs`.
-- Edge cases are the test titles in `tests/work-rules.test.mjs` — add a row there before changing a rule.
+- Edge cases are the test titles in `IKG-attendance.work-rules.test.mjs` / `IKG-attendance.gas-punches.test.mjs` — add a row there before changing a rule.
 
 ## Punches: office vs WFH vs forgot-punch corrections
 - Cache records keep punches per source: `officeIn/officeOut` (AWS only, `fillCacheGaps`) and `gasPunches` (GAS only, `runWfhSync`). `startTime/endTime/workHours/isWFH/punchSources/corrections` are always derived by `withResolvedPunches` → `IkgWorkRules.resolvePunches`. Never write the derived fields directly or OR `isWFH`.

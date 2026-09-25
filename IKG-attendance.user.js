@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.129] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.130] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.129
+    // @version      7.130
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -990,7 +990,7 @@
       const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 1000000;
       const toYMD = (d) => { const pad = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
-      // @@work-rules:start — pure time/grade rules (no DOM, no storage); tested by tests/work-rules.test.mjs
+      // @@work-rules:start — pure time/grade rules (no DOM, no storage); tested by IKG-attendance.*.test.mjs
       const IkgWorkRules = (() => {
         const GROSS_SHIFT_HRS = 9;
         const FULL_PTO_HRS = 8;

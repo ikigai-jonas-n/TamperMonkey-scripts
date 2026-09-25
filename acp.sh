@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # Grab the commit message
 MSG=${1:-"chore: auto-update scripts"}

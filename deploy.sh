@@ -86,10 +86,7 @@ process_file() {
     local raw_url="https://gist.githubusercontent.com/${username}/${gist_id}/raw/${filename}"
     
     inject_urls "$file" "$raw_url"
-    
-    echo "  ☁️  Surgically pushing script modifications directly to Gist ($gist_id)..."
-    gh gist edit "$gist_id" "$file" > /dev/null
-    echo "  ✓ Gist synchronization complete."
+    echo "  ☁️  Gist $gist_id is updated by the git push mirror (origin push URL)."
   else
     echo "  ☁️  No update URL found. Creating a fresh tracking Gist on your profile..."
     local gist_url
@@ -103,7 +100,7 @@ process_file() {
     inject_urls "$file" "$raw_url"
     
     echo "  ☁️  Syncing internal update targets back to tracking Gist..."
-    gh gist edit "$gist_id" "$file" > /dev/null
+    gh gist edit "$gist_id" --filename "$filename" "$file" > /dev/null
     echo "  ✓ Fresh tracking channels configured."
   fi
 }

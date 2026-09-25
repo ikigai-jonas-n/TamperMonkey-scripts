@@ -28,21 +28,21 @@ Before installing any scripts, configure your browser:
 
 ## 📦 Available Scripts
 
-### 1. [7.89] IKG Attendance Pro (Autopilot & Alarms)
+### 1. [7.130] IKG Attendance Pro (Autopilot & Alarms)
 
 Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
 
 
-👉 **[Install [7.89] IKG Attendance Pro (Autopilot & Alarms)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js)**
+👉 **[Install [7.130] IKG Attendance Pro (Autopilot & Alarms)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js)**
 
 ---
 
-### 2. [19.22] EnvDashboard Matrix History & Overview (Ultimate Live Engine)
+### 2. [19.23] EnvDashboard Matrix History & Overview (Ultimate Live Engine)
 
 Pipeline Tooltips, Dashboard Timeline FAB, Auto-Highlight Notifications, Smart Toast Stacking
 
 
-👉 **[Install [19.22] EnvDashboard Matrix History & Overview (Ultimate Live Engine)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/QA-env-dashboard.user.js)**
+👉 **[Install [19.23] EnvDashboard Matrix History & Overview (Ultimate Live Engine)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/QA-env-dashboard.user.js)**
 
 ---
 
