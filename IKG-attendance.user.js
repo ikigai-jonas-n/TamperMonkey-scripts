@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.132] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.133] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.132
+    // @version      7.133
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -2725,13 +2725,13 @@
             .ikg-times.pending { border: 1px dashed var(--warn); background: var(--warn-bg); }
             .ikg-times div { display: flex; justify-content: space-between; align-items: center; }
             .ikg-times span { color: var(--text-main); font-family: monospace; font-size: 10.5px; letter-spacing: -0.5px;}
-            .ikg-times span.ikg-punch-fixed { color: #2DD4BF; border-bottom: 1px dotted rgba(45, 212, 191, 0.6); }
+            .ikg-times span.ikg-punch-fixed { color: #F9A8D4; border-bottom: 1px dotted rgba(249, 168, 212, 0.6); }
             .ikg-times span.ikg-punch-pending { color: var(--warn); border-bottom: 1px dotted rgba(245, 158, 11, 0.6); }
             .ikg-pill-row { display: flex; align-items: center; gap: 3px; margin-right: auto; margin-left: 2px; min-width: 0; }
             .ikg-pill { font-size: 9px; line-height: 12px; color: #fff; padding: 2px 5px; border-radius: 4px; font-weight: 700; letter-spacing: 0.5px; white-space: nowrap; cursor: help; }
             .ikg-pill--wfh { background: var(--primary); box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3); }
             .ikg-pill--pto { background: var(--pto); box-shadow: 0 2px 4px rgba(139, 92, 246, 0.3); }
-            .ikg-pill--fixed { background: #0D9488; box-shadow: 0 2px 4px rgba(13, 148, 136, 0.3); }
+            .ikg-pill--fixed { background: #DB2777; box-shadow: 0 2px 4px rgba(219, 39, 119, 0.3); }
             .pto-pill { background: var(--pto-bg); color: var(--pto); border: 1px solid var(--pto); padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-align: center; margin-top:auto;}
 
             .ikg-summary-pane { flex: 1; padding: 24px; overflow-y: auto; background: var(--bg-surface); display: flex; flex-direction: column; gap: 20px; justify-content: flex-start; }
