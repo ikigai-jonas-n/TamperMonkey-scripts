@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.127] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.128] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.127
+    // @version      7.128
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -3284,7 +3284,7 @@
             <th>Clock-In</th>
             <th>Clock-Out</th>
             <th>Total Shift</th>
-            <th>Flex (Vs 8.5h Base)</th>
+            <th>Flex (Vs 9h Base)</th>
           `;
         }
 
