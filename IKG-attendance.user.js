@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.131] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.132] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.131
+    // @version      7.132
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -2674,7 +2674,7 @@
             #ikg-modal { width: 1300px; max-width: 95vw; height: 850px; max-height: 90vh; background: var(--bg-base); border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 32px 64px rgba(0,0,0,0.8); display: flex; flex-direction: column; overflow: hidden; color: var(--text-main); transform: scale(0.97); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
             #ikg-modal-backdrop.open #ikg-modal { transform: scale(1); }
             #ikg-modal-header { padding: 0 32px; height: 72px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-surface); }
-            .ikg-title-area { 
+            .ikg-title-area { flex-shrink: 0;
               display: flex; 
               align-items: center; 
               gap: 8px; 
@@ -2683,14 +2683,14 @@
               letter-spacing: -0.02em; 
               white-space: nowrap; 
           }
-            .ikg-tab-group { display: flex; gap: 2px; height: 100%; align-items: center; margin-left: 28px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+            .ikg-tab-group { display: flex; gap: 2px; height: 100%; align-items: center; margin-left: 28px; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
             .ikg-tab-group::-webkit-scrollbar { display: none; }
             .ikg-tab { height: 100%; display: flex; align-items: center; gap: 6px; padding: 0 14px; cursor: pointer; font-size: 14px; font-weight: 600; white-space: nowrap; flex-shrink: 0; box-sizing: border-box; color: var(--text-muted); border-bottom: 3px solid transparent; border-top: 3px solid transparent; transition: 0.2s; user-select: none; }
             .ikg-tab:hover { color: var(--text-main); }
             .ikg-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
-            .ikg-header-actions { margin-left: auto; padding-left: 16px; display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
-            .ikg-header-status { font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 20px; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-muted); transition: 0.3s; user-select: none; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-            #ikg-close { cursor: pointer; font-size: 28px; color: var(--text-muted); line-height: 1; transition: color 0.2s; }
+            .ikg-header-actions { flex: 1 1 0; min-width: 160px; padding-left: 16px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; }
+            .ikg-header-status { font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 20px; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-muted); transition: 0.3s; user-select: none; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 100%; }
+            #ikg-close { cursor: pointer; font-size: 28px; color: var(--text-muted); line-height: 1; transition: color 0.2s; flex-shrink: 0; }
             #ikg-close:hover { color: var(--text-main); }
             #ikg-modal-body { display: flex; flex: 1; overflow: hidden; position: relative; }
 
