@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.128] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.129] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.128
+    // @version      7.129
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -990,6 +990,303 @@
       const safeFloat = (num) => Math.round((num + Number.EPSILON) * 1000000) / 1000000;
       const toYMD = (d) => { const pad = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
+      // @@work-rules:start — pure time/grade rules (no DOM, no storage); tested by tests/work-rules.test.mjs
+      const IkgWorkRules = (() => {
+        const GROSS_SHIFT_HRS = 9;
+        const FULL_PTO_HRS = 8;
+        const HOURS_TOLERANCE = 0.25;
+        const GRADE_THRESHOLDS = Object.freeze({ acceptable: 8.5, surplus: 9, overachiever: 10 });
+        const DAY_MEAL = Object.freeze({ mealStart: 11.75, mealEnd: 13 });
+        const NIGHT_MEAL = Object.freeze({ mealStart: 17.75, mealEnd: 19 });
+        const NIGHT_SHIFT_FROM = 13;
+        const SHIFT_LABELS = Object.freeze(["09:00 ~ 18:00", "09:30 ~ 18:30", "10:00 ~ 19:00", "13:00 ~ 22:00"]);
+        const DEFAULT_SHIFT_LABEL = SHIFT_LABELS[0];
+
+        const round = (n) => Math.round((n + Number.EPSILON) * 1e6) / 1e6;
+        const hhmmToDec = (s) => {
+          const [h, m] = String(s).trim().split(":").map(Number);
+          return h + (m || 0) / 60;
+        };
+
+        const shiftFromLabel = (label, source = "manual") => {
+          const [startStr, endStr] = String(label).split("~");
+          if (endStr === undefined) return null;
+          const start = hhmmToDec(startStr);
+          const end = hhmmToDec(endStr);
+          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+          const meal = start >= NIGHT_SHIFT_FROM ? NIGHT_MEAL : DAY_MEAL;
+          return Object.freeze({ label, start, end, ...meal, source });
+        };
+
+        const checkInBucket = (hourDec) => {
+          if (hourDec < 9.5) return 0;
+          if (hourDec < 10) return 1;
+          if (hourDec < NIGHT_SHIFT_FROM) return 2;
+          return 3;
+        };
+
+        const resolveShift = (checkInHours, manualShift) => {
+          const manual = manualShift && manualShift !== "auto" ? shiftFromLabel(manualShift, "manual") : null;
+          if (manual) return manual;
+          const counts = SHIFT_LABELS.map(() => 0);
+          checkInHours.forEach((h) => counts[checkInBucket(h)]++);
+          const max = Math.max(...counts);
+          if (max === 0) return shiftFromLabel(DEFAULT_SHIFT_LABEL, "default");
+          return shiftFromLabel(SHIFT_LABELS[counts.indexOf(max)], "auto");
+        };
+
+        const mergeIntervals = (intervals) =>
+          [...intervals]
+            .sort((a, b) => a.start - b.start)
+            .reduce((acc, iv) => {
+              const last = acc[acc.length - 1];
+              if (last && iv.start <= last.end) return [...acc.slice(0, -1), { start: last.start, end: Math.max(last.end, iv.end) }];
+              return [...acc, { start: iv.start, end: iv.end }];
+            }, []);
+
+        const subtractIntervals = (intervals, cuts) =>
+          cuts.reduce(
+            (acc, cut) =>
+              acc.flatMap((iv) => {
+                if (cut.end <= iv.start || cut.start >= iv.end) return [iv];
+                return [
+                  ...(cut.start > iv.start ? [{ start: iv.start, end: cut.start }] : []),
+                  ...(cut.end < iv.end ? [{ start: cut.end, end: iv.end }] : []),
+                ];
+              }),
+            intervals,
+          );
+
+        const intersectLength = (intervals, cut) =>
+          intervals.reduce((sum, iv) => sum + Math.max(0, Math.min(iv.end, cut.end) - Math.max(iv.start, cut.start)), 0);
+
+        const workIntervalsOf = (shift) =>
+          subtractIntervals([{ start: shift.start, end: shift.end }], [{ start: shift.mealStart, end: shift.mealEnd }]);
+
+        const MERIDIEM_REWRITES = [
+          [/上午|早上|凌晨/g, " am "],
+          [/下午|晚上|中午|傍晚/g, " pm "],
+          [/(?<![a-z])a\.m\.?/g, "am"],
+          [/(?<![a-z])p\.m\.?/g, "pm"],
+          [/(\d{1,2})\s*[點点]\s*半/g, "$1:30"],
+          [/(\d{1,2})\s*[點点]\s*(\d{1,2})\s*分?/g, (_, h, m) => `${h}:${m.padStart(2, "0")}`],
+          [/(\d{1,2})\s*[點点]/g, "$1:00"],
+        ];
+        const TIME_TOKEN = "(?:(am|pm)\\s*)?(\\d{1,2})(?:[:.](\\d{2})|(\\d{2}))?\\s*(am|pm)?";
+        const RANGE_SEPARATOR = "\\s*(?:-|–|—|~|〜|to|→|>|至|到)\\s*";
+        const RANGE_PATTERN = new RegExp(`(?<![\\d:./-])${TIME_TOKEN}${RANGE_SEPARATOR}${TIME_TOKEN}(?![\\d/:]|-\\d)`, "g");
+
+        const toHour = (hStr, mStr, meridiem) => {
+          const h = Number(hStr);
+          const m = Number(mStr || 0);
+          if (m > 59) return null;
+          if (meridiem) return h >= 1 && h <= 12 ? (h % 12) + (meridiem === "pm" ? 12 : 0) + m / 60 : null;
+          return h <= 24 ? h + m / 60 : null;
+        };
+        const isBareHour = (hStr) => !hStr.startsWith("0") && Number(hStr) >= 1 && Number(hStr) <= 12;
+
+        const windowFromMatch = (g) => {
+          const [, pre1, h1, m1a, m1b, suf1, pre2, h2, m2a, m2b, suf2] = g;
+          const mer1 = pre1 || suf1;
+          const mer2 = pre2 || suf2;
+          let end = toHour(h2, m2a || m2b, mer2);
+          let start = toHour(h1, m1a || m1b, mer1);
+          if (!mer1 && mer2 === "pm") {
+            const pmStart = toHour(h1, m1a || m1b, "pm");
+            if (pmStart !== null && end !== null && pmStart < end) start = pmStart;
+          }
+          if (!mer2 && start !== null && end !== null && end <= start && end < NIGHT_SHIFT_FROM && end + 12 <= 24) end += 12;
+          if (start === null || end === null || start < 0 || end > 24 || start >= end) return null;
+          const ambiguous = !mer1 && !mer2 && isBareHour(h1) && isBareHour(h2);
+          return Object.freeze({ start: round(start), end: round(end), ambiguous });
+        };
+
+        const parsePtoWindows = (text) => {
+          if (!text || typeof text !== "string") return [];
+          const normalized = MERIDIEM_REWRITES.reduce((s, [re, rep]) => s.replace(re, rep), text.normalize("NFKC").toLowerCase());
+          return [...normalized.matchAll(RANGE_PATTERN)].map(windowFromMatch).filter(Boolean);
+        };
+
+        const disambiguateWindows = (windows, shift) => {
+          const overlap = (w) => Math.max(0, Math.min(w.end, shift.end) - Math.max(w.start, shift.start));
+          return (windows || []).map((w) => {
+            if (!w.ambiguous || overlap(w) > 0) return w;
+            const later = { ...w, start: w.start + 12, end: w.end + 12 };
+            return later.end <= 24 && overlap(later) > 0 ? Object.freeze(later) : w;
+          });
+        };
+
+        const isDeelHoursMismatch = (windows, workIntervals, shift, ptoHrs) => {
+          if (!(ptoHrs > 0)) return false;
+          const shiftSpan = [{ start: shift.start, end: shift.end }];
+          const workHrs = windows.reduce((s, w) => s + intersectLength(workIntervals, w), 0);
+          const rawHrs = windows.reduce((s, w) => s + intersectLength(shiftSpan, w), 0);
+          return Math.abs(workHrs - ptoHrs) > HOURS_TOLERANCE && Math.abs(rawHrs - ptoHrs) > HOURS_TOLERANCE;
+        };
+
+        const computeDaySchedule = ({ shift, ptoWindows = [], ptoHrs = 0, isFullPTO = false }) => {
+          const workIntervals = workIntervalsOf(shift);
+          const standard = {
+            span: GROSS_SHIFT_HRS, ptoCredit: 0, earliestCheckin: shift.start, earliestCheckout: shift.end,
+            workIntervals, windows: [], hoursMismatch: false,
+          };
+          const fullDay = { ...standard, span: 0, ptoCredit: GROSS_SHIFT_HRS, earliestCheckin: null, earliestCheckout: null, workIntervals: [] };
+
+          if (isFullPTO || ptoHrs >= FULL_PTO_HRS) return Object.freeze({ ...fullDay, mode: "full" });
+
+          const windows = mergeIntervals(disambiguateWindows(ptoWindows, shift));
+          if (!windows.length && ptoHrs > 0) {
+            return Object.freeze({
+              ...standard, mode: "legacy", span: round(GROSS_SHIFT_HRS - ptoHrs), ptoCredit: round(ptoHrs),
+              earliestCheckout: round(shift.end - ptoHrs),
+            });
+          }
+          if (!windows.length) return Object.freeze({ ...standard, mode: "standard" });
+
+          const inShift = windows.filter((w) => w.end > shift.start && w.start < shift.end);
+          if (!inShift.length) return Object.freeze({ ...standard, mode: "window-outside", windows, hoursMismatch: true });
+
+          const hoursMismatch = isDeelHoursMismatch(inShift, workIntervals, shift, ptoHrs);
+          const remaining = subtractIntervals(workIntervals, inShift);
+          if (!remaining.length) return Object.freeze({ ...fullDay, mode: "full", windows, hoursMismatch });
+
+          const earliestCheckin = remaining[0].start;
+          const earliestCheckout = remaining[remaining.length - 1].end;
+          const span = round(earliestCheckout - earliestCheckin);
+          return Object.freeze({
+            mode: "window", span, ptoCredit: round(GROSS_SHIFT_HRS - span),
+            earliestCheckin, earliestCheckout, workIntervals: remaining, windows, hoursMismatch,
+          });
+        };
+
+        const pad2 = (n) => String(n).padStart(2, "0");
+        const GAS_PUNCH_KINDS = Object.freeze({ "clock in": "in", "clock out": "out" });
+        const normalizeGasType = (type) => GAS_PUNCH_KINDS[String(type ?? "").trim().toLowerCase()] || null;
+        const normalizeGasTime = (time) => {
+          const m = String(time ?? "").trim().toLowerCase().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/);
+          if (!m) return null;
+          const [, hStr, mm, ss = "00", meridiem] = m;
+          let h = Number(hStr);
+          if (meridiem) {
+            if (h < 1 || h > 12) return null;
+            h = (h % 12) + (meridiem === "pm" ? 12 : 0);
+          }
+          if (h > 23 || Number(mm) > 59 || Number(ss) > 59) return null;
+          return `${pad2(h)}:${mm}:${ss}`;
+        };
+        const normalizeGasDate = (date) => {
+          const text = String(date ?? "").trim();
+          if (/^\d{4}-\d{2}-\d{2}T.*Z$/.test(text)) {
+            const d = new Date(text);
+            return Number.isNaN(d.getTime()) ? null : `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+          }
+          const m = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+          return m ? `${m[1]}-${pad2(m[2])}-${pad2(m[3])}` : null;
+        };
+        const normalizeReviewStatus = (status) => {
+          const s = String(status ?? "").trim().toLowerCase();
+          if (s.startsWith("approv")) return "approved";
+          if (/^(reject|declin|denied|cancel)/.test(s)) return "rejected";
+          return "pending";
+        };
+
+        const parseGasEnvelope = (raw) => {
+          const text = String(raw ?? "");
+          const start = text.indexOf("[");
+          if (start === -1) return null;
+          try {
+            const op = JSON.parse(text.slice(start)).find((item) => item[0] === "op.exec");
+            return op && typeof op[1]?.[1] === "string" ? JSON.parse(op[1][1]) : null;
+          } catch (e) {
+            return null;
+          }
+        };
+
+        const classifyGasPunches = (records, requests, dateStr) => {
+          const forDate = (requests || []).filter((r) => normalizeGasDate(r.date) === dateStr);
+          const unknownRequests = forDate.filter((r) => !normalizeGasType(r.type));
+          const candidates = forDate
+            .filter((r) => normalizeGasType(r.type))
+            .map((r) => ({
+              kind: normalizeGasType(r.type), time: normalizeGasTime(r.time),
+              status: normalizeReviewStatus(r.reviewStatus), note: r.reviewNote || "",
+            }));
+          const punches = [
+            ...new Map(
+              (records || [])
+                .map((r) => ({ kind: normalizeGasType(r.type), time: normalizeGasTime(r.time) }))
+                .filter((p) => p.kind && p.time)
+                .map((p) => [`${p.kind}|${p.time}`, p]),
+            ).values(),
+          ];
+          const used = new Set();
+          const take = (predicate) => {
+            const i = candidates.findIndex((c, idx) => !used.has(idx) && predicate(c));
+            if (i === -1) return null;
+            used.add(i);
+            return candidates[i];
+          };
+          const exact = punches.map((p) => take((c) => c.kind === p.kind && c.time === p.time));
+          const matches = punches.map((p, i) => exact[i] || take((c) => c.kind === p.kind));
+          return {
+            punches: punches.map((p, i) =>
+              Object.freeze(matches[i]
+                ? { ...p, source: "correction", status: matches[i].status, note: matches[i].note, requestTime: matches[i].time }
+                : { ...p, source: "wfh" }),
+            ),
+            unknownRequests,
+          };
+        };
+
+        const resolvePunches = ({ officeIn = null, officeOut = null }, gasPunches) => {
+          const punches = gasPunches || [];
+          const counted = punches.filter((p) => !(p.source === "correction" && p.status === "rejected"));
+          const office = (atMs) => (atMs == null ? [] : [{ atMs, source: "office" }]);
+          const pick = (list, isBetter) => list.reduce((best, c) => (!best || isBetter(c.atMs, best.atMs) ? c : best), null);
+          const inPunch = pick([...office(officeIn), ...counted.filter((p) => p.kind === "in")], (a, b) => a < b);
+          const outPunch = pick([...office(officeOut), ...counted.filter((p) => p.kind === "out")], (a, b) => a > b);
+          const sourceOf = (p) => (p ? Object.freeze({ source: p.source, status: p.status ?? null, note: p.note ?? "" }) : null);
+          return Object.freeze({
+            startMs: inPunch?.atMs ?? null,
+            endMs: outPunch?.atMs ?? null,
+            punchSources: Object.freeze({ in: sourceOf(inPunch), out: sourceOf(outPunch) }),
+            isWFH: counted.some((p) => p.source === "wfh"),
+            corrections: punches
+              .filter((p) => p.source === "correction")
+              .map(({ kind, time, status, note }) => Object.freeze({ kind, time, status, note })),
+          });
+        };
+
+        const gradeDay = ({ effectiveHrs, baselineHrs, isToday, isYesterdayGrace }) => {
+          if (baselineHrs === 0 && effectiveHrs === 0) return { label: "none" };
+          if (isToday && effectiveHrs < baselineHrs) return { label: "today-active" };
+          if (isYesterdayGrace && effectiveHrs < baselineHrs) return { label: "yesterday-grace" };
+          if (effectiveHrs < GRADE_THRESHOLDS.acceptable) return { label: "deficit" };
+          if (effectiveHrs < GRADE_THRESHOLDS.surplus) return { label: "acceptable" };
+          if (effectiveHrs < GRADE_THRESHOLDS.overachiever) return { label: "surplus" };
+          return { label: "overachiever" };
+        };
+
+        const isGoalMet = (effectiveHrs) => round(effectiveHrs) >= GROSS_SHIFT_HRS;
+
+        const formatWindow = ({ start, end }) => {
+          const fmt = (dec) => {
+            const mins = Math.round(dec * 60);
+            return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+          };
+          return `${fmt(start)}–${fmt(end)}`;
+        };
+
+        return Object.freeze({
+          GROSS_SHIFT_HRS, FULL_PTO_HRS, GRADE_THRESHOLDS, SHIFT_LABELS,
+          shiftFromLabel, resolveShift, parsePtoWindows, disambiguateWindows,
+          computeDaySchedule, gradeDay, isGoalMet, formatWindow,
+          normalizeGasType, normalizeGasTime, normalizeGasDate, normalizeReviewStatus,
+          parseGasEnvelope, classifyGasPunches, resolvePunches,
+        });
+      })();
+      // @@work-rules:end
+
       const populateMonthSelect = (selectId, localCache, currentVal) => {
         const selectEl = document.getElementById(selectId);
         if (!selectEl) return currentVal;
@@ -1100,112 +1397,173 @@
         });
       };
 
-      const fetchAndParseDeelPTO = async (isRetry = false) => {
-    const token = await ensureDeelToken();
-    if (!token) {
-      IkgLog.error("❌ Skipping Deel PTO Sync: No valid Deel Auth Token available.");
-      return null;
-    }
+      const DEEL_APPROVAL_CACHE_KEY = "IKG_DEEL_APPROVAL_CACHE";
+      const DEEL_MAX_APPROVAL_PAGES = 50;
 
-    const fetchDeel = (path) =>
-      new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: "GET",
-          url: `https://ikg.deel.team/deelapi/${path}`,
-          withCredentials: true,
-          headers: {
-            Accept: "application/json, text/plain, */*",
-            "x-auth-token": token,
-            "x-api-version": "2",
-            "x-app-host": "ikg.deel.team",
-            "x-platform": "web",
-            "x-owner": "timeoff-fe",
-            Origin: "https://ikg.deel.team",
-            Referer: "https://ikg.deel.team/",
-          },
-          onload: (res) => {
-            if (res.status === 401 || res.status === 403)
-              reject({ status: res.status });
-            else if (res.status === 200) resolve(JSON.parse(res.responseText));
-            else reject({ status: res.status });
-          },
-          onerror: (err) => reject(err),
-        });
+      const fetchDeelApprovalSummaries = async (fetchDeel) => {
+        const summaries = [];
+        let cursor = null;
+        for (let page = 0; page < DEEL_MAX_APPROVAL_PAGES; page++) {
+          const res = await fetchDeel(`approvals/requests/requester${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`);
+          summaries.push(...(res?.data || []));
+          cursor = res?.cursor || null;
+          if (!cursor) break;
+        }
+        return summaries;
+      };
+
+      const toCachedApproval = (summary, full) => ({
+        id: summary.id,
+        updatedAt: summary.updatedAt,
+        requestDetails: (full?.details?.requestDetails || []).map((rd) => ({
+          id: rd.id,
+          description: rd.description || "",
+          dailies: (rd.timeOffDailies || []).map((d) => ({ date: String(d.date).slice(0, 10), hours: Number(d.hoursAmount) || 0 })),
+        })),
       });
 
-    try {
-      IkgLog.info("Fetching Deel PTO Data natively...");
-      let profileId = GM_getValue("IKG_DEEL_PROFILE_ID", null);
-      let entData = null;
+      const fetchDeelRequestDetails = async (fetchDeel) => {
+        try {
+          const summaries = (await fetchDeelApprovalSummaries(fetchDeel)).filter((a) => a.domain === "TIME_OFF" && a.status !== "REJECTED");
+          const cache = GM_getValue(DEEL_APPROVAL_CACHE_KEY, {}) || {};
+          const approvals = await Promise.all(
+            summaries.map(async (summary) => {
+              const cached = cache[summary.id];
+              if (cached && cached.updatedAt === summary.updatedAt) return cached;
+              try {
+                return toCachedApproval(summary, await fetchDeel(`approvals/requests/requester/${summary.id}`));
+              } catch (e) {
+                IkgLog.warn(`Deel approval ${summary.id} unavailable`, e?.status ?? e);
+                return null;
+              }
+            }),
+          );
+          const fetched = approvals.filter(Boolean);
+          GM_setValue(DEEL_APPROVAL_CACHE_KEY, Object.fromEntries(fetched.map((a) => [a.id, a])));
+          return [...fetched]
+            .sort((a, b) => String(a.updatedAt).localeCompare(String(b.updatedAt)))
+            .reduce((acc, a) => ({ ...acc, ...Object.fromEntries(a.requestDetails.map((rd) => [rd.id, rd])) }), {});
+        } catch (e) {
+          IkgLog.warn("Deel approvals feed unavailable; PTO windows skipped", e?.status ?? e);
+          return {};
+        }
+      };
 
-      if (!profileId) {
-        IkgLog.info("Resolving Time-Off Profile UUID...");
-        const timeOffsMe = await fetchDeel("time_offs/me");
-        profileId = timeOffsMe?.profile?.id;
+      const deelDailyHours = (req, detail, isDayUnit) => {
+        const dailies = (detail?.dailies || []).filter((d) => d.hours > 0);
+        if (dailies.length) return dailies.map((d) => ({ dateStr: d.date, hours: d.hours }));
 
-        if (!profileId)
-          throw new Error("Could not find profile.id in /time_offs/me response.");
+        const dates = [];
+        const end = new Date(`${req.endDate.substring(0, 10)}T00:00:00`);
+        for (const d = new Date(`${req.startDate.substring(0, 10)}T00:00:00`); d <= end; d.setDate(d.getDate() + 1)) {
+          dates.push({ dateStr: toYMD(d), isWeekday: d.getDay() !== 0 && d.getDay() !== 6 });
+        }
+        const weekdays = dates.filter((d) => d.isWeekday);
+        const chargedDates = weekdays.length ? weekdays : dates;
+        const perDay = (parseFloat(req.amount) || 0) / chargedDates.length;
+        return chargedDates.map(({ dateStr }) => ({ dateStr, hours: isDayUnit ? perDay * IkgWorkRules.FULL_PTO_HRS : perDay }));
+      };
 
-        GM_setValue("IKG_DEEL_PROFILE_ID", profileId);
-        IkgLog.info(`✅ Resolved Time-Off Profile UUID: ${profileId}`);
-      }
+      const mergeDeelDayNote = (existing, { type, hours, ptoWindows, description, timeOffId }) => {
+        const deductedHours = (existing?.deductedHours || 0) + hours;
+        const isPTO = deductedHours >= IkgWorkRules.FULL_PTO_HRS;
+        return {
+          isPTO,
+          isPartialPTO: !isPTO && deductedHours > 0,
+          type: existing ? `${existing.type} + ${type}` : type,
+          deductedHours,
+          ptoWindows: [...(existing?.ptoWindows || []), ...ptoWindows],
+          rawDescription: [existing?.rawDescription, description].filter(Boolean).join("\n"),
+          deelTimeOffIds: [...(existing?.deelTimeOffIds || []), timeOffId],
+        };
+      };
 
-      try {
-        entData = await fetchDeel(`time_offs/profile/${profileId}/entitlements`);
-      } catch (entErr) {
-        IkgLog.warn("Could not fetch entitlements, skipping...", entErr);
-      }
+      const fetchAndParseDeelPTO = async (isRetry = false) => {
+        const token = await ensureDeelToken();
+        if (!token) {
+          IkgLog.error("❌ Skipping Deel PTO Sync: No valid Deel Auth Token available.");
+          return null;
+        }
 
-      const toData = await fetchDeel(`time_offs/profile/${profileId}/time_off?orderType=DESC&lightweight=true`);
-      const ptoCalendar = {};
-      const syncLog = [];
+        const fetchDeel = (path) =>
+          new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+              method: "GET",
+              url: `https://ikg.deel.team/deelapi/${path}`,
+              withCredentials: true,
+              headers: {
+                Accept: "application/json, text/plain, */*",
+                "x-auth-token": token,
+                "x-api-version": "2",
+                "x-app-host": "ikg.deel.team",
+                "x-platform": "web",
+                "x-owner": "timeoff-fe",
+                Origin: "https://ikg.deel.team",
+                Referer: "https://ikg.deel.team/",
+              },
+              onload: (res) => {
+                if (res.status === 401 || res.status === 403)
+                  reject({ status: res.status });
+                else if (res.status === 200) resolve(JSON.parse(res.responseText));
+                else reject({ status: res.status });
+              },
+              onerror: (err) => reject(err),
+            });
+          });
 
-      if (Array.isArray(toData)) {
-        toData.forEach((req) => {
-          if (req.status !== "USED" && req.status !== "APPROVED") return;
+        try {
+          IkgLog.info("Fetching Deel PTO Data natively...");
 
-          const startStr = req.startDate.substring(0, 10);
-          const endStr = req.endDate.substring(0, 10);
-          const typeName = req.timeOffType?.name || "Leave";
-          const unit = req.timeOffType?.policy?.entitlementUnit || "BUSINESS_DAY";
-          const totalAmt = parseFloat(req.amount) || 0;
+          let profileId = GM_getValue("IKG_DEEL_PROFILE_ID", null);
 
-          let curr = new Date(startStr + "T00:00:00");
-          const end = new Date(endStr + "T00:00:00");
-          const daySpan = Math.round((end - curr) / 86400000) + 1;
-          const dailyAmt = totalAmt / daySpan;
+          if (!profileId) {
+            IkgLog.info("Resolving Time-Off Profile UUID...");
+            const timeOffsMe = await fetchDeel("time_offs/me");
+            profileId = timeOffsMe?.profile?.id;
 
-          while (curr <= end) {
-            const pad = (n) => String(n).padStart(2, "0");
-            const dStr = `${curr.getFullYear()}-${pad(curr.getMonth() + 1)}-${pad(curr.getDate())}`;
-            const isFullDay = unit === "BUSINESS_DAY" || unit === "CALENDAR_DAY";
-            const calculatedHours = isFullDay ? dailyAmt * 8 : dailyAmt;
+            if (!profileId)
+              throw new Error("Could not find profile.id in /time_offs/me response.");
 
-            ptoCalendar[dStr] = {
-              isFullDay: isFullDay,
-              type: typeName,
-              hours: calculatedHours,
-            };
-
-            // 🎯 TELEMETRY LOG FOR DEEL PTO
-            IkgLog.debug(`[Deel Sync] ${dStr} -> Type: "${typeName}" | Unit: ${unit} | Raw Amt: ${dailyAmt} -> Injected Hrs: ${calculatedHours}h`);
-
-            curr.setDate(curr.getDate() + 1);
+            GM_setValue("IKG_DEEL_PROFILE_ID", profileId);
+            IkgLog.info(`✅ Resolved Time-Off Profile UUID: ${profileId}`);
           }
-        });
-      }
-      return { ptoCalendar, syncLog };
-    } catch (e) {
-      if (e.status === 401 && !isRetry) {
-        IkgLog.warn("Deel Token expired or invalid. Clearing saved token & retrying...");
-        GM_setValue("IKG_DEEL_TOKEN", null);
-        GM_setValue("IKG_DEEL_PROFILE_ID", null);
-        return await fetchAndParseDeelPTO(true);
-      }
-      IkgLog.error("❌ Deel PTO Sync Failed:", e.status ? `HTTP Status ${e.status}` : e.message || JSON.stringify(e));
-      return null;
-    }
-  };
+
+          const toData = await fetchDeel(`time_offs/profile/${profileId}/time_off?orderType=DESC&lightweight=true`);
+          const detailByTimeOffId = await fetchDeelRequestDetails(fetchDeel);
+          const dayNotes = {};
+
+          (Array.isArray(toData) ? toData : [])
+            .filter((req) => req.status === "USED" || req.status === "APPROVED")
+            .forEach((req) => {
+              const typeName = req.timeOffType?.name || "Leave";
+              const unit = req.timeOffType?.policy?.entitlementUnit || "BUSINESS_DAY";
+              const isDayUnit = unit === "BUSINESS_DAY" || unit === "CALENDAR_DAY";
+              const detail = detailByTimeOffId[req.id];
+              const description = detail?.description || "";
+              const ptoWindows = IkgWorkRules.parsePtoWindows(description);
+
+              deelDailyHours(req, detail, isDayUnit).forEach(({ dateStr, hours }) => {
+                dayNotes[dateStr] = mergeDeelDayNote(dayNotes[dateStr], {
+                  type: typeName, hours, ptoWindows, description, timeOffId: req.id,
+                });
+                const windowLog = ptoWindows.length ? ptoWindows.map(IkgWorkRules.formatWindow).join(", ") : "none";
+                IkgLog.info(`[Deel Sync] ${dateStr} -> "${typeName}" | ${hours}h | windows: ${windowLog} | desc: "${description}"`);
+              });
+            });
+
+          localStorage.setItem(DAY_NOTES_KEY, JSON.stringify(dayNotes));
+          return { dayNotes };
+        } catch (e) {
+          if (e.status === 401 && !isRetry) {
+            IkgLog.warn("Deel Token expired or invalid. Clearing saved token & retrying...");
+            GM_setValue("IKG_DEEL_TOKEN", null);
+            GM_setValue("IKG_DEEL_PROFILE_ID", null);
+            return await fetchAndParseDeelPTO(true);
+          }
+          IkgLog.error("❌ Deel PTO Sync Failed:", e.status ? `HTTP Status ${e.status}` : e.message || JSON.stringify(e));
+          return null;
+        }
+      };
 
       // ==========================================
       // 4. CORE LOGIC & STATE (WITH GAS SUPPORT)
@@ -1369,58 +1727,45 @@
     });
   };
 
-      const fetchGasRecords = async (dateStr, gasData) => {
-        return new Promise((resolve) => {
-            const urlWithParams = `${gasData.callbackUrl}?nocache_id=${Math.floor(Math.random()*1000)}&token=${encodeURIComponent(gasData.token)}`;
-            const payloadStr = `["getRecordsByDate","[\\"${dateStr}\\"]",null,[0],null,null,1,0]`;
-            const formData = `request=${encodeURIComponent(payloadStr)}`;
-
-            GM_xmlhttpRequest({
-                method: "POST",
-                url: urlWithParams,
-                headers: { 
-                    "accept": "*/*", 
-                    "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-                    "origin": "https://script.google.com",
-                    "referer": "https://script.google.com/a/macros/ikigai.team/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/exec",
-                    "x-same-domain": "1"
-                },
-                data: formData,
-                withCredentials: true,
-                onload: function(res) {
-                    if (res.status === 200) {
-                        try {
-                            // Dynamically find the start of the JSON array to avoid prefix issues
-                            const firstBracket = res.responseText.indexOf('[');
-                            if (firstBracket !== -1) {
-                                const cleanJsonStr = res.responseText.substring(firstBracket);
-                                const parsedArray = JSON.parse(cleanJsonStr);
-                                const payloadOp = parsedArray.find(item => item[0] === "op.exec");
-                                
-                                if (payloadOp && payloadOp[1] && typeof payloadOp[1][1] === 'string') {
-                                    const records = JSON.parse(payloadOp[1][1]);
-                                    if (records && records.length > 0) IkgLog.debug(`[GAS] ${dateStr} returned ${records.length} punches.`);
-                                    resolve(records);
-                                    return;
-                                } else {
-                                    IkgLog.warn(`[GAS] Empty/Invalid payload for ${dateStr}. Google returned:`, res.responseText.substring(0, 100));
-                                }
-                            }
-                        } catch (e) {
-                            IkgLog.error(`[GAS Parse Error] ${dateStr}`, e);
-                        }
-                    } else {
-                        IkgLog.error(`[GAS HTTP Error] ${dateStr} returned ${res.status}`);
-                    }
-                    resolve(null);
-                },
-                onerror: (err) => {
-                    IkgLog.error(`[GAS Network Error] ${dateStr}`, err);
-                    resolve(null);
-                }
-            });
+      const callGasRpc = (fnName, args, gasData) =>
+        new Promise((resolve) => {
+          const urlWithParams = `${gasData.callbackUrl}?nocache_id=${Math.floor(Math.random() * 1000)}&token=${encodeURIComponent(gasData.token)}`;
+          const payload = JSON.stringify([fnName, JSON.stringify(args), null, [0], null, null, 1, 0]);
+          GM_xmlhttpRequest({
+            method: "POST",
+            url: urlWithParams,
+            headers: {
+              accept: "*/*",
+              "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+              origin: "https://script.google.com",
+              referer: "https://script.google.com/a/macros/ikigai.team/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/exec",
+              "x-same-domain": "1",
+            },
+            data: `request=${encodeURIComponent(payload)}`,
+            withCredentials: true,
+            onload: (res) => {
+              if (res.status !== 200) {
+                IkgLog.error(`[GAS HTTP Error] ${fnName} ${args} returned ${res.status}`);
+                return resolve(null);
+              }
+              const result = IkgWorkRules.parseGasEnvelope(res.responseText);
+              if (result === null) IkgLog.warn(`[GAS] Empty/Invalid payload for ${fnName} ${args}:`, res.responseText.substring(0, 100));
+              resolve(result);
+            },
+            onerror: (err) => {
+              IkgLog.error(`[GAS Network Error] ${fnName} ${args}`, err);
+              resolve(null);
+            },
+          });
         });
+
+      const fetchGasRecords = async (dateStr, gasData) => {
+        const records = await callGasRpc("getRecordsByDate", [dateStr], gasData);
+        if (records?.length) IkgLog.debug(`[GAS] ${dateStr} returned ${records.length} punches.`);
+        return records;
       };
+
+      const fetchGasRequests = (month, gasData) => callGasRpc("getMyRequests", [month], gasData);
 
       // ==========================================
       // 5. REACTIVE FOREGROUND AUTOMATION
@@ -1578,8 +1923,22 @@
           pto: JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}"), 
           overrides: JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}"), 
           settings: getSettings(),
-          holidays: currentHolidays
+          holidays: currentHolidays,
+          shiftByMonth: new Map()
         };
+      },
+      shiftFor: function(dateStr, snapshot) {
+        const month = dateStr.slice(0, 7);
+        if (!snapshot.shiftByMonth.has(month)) {
+          const checkIns = Object.keys(snapshot.cache)
+            .filter((d) => d.startsWith(month) && snapshot.cache[d]?.startTime && !snapshot.pto[d]?.isPTO)
+            .map((d) => {
+              const t = new Date(snapshot.cache[d].startTime);
+              return t.getHours() + t.getMinutes() / 60;
+            });
+          snapshot.shiftByMonth.set(month, IkgWorkRules.resolveShift(checkIns, snapshot.settings.manualShift));
+        }
+        return snapshot.shiftByMonth.get(month);
       },
       getDayContext: function(dateStr, snapshot) {
         return { 
@@ -1588,80 +1947,30 @@
           note: snapshot.pto[dateStr], 
           override: snapshot.overrides[dateStr], 
           settings: snapshot.settings, 
-          holidays: snapshot.holidays 
+          holidays: snapshot.holidays,
+          shift: IKG_DataStore.shiftFor(dateStr, snapshot)
         };
       }
     };
 
-// ==========================================
-  // 1. REFINED LUNCH-AWARE PTO ENGINE (9.0h GROSS BASE)
-  // ==========================================
-  const calculateDailyTarget = (ptoHrs, ptoType = "", isFullPTO = false) => {
-    let finalTarget = 9.0; // Standard Gross Shift (8.0h net work + 1.0h mandatory lunch)
-    let calculationReason = "";
-
-    if (isFullPTO || ptoHrs >= 8.0) {
-      finalTarget = 0.0;
-      calculationReason = "Full-day PTO (Target = 0h)";
-    } 
-    else if (ptoHrs === 0) {
-      finalTarget = 9.0;
-      calculationReason = "Standard Gross Shift (8.0h work + 1.0h lunch)";
-    } 
-    else if (ptoHrs >= 4.25 && ptoHrs <= 5.25) {
-      const typeLower = (ptoType || '').toLowerCase();
-      if (typeLower.includes("pm") || typeLower.includes("afternoon") || ptoHrs >= 4.5) {
-        finalTarget = 2.75; // 09:00 to 11:45 AM (Exempt from lunch)
-        calculationReason = `Afternoon PTO (${ptoHrs}h). User works 09:00~11:45 AM`;
-      } else {
-        finalTarget = 5.0; // 13:00 to 18:00 PM
-        calculationReason = `Morning PTO (${ptoHrs}h). User works 13:00~18:00 PM`;
-      }
-    } 
-    else {
-      finalTarget = Math.max(0, 9.0 - ptoHrs);
-      calculationReason = `Direct Partial PTO Deduction: 9.0h - ${ptoHrs}h PTO`;
-    }
-
-    if (ptoHrs > 0 || isFullPTO) {
-      IkgLog.info(`[Target Engine] Input: { ptoHrs: ${ptoHrs}h, type: "${ptoType}", isFullPTO: ${isFullPTO} } -> Target: ${finalTarget}h | ${calculationReason}`);
-    }
-
-    return finalTarget;
+  const loggedSchedules = new Set();
+  const logScheduleOnce = (dateStr, schedule, ptoHrs) => {
+    const key = `${dateStr}|${schedule.mode}|${schedule.span}|${ptoHrs}`;
+    if (loggedSchedules.has(key)) return;
+    loggedSchedules.add(key);
+    const windows = schedule.windows.map(IkgWorkRules.formatWindow).join(", ") || "none";
+    IkgLog.info(`[Target Engine] ${dateStr} ${schedule.mode} | pto ${ptoHrs}h | windows ${windows} | span ${schedule.span}h | credit ${schedule.ptoCredit}h`);
+    if (schedule.hoursMismatch) IkgLog.warn(`[Target Engine] ${dateStr} PTO window ${windows} does not match Deel ${ptoHrs}h`);
   };
 
-  // 🎯 UNIFIED COLOR TONE CALCULATOR (8.5h Lime Green / 9.0h Green Thresholds)
-  const getDailyColorGrade = (effectiveHrs, targetHrs, isToday, isYesterdayGrace) => {
-    if (targetHrs === 0 && effectiveHrs === 0) return { color: 'var(--text-muted)', label: 'none' };
-    
-    if (isToday && effectiveHrs < targetHrs) {
-      return { color: '#F59E0B', label: 'today-active' }; // Amber
-    }
-    if (isYesterdayGrace && effectiveHrs < targetHrs) {
-      return { color: 'var(--text-muted)', label: 'yesterday-grace' }; // Suppressed
-    }
-
-    // 🔑 COLOR-CODING THRESHOLDS BASED ON EFFECTIVE HOURS WORKED
-    if (effectiveHrs < 8.5) {
-      return { color: '#EF4444', label: 'deficit' }; // 🔴 Red (Short < 8.5h)
-    } else if (effectiveHrs >= 8.5 && effectiveHrs < 9.0) {
-      return { color: '#84CC16', label: 'acceptable' }; // 🟢 Lime Green (8.5h <= x < 9.0h)
-    } else if (effectiveHrs >= 9.0 && effectiveHrs < 10.0) {
-      return { color: '#10B981', label: 'surplus' }; // 🟢 Core Green (x >= 9.0h)
-    } else {
-      return { color: '#059669', label: 'overachiever' }; // 🟢 Deep Emerald (x >= 10.0h)
-    }
-  };
-
-  // 🎯 DDD DOMAIN MODEL: Evaluates day context using 9.0h Gross Shift Baseline
   const evaluateDay = (ctx) => {
-    const { dateStr, record, note, override, settings, holidays } = ctx;
+    const { dateStr, record, note, override, settings, holidays, shift } = ctx;
     let ptoHrs = note ? (parseFloat(note.deductedHours) || 0) : 0;
     const ptoType = note ? (note.type || 'PTO') : '';
 
-    const isFullPTO = !!(note && note.isPTO) || ptoHrs >= 8.0;
+    const isFullPTO = !!(note && note.isPTO) || ptoHrs >= IkgWorkRules.FULL_PTO_HRS;
     const isPartialPTO = !isFullPTO && ptoHrs > 0;
-    if (isFullPTO) ptoHrs = 9.0;
+    if (isFullPTO) ptoHrs = IkgWorkRules.GROSS_SHIFT_HRS;
 
     const isIgnored = settings.useManualOverrides !== false && !!(override && override.isIgnored);
     const isWFH = !!(record && record.isWFH);
@@ -1713,27 +2022,31 @@
     
     const isYesterdayGrace = (dateStr === toYMD(yesterdayD)) && (nowReal.getHours() < 18);
 
+    const schedule = IkgWorkRules.computeDaySchedule({ shift, ptoWindows: note?.ptoWindows || [], ptoHrs, isFullPTO });
+    if (ptoHrs > 0) logScheduleOnce(dateStr, schedule, ptoHrs);
+
     let targetHrs = 0;
+    let ptoCredit = 0;
     let isWorkingDay = false;
     const hasNoPunches = !effStart && !effEnd && actualHrs === 0;
 
     if (hasNoPunches && ptoHrs === 0) { 
-      targetHrs = 0; isWorkingDay = false; 
+      isWorkingDay = false; 
     } else if (!isRestDay || ptoHrs > 0) { 
-      targetHrs = calculateDailyTarget(ptoHrs, ptoType, isFullPTO);
+      targetHrs = schedule.span;
+      ptoCredit = schedule.ptoCredit;
       if (dObj <= todayD) isWorkingDay = true; 
     } else if (isRestDay && actualHrs > 0) { 
-      targetHrs = 0; isWorkingDay = true; 
+      isWorkingDay = true; 
     }
 
-    const effectiveHrs = isFullPTO ? 9.0 : (actualHrs + ptoHrs);
-
-    // Flex Delta calculated against 9.0h gross daily baseline
-    let flexHrs = (isWorkingDay && !isToday && !isYesterdayGrace && !isIgnored) 
-      ? (effectiveHrs - (isFullPTO ? 9.0 : targetHrs)) 
+    const baselineHrs = targetHrs + ptoCredit;
+    const effectiveHrs = isFullPTO ? IkgWorkRules.GROSS_SHIFT_HRS : safeFloat(actualHrs + ptoCredit);
+    const flexHrs = (isWorkingDay && !isToday && !isYesterdayGrace && !isIgnored) 
+      ? safeFloat(effectiveHrs - baselineHrs) 
       : 0;
 
-    const grade = getDailyColorGrade(effectiveHrs, targetHrs, isToday, isYesterdayGrace);
+    const grade = IkgWorkRules.gradeDay({ effectiveHrs, baselineHrs, isToday, isYesterdayGrace });
 
     let dayStatus = grade.label;
     if (isPublicHoliday && hasNoPunches) {
@@ -1744,75 +2057,148 @@
 
     return { 
       isFullPTO, isPartialPTO, ptoHrs, ptoType, isIgnored, isWFH, 
-      actualHrs, effStart, effEnd, effectiveHrs, targetHrs, flexHrs, 
-      isWorkingDay, isPublicHoliday, holidayName, status: dayStatus, 
-      color: grade.color, chartColor: grade.color, heatmapBg: grade.color, 
+      actualHrs, effStart, effEnd, effectiveHrs, targetHrs, ptoCredit, baselineHrs, flexHrs, 
+      isWorkingDay, isPublicHoliday, holidayName, status: dayStatus, grade,
+      isGoalMet: IkgWorkRules.isGoalMet(effectiveHrs),
+      shift, schedule,
+      ptoWindowLabel: schedule.windows.map(IkgWorkRules.formatWindow).join(", "),
+      ptoDescription: note?.rawDescription || "",
+      punchSources: {
+        in: isSpoofed && override?.manualIn ? null : record?.punchSources?.in ?? null,
+        out: isSpoofed && override?.manualOut ? null : record?.punchSources?.out ?? null,
+      },
+      corrections: record?.corrections || [],
+      isCorrected: (record?.corrections || []).length > 0,
       isSpoofed, isYesterdayGrace 
     };
   };
 
-  // 🎯 SELF-HEALING CACHE GAPS FILLER (Purges Stale Overwrites & Keeps Max Punch Times)
+  const GAS_SCHEMA_VER = 2;
+  const toMs = (t) => (t ? new Date(t).getTime() : null);
+
+  const gasTimeToMs = (dateStr, kind, time) => {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const [hh, mm, ss] = time.split(":").map(Number);
+    const hours = kind === "out" && hh >= 1 && hh < 12 ? hh + 12 : hh;
+    return new Date(y, m - 1, d, hours, mm, ss).getTime();
+  };
+
+  const isResolvedPunchRecord = (rec) => rec.gasSchemaVer === GAS_SCHEMA_VER || (!rec.gasSynced && !rec.isWFH);
+
+  const withResolvedPunches = (dateStr, rec) => {
+    const punches = (rec.gasPunches || []).map((p) => ({ ...p, atMs: gasTimeToMs(dateStr, p.kind, p.time) }));
+    const r = IkgWorkRules.resolvePunches({ officeIn: rec.officeIn ?? null, officeOut: rec.officeOut ?? null }, punches);
+    const hasBoth = r.startMs && r.endMs && r.endMs > r.startMs;
+    return {
+      ...rec,
+      startTime: r.startMs,
+      endTime: r.endMs,
+      workHours: hasBoth ? safeFloat((r.endMs - r.startMs) / 3600000) : rec.officeWorkHours ?? 0,
+      punchSources: r.punchSources,
+      isWFH: r.isWFH,
+      corrections: r.corrections,
+    };
+  };
+
+  const legacyOfficePunches = (dateStr, rec, gasPunches) => {
+    const gasMs = new Set(gasPunches.map((p) => gasTimeToMs(dateStr, p.kind, p.time)));
+    const officeOnly = (t) => (toMs(t) && !gasMs.has(toMs(t)) ? toMs(t) : null);
+    return { officeIn: officeOnly(rec.startTime), officeOut: officeOnly(rec.endTime) };
+  };
+
+  const mergeLegacyPunches = (existing, newRec, office) => {
+    const starts = [toMs(existing.startTime), office.officeIn].filter(Boolean);
+    const ends = [toMs(existing.endTime), office.officeOut].filter(Boolean);
+    const startTime = starts.length ? Math.min(...starts) : null;
+    const endTime = ends.length ? Math.max(...ends) : null;
+    return {
+      ...existing, ...newRec, ...office, startTime, endTime,
+      workHours: startTime && endTime ? safeFloat((endTime - startTime) / 3600000) : office.officeWorkHours,
+      isWFH: !!existing.isWFH,
+      gasSynced: !!existing.gasSynced,
+    };
+  };
+
   const fillCacheGaps = (startStr, endStr, records, cache) => {
-    const recordMap = {}; 
+    const recordMap = {};
     records.forEach((r) => (recordMap[r.PK] = r));
-    let curr = new Date(startStr); 
+    let curr = new Date(startStr);
     const end = new Date(endStr);
-    
-    while (curr <= end) { 
-      const dStr = toYMD(curr); 
+
+    while (curr <= end) {
+      const dStr = toYMD(curr);
       const existing = cache[dStr] || {};
       const newRec = recordMap[dStr];
-      
+
       if (newRec) {
-        // Strict Epoch MS Conversion
-        const oldStartMs = existing.startTime ? new Date(existing.startTime).getTime() : null;
-        const oldEndMs = existing.endTime ? new Date(existing.endTime).getTime() : null;
-        const newStartMs = newRec.startTime ? new Date(newRec.startTime).getTime() : null;
-        const newEndMs = newRec.endTime ? new Date(newRec.endTime).getTime() : null;
+        const office = {
+          officeIn: toMs(newRec.startTime),
+          officeOut: toMs(newRec.endTime),
+          officeWorkHours: parseFloat(newRec.workHours) || 0,
+        };
+        const merged = isResolvedPunchRecord(existing)
+          ? withResolvedPunches(dStr, { ...existing, ...newRec, ...office })
+          : mergeLegacyPunches(existing, newRec, office);
 
-        // Preserve WFH flags
-        newRec.isWFH = !!(newRec.isWFH || existing.isWFH);
-        newRec.gasSynced = !!(newRec.gasSynced || existing.gasSynced);
-        
-        // 🔑 EARLIEST IN / LATEST OUT (Prevents stale AWS 17:20 from choking GAS 19:36)
-        if (oldStartMs && (!newStartMs || oldStartMs < newStartMs)) {
-          newRec.startTime = oldStartMs;
-        } else if (newStartMs) {
-          newRec.startTime = newStartMs;
-        }
-
-        if (oldEndMs && (!newEndMs || oldEndMs > newEndMs)) {
-          newRec.endTime = oldEndMs;
-        } else if (newEndMs) {
-          newRec.endTime = newEndMs;
-        }
-
-        const finalStartMs = newRec.startTime ? new Date(newRec.startTime).getTime() : null;
-        const finalEndMs = newRec.endTime ? new Date(newRec.endTime).getTime() : null;
-
-        // Force workHours calculation on merged values
-        if (finalStartMs && finalEndMs) {
-          newRec.workHours = safeFloat((finalEndMs - finalStartMs) / 3600000);
-        }
-
-        const isStartChanged = oldStartMs !== finalStartMs;
-        const isEndChanged = oldEndMs !== finalEndMs;
-
-        if (isStartChanged || isEndChanged) {
+        if (toMs(existing.startTime) !== toMs(merged.startTime) || toMs(existing.endTime) !== toMs(merged.endTime)) {
           if (!window.ikgUpdatedDates) window.ikgUpdatedDates = new Set();
           window.ikgUpdatedDates.add(dStr);
         }
-
-        cache[dStr] = newRec;
+        cache[dStr] = merged;
       } else if (existing && Object.keys(existing).length > 0) {
         cache[dStr] = existing;
       } else {
         cache[dStr] = null;
       }
 
-      curr.setDate(curr.getDate() + 1); 
+      curr.setDate(curr.getDate() + 1);
     }
   };
+
+      const TONE_COLORS = Object.freeze({
+        none: "var(--text-muted)",
+        "today-active": "#F59E0B",
+        "yesterday-grace": "var(--text-muted)",
+        deficit: "#EF4444",
+        acceptable: "#84CC16",
+        surplus: "#10B981",
+        overachiever: "#059669",
+      });
+      const toneColor = (grade) => TONE_COLORS[grade?.label] || TONE_COLORS.none;
+      const goalColor = (isGoalMet) => (isGoalMet ? "var(--success)" : "var(--danger)");
+      const escapeAttr = (text) =>
+        String(text).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const ptoTooltip = (evalDay, hoursLabel) =>
+        escapeAttr(
+          [
+            [hoursLabel, evalDay.ptoWindowLabel].filter(Boolean).join(" · "),
+            evalDay.ptoDescription,
+          ].filter(Boolean).join("\n"),
+        );
+
+      const ptoDetailHtml = ({ ptoWindowLabel, ptoDescription }) => {
+        if (!ptoWindowLabel && !ptoDescription) return "";
+        const windowHtml = ptoWindowLabel ? `<div style="font-weight:700;">🕒 ${escapeAttr(ptoWindowLabel)}</div>` : "";
+        const descHtml = ptoDescription ? `<div style="opacity:0.85;">${escapeAttr(ptoDescription)}</div>` : "";
+        return `<div style="grid-column: 1 / -1; color:var(--pto); font-size:11px; white-space:normal; max-width:240px; margin-top:2px;">${windowHtml}${descHtml}</div>`;
+      };
+
+      const ptoCreditNote = ({ ptoHrs, ptoCredit }) => (ptoCredit !== ptoHrs ? `, credited ${ptoCredit}h` : "");
+
+      const PUNCH_KIND_LABEL = Object.freeze({ in: "clock-in", out: "clock-out" });
+      const REVIEW_STATUS_ICON = Object.freeze({ approved: "✅", pending: "⏳", rejected: "❌" });
+      const correctionLine = ({ kind, time, status, note }) =>
+        `${REVIEW_STATUS_ICON[status] || ""} Forgot ${PUNCH_KIND_LABEL[kind]} → ${time} · ${status}${note ? ` · ${note}` : ""}`;
+      const headerPillHtml = (tone, label, tip) =>
+        `<div class="ikg-pill ikg-pill--${tone} ikg-fast-tt no-dot" data-title="${escapeAttr(tip)}">${label}</div>`;
+      const punchTimeHtml = (kind, display, punchSource) => {
+        if (punchSource?.source !== "correction") return `<span>${display}</span>`;
+        const cls = punchSource.status === "pending" ? "ikg-punch-pending" : "ikg-punch-fixed";
+        const tip = `Forgot ${PUNCH_KIND_LABEL[kind]} request · ${punchSource.status}${punchSource.note ? ` · ${punchSource.note}` : ""}`;
+        return `<span class="ikg-fast-tt ${cls}" data-title="${escapeAttr(tip)}">${display}</span>`;
+      };
+      const correctionPillHtml = (evalDay) =>
+        evalDay.isCorrected ? headerPillHtml("fixed", "📝 FIXED", evalDay.corrections.map(correctionLine).join("\n")) : "";
 
       let chartHoverHandler = null;
 
@@ -1844,7 +2230,7 @@
         const chartW = w - padLeft - padRight;
         const chartH = h - padTop - padBottom;
 
-        const maxVal = Math.max(12, ...dataItems.map((d) => d.val + d.pto)) + 1;
+        const maxVal = Math.max(12, ...dataItems.map((d) => d.effectiveHrs)) + 1;
 
         ctx.fillStyle = "#94A3B8";
         ctx.font = "11px sans-serif";
@@ -1867,7 +2253,7 @@
         dataItems.forEach((item, i) => {
           const x = padLeft + i * spacing + spacing / 2;
           const actualBarH = (item.val / maxVal) * chartH;
-          const ptoBarH = (item.pto / maxVal) * chartH;
+          const ptoBarH = (item.ptoCredit / maxVal) * chartH;
           const yBase = padTop + chartH;
 
           if (item.val > 0) {
@@ -1883,14 +2269,14 @@
                 yBase - actualBarH,
                 barW,
                 actualBarH,
-                item.pto === 0 ? [4, 4, 0, 0] : [0, 0, 0, 0],
+                item.ptoCredit === 0 ? [4, 4, 0, 0] : [0, 0, 0, 0],
               );
             else ctx.rect(x - barW / 2, yBase - actualBarH, barW, actualBarH);
             ctx.fill();
             ctx.restore();
           }
 
-          if (item.pto > 0) {
+          if (item.ptoCredit > 0) {
             ctx.fillStyle = "#8B5CF6";
             ctx.beginPath();
             if (ctx.roundRect)
@@ -1906,7 +2292,7 @@
             ctx.fill();
           }
 
-          const totalVal = item.val + item.pto;
+          const totalVal = item.effectiveHrs;
           if (totalVal > 0) {
             ctx.fillStyle = item.isIgnored ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.9)";
             ctx.font = "bold 10px sans-serif";
@@ -1959,8 +2345,8 @@
               text += `<div style="color:var(--warn); font-size:9px; font-weight:700; margin-bottom:8px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); padding:2px 6px; border-radius:4px; width:fit-content;">⚠️ IGNORED PUNCH</div>`;
             }
 
-            const totalHrs = item.val + item.pto;
-            const totalColor = item.isIgnored ? "var(--text-muted)" : (totalHrs >= 9.0 ? "var(--success)" : "var(--danger)");
+            const totalHrs = item.effectiveHrs;
+            const totalColor = item.isIgnored ? "var(--text-muted)" : goalColor(item.isGoalMet);
 
             text += `<div style="display: grid; grid-template-columns: 20px 1fr; gap: 4px 8px; align-items: center; font-size: 13px;">`;
 
@@ -1976,6 +2362,7 @@
                 <div style="color:var(--pto);"><b>${item.pto.toFixed(2)}h</b> <span style="font-size:10px; opacity:0.75;">(${cleanPtoLabel})</span></div>
               `;
             }
+            if (item.pto > 0) text += ptoDetailHtml(item);
 
             if (totalHrs > 0) {
               text += `<div style="grid-column: 1 / -1; margin: 4px 0; border-top: 1px dashed var(--border);"></div>`;
@@ -2066,7 +2453,7 @@
             .ikg-day { background: var(--bg-surface); padding: 8px 10px; display: flex; flex-direction: column; transition: all 0.2s ease; position: relative; cursor: pointer; }
             .ikg-day.empty { background: var(--bg-base); cursor: default; }
             .ikg-day:hover:not(.empty) { background: var(--bg-elevated); z-index: 2; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-            .ikg-date-header { display: flex; justify-content: flex-end; align-items: center; margin-bottom: auto; }
+            .ikg-date-header { display: flex; justify-content: flex-end; align-items: center; margin-bottom: auto; min-height: 20px; }
             .ikg-date-num { font-size: 14px; font-weight: 600; color: var(--text-muted); }
             .ikg-day.today .ikg-date-num { background: var(--primary); color: #fff; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
             .skeleton { animation: pulse 1.5s infinite; background: linear-gradient(90deg, var(--bg-surface) 0%, var(--bg-elevated) 50%, var(--bg-surface) 100%); background-size: 200% 100%; border-radius: 6px; }
@@ -2078,10 +2465,17 @@
             .ikg-total-hrs.good { color: var(--success); }
             .ikg-total-hrs.bad { color: var(--danger); }
             .ikg-total-hrs.pending { color: var(--warn); }
-            .ikg-times { display: flex; flex-direction: column; gap: 1px; font-size: 10px; color: var(--text-muted); font-weight: 500; background: rgba(0,0,0,0.2); padding: 5px 6px; border-radius: 6px; overflow: hidden; }
+            .ikg-times { display: flex; flex-direction: column; gap: 1px; font-size: 10px; color: var(--text-muted); font-weight: 500; background: rgba(0,0,0,0.2); padding: 5px 6px; border-radius: 6px; min-width: 0; }
             .ikg-times.pending { border: 1px dashed var(--warn); background: var(--warn-bg); }
             .ikg-times div { display: flex; justify-content: space-between; align-items: center; }
             .ikg-times span { color: var(--text-main); font-family: monospace; font-size: 10.5px; letter-spacing: -0.5px;}
+            .ikg-times span.ikg-punch-fixed { color: #2DD4BF; border-bottom: 1px dotted rgba(45, 212, 191, 0.6); }
+            .ikg-times span.ikg-punch-pending { color: var(--warn); border-bottom: 1px dotted rgba(245, 158, 11, 0.6); }
+            .ikg-pill-row { display: flex; align-items: center; gap: 3px; margin-right: auto; margin-left: 2px; min-width: 0; }
+            .ikg-pill { font-size: 9px; line-height: 12px; color: #fff; padding: 2px 5px; border-radius: 4px; font-weight: 700; letter-spacing: 0.5px; white-space: nowrap; cursor: help; }
+            .ikg-pill--wfh { background: var(--primary); box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3); }
+            .ikg-pill--pto { background: var(--pto); box-shadow: 0 2px 4px rgba(139, 92, 246, 0.3); }
+            .ikg-pill--fixed { background: #0D9488; box-shadow: 0 2px 4px rgba(13, 148, 136, 0.3); }
             .pto-pill { background: var(--pto-bg); color: var(--pto); border: 1px solid var(--pto); padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-align: center; margin-top:auto;}
 
             .ikg-summary-pane { flex: 1; padding: 24px; overflow-y: auto; background: var(--bg-surface); display: flex; flex-direction: column; gap: 20px; justify-content: flex-start; }
@@ -2262,7 +2656,7 @@
               will-change: opacity, transform;
               z-index: 100001; 
               pointer-events: none; 
-              white-space: normal; 
+              white-space: pre-line; 
               line-height: 1.4; 
               text-align: center; 
               margin-bottom: 6px; 
@@ -2332,10 +2726,7 @@
 
       // --- ACTIVE SHIFT UI RENDERER ---
       const updateActiveShiftUI = () => {
-        let localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
-        let dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
         const appSettings = getSettings();
-        const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}");
 
         const todayReal = new Date();
         const todayStr = toYMD(todayReal);
@@ -2343,61 +2734,23 @@
           localStorage.getItem(`IKG_ALARM_DISMISSED_${todayStr}`) === "true";
 
         let realMonthBalance = 0;
-        let lockedShift = null;
         const prefixRealMonth = `${todayReal.getFullYear()}-${String(todayReal.getMonth() + 1).padStart(2, "0")}`;
-
-        const shiftCounts = {
-          "09:00 ~ 18:00": 0,
-          "09:30 ~ 18:30": 0,
-          "10:00 ~ 19:00": 0,
-          "13:00 ~ 22:00": 0,
-        };
-
         const snapshot = IKG_DataStore.buildSnapshot();
 
-        for (let i = 1; i <= 31; i++) {
+        for (let i = 1; i < todayReal.getDate(); i++) {
           const dStr = `${prefixRealMonth}-${String(i).padStart(2, "0")}`;
-          if (!dStr || dStr > todayStr) continue;
-
           const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, snapshot));
-          const record = snapshot.cache[dStr];
-
-          if (i < todayReal.getDate() && evalDay.isWorkingDay) {
-            realMonthBalance = safeFloat(realMonthBalance + evalDay.flexHrs);
-          }
-
-          if (!evalDay.isFullPTO && record && record.startTime) {
-            const startD = new Date(record.startTime);
-            const h = startD.getHours();
-            const m = startD.getMinutes();
-            if (h < 9 || (h === 9 && m < 30)) shiftCounts["09:00 ~ 18:00"]++;
-            else if (h === 9 && m >= 30) shiftCounts["09:30 ~ 18:30"]++;
-            else if (h >= 10 && h < 13) shiftCounts["10:00 ~ 19:00"]++;
-            else if (h >= 13) shiftCounts["13:00 ~ 22:00"]++;
-          }
+          if (evalDay.isWorkingDay) realMonthBalance = safeFloat(realMonthBalance + evalDay.flexHrs);
         }
 
-        if (appSettings.manualShift && appSettings.manualShift !== "auto") {
-          lockedShift = appSettings.manualShift;
-        } else {
-          let maxCount = 0;
-          for (const [shift, count] of Object.entries(shiftCounts)) {
-            if (count > maxCount) {
-              maxCount = count;
-              lockedShift = shift;
-            }
-          }
-        }
-
-        if (!lockedShift) lockedShift = "Undetermined";
-        let lockedShiftDisplay = lockedShift;
-        let lockedShiftTitle =
-          "Determined by your most frequent check-in this month. See Rules tab.";
-
-        if (appSettings.manualShift && appSettings.manualShift !== "auto") {
-          lockedShiftDisplay = `${lockedShift} (Manual)`;
-          lockedShiftTitle = "Manually overridden in Settings. HR Approved.";
-        }
+        const todaysEval = evaluateDay(IKG_DataStore.getDayContext(todayStr, snapshot));
+        const todaysShift = todaysEval.shift;
+        const lockedShift = todaysShift.source === "default" ? "Undetermined" : todaysShift.label;
+        const isManualShift = todaysShift.source === "manual";
+        const lockedShiftDisplay = isManualShift ? `${lockedShift} (Manual)` : lockedShift;
+        const lockedShiftTitle = isManualShift
+          ? "Manually overridden in Settings. HR Approved."
+          : "Determined by your most frequent check-in this month. See Rules tab.";
 
         let useFlexTodayRaw = localStorage.getItem(`IKG_TODAY_FLEX_${todayStr}`);
         if (useFlexTodayRaw === null)
@@ -2405,21 +2758,12 @@
         const applyFlex = useFlexTodayRaw === "true";
         const flexStr = formatDurFromDec(realMonthBalance, true);
 
-        let shiftEndHour = 18;
-        let shiftEndMin = 0;
-        if (lockedShift && lockedShift.includes("~")) {
-          const outStr = lockedShift.split("~")[1].trim();
-          const parts = outStr.split(":");
-          shiftEndHour = parseInt(parts[0], 10);
-          shiftEndMin = parseInt(parts[1], 10);
-        }
-        let baseShiftEndD = new Date(todayReal);
-        baseShiftEndD.setHours(shiftEndHour, shiftEndMin, 0, 0);
-        const baseShiftEndMs = baseShiftEndD.getTime();
-
-        const todaysEval = evaluateDay(IKG_DataStore.getDayContext(todayStr, snapshot));
-        
-        let todaysFlexGoal = safeFloat(9.0 - todaysEval.ptoHrs);
+        const decHoursToTodayMs = (dec) => {
+          const d = new Date(todayReal);
+          d.setHours(0, 0, 0, 0);
+          return d.getTime() + Math.round(dec * 60) * 60000;
+        };
+        let todaysFlexGoal = todaysEval.targetHrs || todaysEval.schedule.span;
         let appliedFlexToday = 0;
 
         let container = document.getElementById("ikg-active-shift-container");
@@ -2427,7 +2771,7 @@
 
         if (todaysEval.effStart && !todaysEval.isIgnored) {
           const startMs = todaysEval.effStart;
-          const minCheckoutMs = baseShiftEndMs - todaysEval.ptoHrs * 3600000;
+          const minCheckoutMs = decHoursToTodayMs(todaysEval.schedule.earliestCheckout ?? todaysShift.end);
 
           if (applyFlex && realMonthBalance > 0) {
             const requiredMs = todaysFlexGoal * 3600000;
@@ -2896,6 +3240,10 @@
             }
           }
 
+          const ptoPillTip = evalDay.ptoDescription
+            ? { cls: " ikg-fast-tt no-dot", attr: ` data-title="${ptoTooltip(evalDay, evalDay.ptoType)}"` }
+            : { cls: "", attr: "" };
+
           if (isFetchingData && dateStr <= todayStr && record === undefined && !evalDay.isFullPTO) {
               cellContent = `<div class="ikg-cell-data"><div class="skeleton skel-hrs"></div><div class="skeleton skel-box"></div></div>`;
           } else if (evalDay.status === 'holiday') {
@@ -2904,12 +3252,12 @@
               cellContent = ``; 
           } else if (evalDay.status === 'omitted') {
               if (evalDay.ptoType) {
-                  cellContent = `<div class="pto-pill" style="background:rgba(245, 158, 11, 0.1); color:var(--warn); border-color:var(--warn);">🌴 ${evalDay.ptoType}</div>`;
+                  cellContent = `<div class="pto-pill${ptoPillTip.cls}"${ptoPillTip.attr} style="background:rgba(245, 158, 11, 0.1); color:var(--warn); border-color:var(--warn);">🌴 ${evalDay.ptoType}</div>`;
               } else {
                   cellContent = `<div style="margin:auto; color:var(--text-muted); font-size:11px; font-weight:600; text-align:center; opacity: 0.5;">No Punches</div>`;
               }
           } else if (evalDay.isFullPTO) {
-              cellContent = `<div class="pto-pill">🏝️ ${evalDay.ptoType}</div>`;
+              cellContent = `<div class="pto-pill${ptoPillTip.cls}"${ptoPillTip.attr}>🏝️ ${evalDay.ptoType}</div>`;
           } else if (evalDay.effStart || evalDay.effEnd || evalDay.isSpoofed || evalDay.actualHrs > 0) {
             let pendingIcon = ""; 
             let timesClass = "";
@@ -2924,15 +3272,16 @@
             }
 
             if (evalDay.isWFH) {
-                partialPill += `<div class="ikg-fast-tt no-dot" data-title="Work From Home" style="font-size:9px; background:var(--primary); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; box-shadow: 0 2px 4px rgba(59,130,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;">🏠 WFH</div>`;
+                partialPill += headerPillHtml("wfh", "🏠 WFH", "Work From Home");
             }
+            partialPill += correctionPillHtml(evalDay);
 
             const shortPtoName = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
             
             // 🎯 FIXED: Removed 'overflow: hidden' from outer div so CSS ::after tooltip is not clipped
             if (evalDay.isPartialPTO) {
-                const fullPtoTitle = `${evalDay.ptoType} (+${evalDay.ptoHrs}h)`;
-                partialPill += `<div class="ikg-fast-tt no-dot" data-title="${fullPtoTitle}" style="font-size:9px; background:var(--pto); color:#fff; padding:2px 5px; border-radius:4px; font-weight:700; letter-spacing:0.5px; white-space:nowrap; box-shadow: 0 2px 4px rgba(139,92,246,0.3); cursor:help; margin-right:auto; margin-left: 2px;"><span style="display:inline-block; max-width:65px; overflow:hidden; text-overflow:ellipsis; vertical-align:bottom;">+${evalDay.ptoHrs}h ${shortPtoName}</span></div>`;
+                const fullPtoTitle = ptoTooltip(evalDay, `${evalDay.ptoType} (+${evalDay.ptoHrs}h)`);
+                partialPill += `<div class="ikg-pill ikg-pill--pto ikg-fast-tt no-dot" data-title="${fullPtoTitle}"><span style="display:inline-block; max-width:65px; overflow:hidden; text-overflow:ellipsis; vertical-align:bottom;">+${evalDay.ptoHrs}h ${shortPtoName}</span></div>`;
             }
 
             // 🎯 BADGE SEPARATION & UNIFORM CELL WIDTH ALIGNMENT
@@ -2956,15 +3305,15 @@
 
             cellContent = `
                 <div class="ikg-cell-data">
-                    <div class="ikg-total-hrs" style="color:${evalDay.color}; width:100%; margin-bottom:4px; min-height:22px; display:flex; align-items:center; justify-content:space-between; gap:4px;">
+                    <div class="ikg-total-hrs" style="color:${toneColor(evalDay.grade)}; width:100%; margin-bottom:4px; min-height:22px; display:flex; align-items:center; justify-content:space-between; gap:4px;">
                         <span class="ikg-fast-tt no-dot" data-title="${flexTooltip}">${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"}</span>
                         <div style="display:flex; align-items:center; gap:3px; flex-wrap:nowrap; overflow:hidden; margin-left:auto;">
                             ${pendingIcon} ${graceBadge} ${overrideBadge} ${ignoredBadge}
                         </div>
                     </div>
                     <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
-                        <div>IN <span>${inTimeDisplay}</span></div>
-                        <div>OUT <span>${outTimeDisplay}</span></div>
+                        <div>IN ${punchTimeHtml("in", inTimeDisplay, evalDay.punchSources.in)}</div>
+                        <div>OUT ${punchTimeHtml("out", outTimeDisplay, evalDay.punchSources.out)}</div>
                     </div>
                 </div>`;
         }
@@ -2976,7 +3325,7 @@
           htmlBuffer += `
           <div class="ikg-day ${isToday ? "today" : ""} ${glowClass}" data-date="${dateStr}">
               <div class="ikg-date-header" style="align-items: center; justify-content: flex-end;">
-                  ${partialPill}
+                  ${partialPill ? `<div class="ikg-pill-row">${partialPill}</div>` : ""}
                   <div class="ikg-date-num">${i}</div>
               </div>
               ${cellContent}
@@ -3305,7 +3654,7 @@
             const startDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : "--:--";
             const endDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : "--:--";
 
-            let reasonHtml = evalDay.isPartialPTO ? `<div style="font-size:11px; color:var(--pto); font-weight:600; margin-top:4px;">inc. +${evalDay.ptoHrs}h ${evalDay.ptoType}</div>` : '';
+            let reasonHtml = evalDay.isPartialPTO ? `<div style="font-size:11px; color:var(--pto); font-weight:600; margin-top:4px;">inc. +${evalDay.ptoHrs}h ${evalDay.ptoType}${ptoCreditNote(evalDay)}</div>` : '';
             if (evalDay.isSpoofed) reasonHtml += `<div style="font-size:10px; color:var(--warn); margin-top:4px;">(Manual Override)</div>`;
             if (evalDay.isYesterdayGrace) reasonHtml += `<div style="font-size:10px; color:var(--text-muted); margin-top:4px;">⏳ Lag Grace (Excluded from Net)</div>`;
             if (evalDay.isIgnored) reasonHtml += `<div style="font-size:10px; color:var(--danger); margin-top:4px;">⚠️ Ignored (Excluded from Net)</div>`;
@@ -3318,7 +3667,7 @@
                     <td>${startDisplay}</td>
                     <td>${endDisplay}</td>
                     <td>${formatDurFromDec(exactHrs, false)}</td>
-                    <td style="color:${evalDay.color}; font-weight:bold; line-height: 1.4;">
+                    <td style="color:${toneColor(evalDay.grade)}; font-weight:bold; line-height: 1.4;">
                         ${flexStr} ${reasonHtml}
                     </td>
                 </tr>`;
@@ -3419,7 +3768,7 @@
           }
 
           if (!evalDay.isFullPTO && !evalDay.isIgnored && hrs > 0) {
-            if (dateStr !== todayStr || (dateStr === todayStr && hrs >= 9.0)) {
+            if (dateStr !== todayStr || evalDay.isGoalMet) {
               if (evalDay.effStart && evalDay.effEnd) {
                 const start = new Date(evalDay.effStart);
                 const end = new Date(evalDay.effEnd);
@@ -3480,7 +3829,7 @@
         document.getElementById("habit-val-hrs-std").innerText = isNaN(getStdDev(shiftHrsArr, meanShift)) ? "--" : `±${formatDurFromDec(getStdDev(shiftHrsArr, meanShift), false)}`;
         document.getElementById("habit-val-hrs-range").innerText = isNaN(getRange(shiftHrsArr)) ? "--" : formatDurFromDec(getRange(shiftHrsArr), false);
 
-        filterTargetHours = safeFloat(filterTotalDays * 9.0);
+        filterTargetHours = safeFloat(filterTotalDays * IkgWorkRules.GROSS_SHIFT_HRS);
 
         const titleMap = {
           "7D": "Past 7 Working Days",
@@ -3592,19 +3941,19 @@
                   title = `${dStr} | Ignored`;
                   innerTxt = "⚠️";
                 } else if (evalDay.status === "full-pto") {
-                  color = evalDay.heatmapBg;
+                  color = toneColor(evalDay.grade);
                   title = `${dStr} | ${evalDay.ptoHrs}h ${shortPto}`;
                   innerTxt = "PTO";
                 } else if (evalDay.actualHrs > 0) {
-                  color = evalDay.heatmapBg;
+                  color = toneColor(evalDay.grade);
                   if (evalDay.isPartialPTO)
-                    title = `${dStr} | ${evalDay.effectiveHrs.toFixed(2)}h (${evalDay.actualHrs.toFixed(1)}h worked + ${evalDay.ptoHrs}h ${shortPto})`;
+                    title = `${dStr} | ${evalDay.effectiveHrs.toFixed(2)}h (${evalDay.actualHrs.toFixed(1)}h worked + ${evalDay.ptoHrs}h ${shortPto}${ptoCreditNote(evalDay)})`;
                   else title = `${dStr} | ${evalDay.actualHrs.toFixed(2)}h worked`;
 
                   if (evalDay.isSpoofed) title += " ⚠️(Override)";
                   innerTxt = evalDay.effectiveHrs.toFixed(1);
                 } else if (evalDay.status === "pending") {
-                  color = evalDay.heatmapBg;
+                  color = toneColor(evalDay.grade);
                   title += " | Pending";
                   innerTxt = "⌛";
                 }
@@ -3645,7 +3994,13 @@
               dateStr: dStr,
               val: evalDay.actualHrs,
               pto: evalDay.ptoHrs,
-              color: evalDay.chartColor,
+              ptoCredit: evalDay.ptoCredit,
+              effectiveHrs: evalDay.effectiveHrs,
+              isGoalMet: evalDay.isGoalMet,
+              isFullPTO: evalDay.isFullPTO,
+              ptoWindowLabel: evalDay.ptoWindowLabel,
+              ptoDescription: evalDay.ptoDescription,
+              color: toneColor(evalDay.grade),
               isSpoofed: evalDay.isSpoofed,
               isIgnored: evalDay.isIgnored,
               isWFH: evalDay.isWFH,
@@ -4480,9 +4835,8 @@
 
               let text = `<div style="color:var(--text-muted); font-size:11px; margin-bottom:8px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase;">${formattedDateLabel}</div>`;
 
-              const totalHrs = evalDay.actualHrs + evalDay.ptoHrs;
-              const totalColor =
-                totalHrs >= 9.0 ? "var(--success)" : "var(--danger)";
+              const totalHrs = evalDay.effectiveHrs;
+              const totalColor = goalColor(evalDay.isGoalMet);
 
               text += `<div style="display: grid; grid-template-columns: 20px 1fr; gap: 4px 8px; align-items: center; font-size: 13px;">`;
 
@@ -4498,6 +4852,7 @@
                     <div style="color:var(--pto);"><b>${evalDay.ptoHrs.toFixed(2)}h</b> <span style="font-size:10px; opacity:0.75;">(${cleanPtoLabel})</span></div>
                 `;
               }
+              if (evalDay.ptoHrs > 0) text += ptoDetailHtml(evalDay);
 
               if (totalHrs > 0 && !evalDay.isIgnored) {
                 text += `<div style="grid-column: 1 / -1; margin: 4px 0; border-top: 1px dashed var(--border);"></div>`;
@@ -4962,7 +5317,6 @@
 
       try {
         let localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
-        let dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
 
         const todayReal = new Date();
         const todayStr = toYMD(todayReal);
@@ -5035,9 +5389,6 @@
 
           await fetchAndParseDeelPTO();
 
-          // Refresh local dayNotes reference
-          dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
-
           syncStatus.deel = "✅";
           updateSyncProgressUI();
           triggerUIRefresh(); // 🎨 Immediate UI update with PTO pills
@@ -5059,7 +5410,6 @@
           }
 
           localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
-          dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
 
           const datesToCheck = [];
 
@@ -5080,6 +5430,7 @@
           const viewMonthPrefix = `${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`;
           const daysInViewMonth = new Date(currentViewYear, currentViewMonth, 0).getDate();
           const holidays = JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${currentViewYear}`) || "{}");
+          const wfhSnapshot = IKG_DataStore.buildSnapshot();
 
           for (let i = 1; i <= daysInViewMonth; i++) {
             const dStr = `${viewMonthPrefix}-${String(i).padStart(2, "0")}`;
@@ -5090,20 +5441,15 @@
 
             if (dayOfWeek !== 0 && dayOfWeek !== 6 && !holidays[dStr]) {
               const record = localCache[dStr] || {};
-              const note = dayNotes[dStr] || {};
+              const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, wfhSnapshot));
 
               const hasIn = !!record.startTime;
               const hasOut = !!record.endTime;
-              const actualHrs = parseFloat(record.workHours) || 0;
-              const ptoHrs = parseFloat(note.deductedHours) || 0;
-              const isFullPTO = !!(note.isPTO) || ptoHrs >= 8.0;
-
-              const targetHrs = calculateDailyTarget(ptoHrs, note.type || '', isFullPTO);
-
               const isIncomplete = (hasIn && !hasOut) || (!hasIn && hasOut);
-              const isShort = targetHrs > 0 && (actualHrs + ptoHrs) < targetHrs;
+              const isShort = evalDay.targetHrs > 0 && evalDay.actualHrs < evalDay.targetHrs;
 
-              if ((isIncomplete || isShort || !record.gasSynced) || isForceRescan) {
+              const needsSchemaMigration = (record.gasSynced || record.isWFH) && record.gasSchemaVer !== GAS_SCHEMA_VER;
+              if (isIncomplete || isShort || !record.gasSynced || needsSchemaMigration || isForceRescan) {
                 datesToCheck.push(dStr);
               }
             }
@@ -5121,94 +5467,55 @@
 
           let completedCount = 0;
 
-          // 🎯 Helper: Parses "11:36" or "19:36" into proper PM Epoch MS
-          const parsePmsTime = (dateStr, timeStr, isClockOut = false) => {
-            if (!timeStr) return null;
-            const [y, m, d] = dateStr.split('-');
-            const parts = timeStr.split(':');
-            let hrs = parseInt(parts[0], 10);
-            const mins = parseInt(parts[1], 10) || 0;
-            const secs = parseInt(parts[2], 10) || 0;
-
-            // If it's a clock out and hours < 12 (e.g. 11:36 or 07:36), convert to 24h PM time
-            if (isClockOut && hrs < 12 && hrs >= 1) {
-              hrs += 12;
-            }
-
-            return new Date(y, parseInt(m, 10) - 1, d, hrs, mins, secs).getTime();
+          const requestsByMonth = new Map();
+          const nextMonthOf = (month) => {
+            const [y, m] = month.split("-").map(Number);
+            return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+          };
+          const requestsFor = async (dateStr) => {
+            const months = [dateStr.slice(0, 7), nextMonthOf(dateStr.slice(0, 7))];
+            const lists = await Promise.all(
+              months.map((month) => {
+                if (!requestsByMonth.has(month)) requestsByMonth.set(month, fetchGasRequests(month, gasData));
+                return requestsByMonth.get(month);
+              }),
+            );
+            return lists.some((list) => list === null) ? null : lists.flat();
           };
 
           for (const dStr of uniqueDates) {
             try {
-              const gasRecords = await fetchGasRecords(dStr, gasData);
-              if (!localCache[dStr]) localCache[dStr] = {};
-              localCache[dStr].gasSynced = true;
+              const [gasRecords, requests] = await Promise.all([fetchGasRecords(dStr, gasData), requestsFor(dStr)]);
+              if (gasRecords === null || requests === null) {
+                IkgLog.warn(`[GAS] ${dStr} skipped: ${gasRecords === null ? "records" : "correction requests"} unavailable, will retry next sync`);
+                continue;
+              }
 
-              if (gasRecords && gasRecords.length > 0) {
-                let cIn = null, cOut = null;
-                gasRecords.forEach((r) => {
-                  if (r.type === "Clock In") { if (!cIn || r.time < cIn) cIn = r.time; } 
-                  else if (r.type === "Clock Out") { if (!cOut || r.time > cOut) cOut = r.time; }
-                });
+              const existing = localCache[dStr] || {};
+              const { punches, unknownRequests } = IkgWorkRules.classifyGasPunches(gasRecords, requests, dStr);
+              if (unknownRequests.length) IkgLog.warn(`[GAS] ${dStr} has correction requests of unknown type`, unknownRequests);
 
-                if (cIn || cOut) {
-                  const newStartMs = parsePmsTime(dStr, cIn, false);
-                  const newEndMs = parsePmsTime(dStr, cOut, true); // Enforces 19:36 PM conversion
+              const hasOfficeFields = existing.officeIn !== undefined || existing.officeOut !== undefined;
+              const office = hasOfficeFields
+                ? { officeIn: existing.officeIn ?? null, officeOut: existing.officeOut ?? null }
+                : legacyOfficePunches(dStr, existing, punches);
+              const next = withResolvedPunches(dStr, {
+                ...existing, ...office, gasPunches: punches, gasSynced: true, gasSchemaVer: GAS_SCHEMA_VER,
+              });
+              localCache[dStr] = next;
 
-                  const existingRecord = localCache[dStr] || {};
-                  const existingStartMs = existingRecord.startTime ? new Date(existingRecord.startTime).getTime() : null;
-                  const existingEndMs = existingRecord.endTime ? new Date(existingRecord.endTime).getTime() : null;
+              const describe = (rec) =>
+                `IN ${rec.startTime ? formatTime(rec.startTime) : "--"} | OUT ${rec.endTime ? formatTime(rec.endTime) : "--"}`;
+              const sourceLog = `in:${next.punchSources.in?.source ?? "-"} out:${next.punchSources.out?.source ?? "-"} wfh:${next.isWFH} fixes:${next.corrections.length}`;
+              const isChanged = describe(existing) !== describe(next) || !!existing.isWFH !== next.isWFH || (existing.corrections?.length ?? 0) !== next.corrections.length;
 
-                  const prevStartStr = existingStartMs ? formatTime(existingStartMs) : null;
-                  const prevEndStr = existingEndMs ? formatTime(existingEndMs) : null;
-
-                  if (newStartMs) {
-                    if (!existingStartMs || newStartMs < existingStartMs) {
-                      localCache[dStr].startTime = newStartMs;
-                    }
-                  } else if (existingStartMs) {
-                    localCache[dStr].startTime = existingStartMs;
-                  }
-
-                  if (newEndMs) {
-                    if (!existingEndMs || newEndMs > existingEndMs || isForceRescan) {
-                      localCache[dStr].endTime = newEndMs;
-                    }
-                  } else if (existingEndMs) {
-                    localCache[dStr].endTime = existingEndMs;
-                  }
-
-                  const finalStartMs = localCache[dStr].startTime ? new Date(localCache[dStr].startTime).getTime() : null;
-                  const finalEndMs = localCache[dStr].endTime ? new Date(localCache[dStr].endTime).getTime() : null;
-
-                  if (finalStartMs && finalEndMs) {
-                    localCache[dStr].workHours = safeFloat((finalEndMs - finalStartMs) / 3600000);
-                  }
-
-                  localCache[dStr].isWFH = true;
-
-                  const finalStartStr = finalStartMs ? formatTime(finalStartMs) : null;
-                  const finalEndStr = finalEndMs ? formatTime(finalEndMs) : null;
-
-                  const isStartDiff = prevStartStr !== finalStartStr;
-                  const isEndDiff = prevEndStr !== finalEndStr;
-                  const wasNewlyTaggedWFH = !existingRecord.isWFH;
-
-                  const isTrulyUpdated = (isStartDiff || isEndDiff || wasNewlyTaggedWFH) && !isForceRescan;
-
-                  if (isTrulyUpdated) {
-                    if (!window.ikgUpdatedDates) window.ikgUpdatedDates = new Set();
-                    window.ikgUpdatedDates.add(dStr);
-                    gasFoundCount++;
-                    IkgLog.info(`✨ WFH RECORD CHANGED [${dStr}]: IN ${finalStartStr || '--'} | OUT ${finalEndStr || '--'} (${localCache[dStr].workHours}h)`);
-                  } else {
-                    IkgLog.debug(`🏠 WFH Merged [${dStr}]: IN ${finalStartStr || '--'} | OUT ${finalEndStr || '--'} (${localCache[dStr].workHours}h)`);
-                  }
-                }
+              if (isChanged && !isForceRescan) {
+                if (!window.ikgUpdatedDates) window.ikgUpdatedDates = new Set();
+                window.ikgUpdatedDates.add(dStr);
+                gasFoundCount++;
+                IkgLog.info(`✨ GAS RECORD CHANGED [${dStr}]: ${describe(next)} (${next.workHours}h) | ${sourceLog}`);
               } else {
-                if (!localCache[dStr].startTime && !localCache[dStr].endTime) {
-                  localCache[dStr].isWFH = false;
-                }
+                IkgLog.debug(`🏠 GAS Merged [${dStr}]: ${describe(next)} (${next.workHours}h) | ${sourceLog}`);
               }
             } catch (e) {
               IkgLog.error(`Error fetching WFH for ${dStr}:`, e);
