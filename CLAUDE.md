@@ -11,10 +11,10 @@
 | Domain | `IKG_DataStore` (snapshot + per-month `shiftFor`) and `evaluateDay(ctx)` | Only place that turns records/notes into a day DTO. No HTML. |
 | UI | renderers, `TONE_COLORS` / `toneColor` / `goalColor`, `ptoTooltip`, `ptoDetailHtml`, `escapeAttr` | Read the DTO only. Never compare hours to thresholds or pick grade colours inline. |
 
-`evaluateDay` DTO: `targetHrs` (required punch span), `ptoCredit`, `baselineHrs`, `effectiveHrs = actual + ptoCredit` (9h scale), `flexHrs = effective − baseline`, `grade.label`, `isGoalMet`, `shift`, `schedule`, `ptoHrs` (raw Deel hours, display only), `ptoWindowLabel`, `ptoDescription`.
+`evaluateDay` DTO: `targetHrs` (required punch span), `ptoCredit`, `baselineHrs`, `effectiveHrs = actual + ptoCredit` (9h scale), `flexHrs = effective − baseline`, `grade.label`, `isGoalMet`, `shift`, `schedule`, `ptoHrs` (raw Deel hours, display only), `ptoWindowLabel`, `ptoDescription`, `isFuture`, `plannedWindow` (work window left on a partial-PTO day), `pendingPTO` (awaiting approval; display only, never credit).
 
 ## Time model
-- Shifts (9h gross): `09:00~18:00`, `09:30~18:30`, `10:00~19:00` → meal 11:45–13:00; `13:00~22:00` → meal 17:45–19:00. Shift = settings `manualShift`, else most frequent check-in bucket of that month.
+- Shifts (9h gross): `09:00~18:00`, `09:30~18:30`, `10:00~19:00` → meal 11:45–13:00; `13:00~22:00` → meal 17:45–19:00. Shift = settings `manualShift`, else most frequent check-in bucket of that month, else of the nearest earlier month with check-ins (6 back), else 09:00.
 - Partial PTO with a parsed window: span = first-to-last remaining work minute of (shift − meal − PTO windows). Without a window: legacy `9 − ptoHrs`.
 - Edge cases are the test titles in `IKG-attendance.work-rules.test.mjs` / `IKG-attendance.gas-punches.test.mjs` — add a row there before changing a rule.
 
@@ -26,3 +26,9 @@
 
 ## Deel PTO descriptions
 `time_offs/me` → `time_offs/profile/{id}/time_off` (no descriptions) + `approvals/requests/requester` (cursor-paged list) → `approvals/requests/requester/{approvalId}` → `details.requestDetails[].id === time_off.id`, carries `description` and `timeOffDailies[].hoursAmount`. Details cached in `GM_setValue("IKG_DEEL_APPROVAL_CACHE")` by `updatedAt`. `DAY_NOTES_KEY` is owned by the Deel sync alone: rebuilt from scratch each sync (same-day leaves merged by `mergeDeelDayNote`), so don't store other per-day data there. Token-only auth (`x-auth-token`) works from curl.
+
+## Deel balances + PTO tab
+- `time_offs/profile/{id}/entitlements` → `{entitlements:[…]}`, one row per policy per tracking period (past periods included). Amounts are strings; `available = totalEntitlements + balanceAdjusted − used`. Stored as `DEEL_BALANCES_KEY` `{syncedAt, entitlements}`; read through `IkgWorkRules.summarizeEntitlements` (period containing today wins) and `pickHeroBalance`.
+- The normalized request list (`toDeelPtoList`: USED/APPROVED/REQUESTED/PENDING) is stored as `DEEL_PTO_LIST_KEY` and grouped by `IkgWorkRules.groupPtoRequests` into ongoing/upcoming/pending/taken. `focusDates` are charged dates only.
+- Clicking a request calls `focusPtoItem` → `ptoFocus` (dates, months, glow/chip deadlines); `renderCalendar` re-applies it on every render via `activePtoFocus` / `applyPtoFocus` and drops it once the viewed month has none of its dates.
+- Deel dates are `…T00:00:00Z`: always `substring(0, 10)`, never `new Date()` them.
