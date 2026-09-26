@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.133] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.134] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.133
+    // @version      7.134
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1127,7 +1127,34 @@
           return Math.abs(workHrs - ptoHrs) > HOURS_TOLERANCE && Math.abs(rawHrs - ptoHrs) > HOURS_TOLERANCE;
         };
 
-        const computeDaySchedule = ({ shift, ptoWindows = [], ptoHrs = 0, isFullPTO = false }) => {
+        const computeDaySchedule = ({ eventWindows = [], ...input }) => {
+          const base = computePtoSchedule(input);
+          const cuts = mergeIntervals(eventWindows);
+          if (!cuts.length || base.mode === "full") return Object.freeze({ ...base, eventCredit: 0 });
+          const remaining = subtractIntervals(base.workIntervals, cuts);
+          if (!remaining.length) {
+            return Object.freeze({
+              ...base, mode: "event-full", span: 0, ptoCredit: GROSS_SHIFT_HRS, eventCredit: round(base.span),
+              earliestCheckin: null, earliestCheckout: null, workIntervals: [],
+            });
+          }
+          const legacyPtoHrs = base.mode === "legacy" ? input.ptoHrs : 0;
+          const earliestCheckin = remaining[0].start;
+          const lastEnd = remaining[remaining.length - 1].end;
+          const span = round(Math.max(0, lastEnd - earliestCheckin - legacyPtoHrs));
+          const baseSpanWithoutLegacy = round(base.span + legacyPtoHrs);
+          return Object.freeze({
+            ...base,
+            span,
+            ptoCredit: round(GROSS_SHIFT_HRS - span),
+            eventCredit: round(Math.max(0, baseSpanWithoutLegacy - (lastEnd - earliestCheckin))),
+            earliestCheckin,
+            earliestCheckout: round(Math.max(earliestCheckin, lastEnd - legacyPtoHrs)),
+            workIntervals: remaining,
+          });
+        };
+
+        const computePtoSchedule = ({ shift, ptoWindows = [], ptoHrs = 0, isFullPTO = false }) => {
           const workIntervals = workIntervalsOf(shift);
           const standard = {
             span: GROSS_SHIFT_HRS, ptoCredit: 0, earliestCheckin: shift.start, earliestCheckout: shift.end,
@@ -1444,8 +1471,127 @@
           });
         };
 
+        const SPECIAL_DAYS_MIN_VERSION = 1;
+        const SPECIAL_DAYS_MAX_CHARS = 512 * 1024;
+        const EVENT_NAME_MAX = 60;
+        const HHMM_PATTERN = /^([01]\d|2[0-4]):([0-5]\d)$/;
+        const YMD_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+        const parseHHMM = (s) => {
+          const m = HHMM_PATTERN.exec(String(s ?? "").trim());
+          if (!m) return null;
+          const dec = Number(m[1]) + Number(m[2]) / 60;
+          return dec <= 24 ? dec : null;
+        };
+        const isRealDate = (ymd) => YMD_PATTERN.test(ymd) && new Date(utcOf(ymd)).toISOString().slice(0, 10) === ymd;
+
+        const parseSpecialEvent = (raw) => {
+          if (!raw || typeof raw !== "object") return { reason: "not an object" };
+          const date = String(raw.date ?? "").trim();
+          if (!isRealDate(date)) return { reason: `date ${JSON.stringify(raw.date)} is not YYYY-MM-DD` };
+          const name = String(raw.name ?? "").trim().slice(0, EVENT_NAME_MAX);
+          if (!name) return { reason: "name missing" };
+          const allDay = raw.allDay === true;
+          const clockOutFrom = raw.clockOutFrom == null ? null : parseHHMM(raw.clockOutFrom);
+          const clockInFrom = raw.clockInFrom == null ? null : parseHHMM(raw.clockInFrom);
+          if (raw.clockOutFrom != null && clockOutFrom === null) return { reason: `clockOutFrom ${JSON.stringify(raw.clockOutFrom)} is not HH:MM` };
+          if (raw.clockInFrom != null && clockInFrom === null) return { reason: `clockInFrom ${JSON.stringify(raw.clockInFrom)} is not HH:MM` };
+          if (!allDay && clockOutFrom === null && clockInFrom === null) return { reason: "needs clockOutFrom, clockInFrom or allDay" };
+          const time = typeof raw.time === "string" ? raw.time.trim().slice(0, 20) : "";
+          return { event: Object.freeze({ date, name, time, allDay, clockOutFrom, clockInFrom }) };
+        };
+
+        const parseSpecialDays = (text) => {
+          if (typeof text !== "string" || text.length > SPECIAL_DAYS_MAX_CHARS) return null;
+          let json;
+          try {
+            json = JSON.parse(text.replace(/^﻿/, ""));
+          } catch (e) {
+            return null;
+          }
+          const version = json?.version ?? SPECIAL_DAYS_MIN_VERSION;
+          if (!json || typeof json !== "object" || !Number.isFinite(version) || version < SPECIAL_DAYS_MIN_VERSION || !Array.isArray(json.events)) return null;
+          const parsed = json.events.map((raw, index) => ({ index, ...parseSpecialEvent(raw) }));
+          return Object.freeze({
+            events: parsed.filter((p) => p.event).map((p) => p.event),
+            rejected: parsed.filter((p) => !p.event).map(({ index, reason }) => Object.freeze({ index, reason })),
+          });
+        };
+
+        const eventWindowsFor = (events, shift) => {
+          const whole = { start: shift.start, end: shift.end };
+          const windows = (events || []).flatMap((e) => {
+            if (e.allDay) return [whole];
+            const out = e.clockOutFrom !== null && e.clockOutFrom < shift.end ? [{ start: Math.max(e.clockOutFrom, shift.start), end: shift.end }] : [];
+            const inn = e.clockInFrom !== null && e.clockInFrom > shift.start ? [{ start: shift.start, end: Math.min(e.clockInFrom, shift.end) }] : [];
+            return [...out, ...inn];
+          });
+          return mergeIntervals(windows);
+        };
+
+        const eventOverlapHrs = (eventWindows, inHour, outHour) =>
+          inHour == null || outHour == null || outHour <= inHour ? 0 : round(intersectLength(eventWindows, { start: inHour, end: outHour }));
+
+        const eventReleaseLabel = (events) => {
+          const outs = events.map((e) => e.clockOutFrom).filter((t) => t !== null);
+          return outs.length ? formatWindow({ start: Math.min(...outs), end: 0 }).split("–")[0] : "";
+        };
+
+        const LEFT_EARLY_TOLERANCE_HRS = 0.25;
+        const LATE_IN_TOLERANCE_HRS = 0.25;
+        const hhmm = (dec) => formatWindow({ start: dec, end: 0 }).split("–")[0];
+        const durLabel = (hrs) => {
+          const mins = Math.round(hrs * 60);
+          const h = Math.floor(mins / 60);
+          return h ? `${h}h${mins % 60 ? ` ${String(mins % 60).padStart(2, "0")}m` : ""}` : `${mins}m`;
+        };
+
+        const explainShortfall = ({ isSynced, inHour, outHour, corrections = [], pendingPTO = null, schedule, shift, events = [], shortByHrs = 0 }) => {
+          const hasIn = inHour != null;
+          const hasOut = outHour != null;
+          const reason = (code, badge, detail, action = "") => Object.freeze({ code, badge, detail, action });
+          const rejectedFor = (kind) => corrections.find((c) => c.kind === kind && c.status === "rejected");
+          const release = eventReleaseLabel(events);
+
+          if (!isSynced) return reason("not-synced", "SYNC?", "Attendance for this day is not synced yet", "Press Sync");
+          if (corrections.some((c) => c.status === "pending")) return reason("fix-pending", "FIX ⏳", "Forgot-punch request awaiting approval — hours may change", "");
+          const rejected = (!hasIn && rejectedFor("in")) || (!hasOut && rejectedFor("out"));
+          if (rejected) return reason("fix-rejected", "FIX ❌", `Forgot-${rejected.kind === "in" ? "clock-in" : "clock-out"} request rejected${rejected.note ? ` · ${rejected.note}` : ""}`, "Resubmit on the WFH site");
+          if (pendingPTO) return reason("leave-pending", "LEAVE ⏳", `${pendingPTO.type} ${pendingPTO.hours}h awaiting approval on Deel — counts once approved`, "");
+          if (hasIn && !hasOut) return reason("missing-out", "OUT?", `No clock-out after ${hhmm(inHour)}. Forgot to clock out?`, "Submit a forgot-punch request on the WFH site");
+          if (!hasIn && hasOut) return reason("missing-in", "IN?", `No clock-in before ${hhmm(outHour)}. Forgot to clock in?`, "Submit a forgot-punch request on the WFH site");
+          if (!hasIn && !hasOut) return reason("no-punches", "NO PUNCH", "No attendance. Forgot both punches, or forgot to apply leave?", "Forgot-punch request on the WFH site, or leave on Deel");
+          if (schedule.earliestCheckout != null && outHour <= schedule.earliestCheckout - LEFT_EARLY_TOLERANCE_HRS) {
+            const why = release ? ` (event release ${release})` : schedule.windows?.length ? " (after your PTO window)" : "";
+            return reason("left-early", "EARLY", `Left ${hhmm(outHour)}, ${durLabel(schedule.earliestCheckout - outHour)} before ${hhmm(schedule.earliestCheckout)}${why}`, "Forgot to apply partial leave?");
+          }
+          if (schedule.earliestCheckin != null && inHour >= schedule.earliestCheckin + LATE_IN_TOLERANCE_HRS) {
+            return reason("late-in", "LATE", `Arrived ${hhmm(inHour)} on a ${shift.label} shift · short ${durLabel(shortByHrs)}`, "");
+          }
+          return reason("short", "", `Short by ${durLabel(shortByHrs)}`, "");
+        };
+
+        const PTO_KINDS = Object.freeze([
+          { key: "annual", icon: "🏝️", label: "Annual", pattern: /annual|特休|年假/i },
+          { key: "sick", icon: "🤒", label: "Sick", pattern: /sick|病假/i },
+          { key: "family", icon: "👪", label: "Family care", pattern: /family|家庭照顧/i },
+          { key: "compensatory", icon: "⏱️", label: "Compensatory", pattern: /compensat|補休/i },
+          { key: "birthday", icon: "🎂", label: "Birthday", pattern: /birthday|生日/i },
+          { key: "marriage", icon: "💍", label: "Marriage", pattern: /marriage|wedding|婚假/i },
+          { key: "bereavement", icon: "🕯️", label: "Bereavement", pattern: /bereave|funeral|喪假/i },
+          { key: "parental", icon: "🍼", label: "Parental", pattern: /maternity|paternity|parental|產假|陪產/i },
+          { key: "menstrual", icon: "🌸", label: "Menstrual", pattern: /menstrua|生理/i },
+          { key: "personal", icon: "👤", label: "Personal", pattern: /personal|事假/i },
+        ]);
+        const OTHER_PTO_KIND = Object.freeze({ key: "other", icon: "🌴", label: "Leave" });
+        const ptoKindOf = (typeName) => {
+          const kind = PTO_KINDS.find((k) => k.pattern.test(String(typeName || "")));
+          return kind ? Object.freeze({ key: kind.key, icon: kind.icon, label: kind.label }) : OTHER_PTO_KIND;
+        };
+        const ptoIconsOf = (typeNames) => [...new Set(String(typeNames || "").split(" + ").map((t) => ptoKindOf(t).icon))].join("");
+
         return Object.freeze({
           GROSS_SHIFT_HRS, FULL_PTO_HRS, GRADE_THRESHOLDS, SHIFT_LABELS,
+          parseSpecialDays, eventWindowsFor, eventOverlapHrs, eventReleaseLabel, explainShortfall, ptoKindOf, ptoIconsOf,
           shiftFromLabel, resolveShift, resolveShiftFromHistory, parsePtoWindows, disambiguateWindows,
           computeDaySchedule, gradeDay, isGoalMet, formatWindow,
           normalizeGasType, normalizeGasTime, normalizeGasDate, normalizeReviewStatus,
@@ -2115,6 +2261,48 @@
         });
       };
 
+    const SPECIAL_DAYS_URL = "https://gist.githubusercontent.com/ikigai-jonas-n/b16c14c7de8b95114e7d0450914fb972/raw/IKG-special-days.json";
+    const SPECIAL_DAYS_KEY = "IKG_SPECIAL_DAYS";
+    const SPECIAL_DAYS_TTL_MS = 6 * 3600 * 1000;
+    const EMPTY_SPECIAL_DAYS = Object.freeze({ fetchedAt: 0, events: [], rejected: [] });
+
+    const readSpecialDays = () => {
+      try {
+        return JSON.parse(localStorage.getItem(SPECIAL_DAYS_KEY) || "null") || EMPTY_SPECIAL_DAYS;
+      } catch (e) {
+        return EMPTY_SPECIAL_DAYS;
+      }
+    };
+    const groupEventsByDate = (events) =>
+      (events || []).reduce((acc, e) => acc.set(e.date, [...(acc.get(e.date) || []), e]), new Map());
+
+    const syncSpecialDays = ({ force = false } = {}) => {
+      if (!SPECIAL_DAYS_URL) return Promise.resolve(false);
+      if (!force && Date.now() - readSpecialDays().fetchedAt < SPECIAL_DAYS_TTL_MS) return Promise.resolve(false);
+      const cacheBust = Math.floor(Date.now() / 3600000);
+      return new Promise((resolve) => {
+        const keepLastGood = (why) => {
+          IkgLog.warn(`Special days unavailable (${why}); keeping last synced copy`);
+          resolve(false);
+        };
+        GM_xmlhttpRequest({
+          method: "GET",
+          url: `${SPECIAL_DAYS_URL}?t=${cacheBust}`,
+          timeout: 10000,
+          onload: (res) => {
+            if (res.status !== 200) return keepLastGood(`HTTP ${res.status}`);
+            const parsed = IkgWorkRules.parseSpecialDays(res.responseText);
+            if (!parsed) return keepLastGood("invalid file");
+            if (parsed.rejected.length) IkgLog.warn("Special days: rejected entries", parsed.rejected);
+            localStorage.setItem(SPECIAL_DAYS_KEY, JSON.stringify({ fetchedAt: Date.now(), ...parsed }));
+            resolve(true);
+          },
+          ontimeout: () => keepLastGood("timeout"),
+          onerror: () => keepLastGood("network"),
+        });
+      });
+    };
+
     // 🎯 DDD REPOSITORY: Optimized Single-Read Snapshot
     const SHIFT_HISTORY_MONTHS = 6;
     const IKG_DataStore = {
@@ -2131,8 +2319,16 @@
           settings: getSettings(),
           holidays: currentHolidays,
           holidaysByYear: new Map([[String(y), currentHolidays]]),
-          shiftByMonth: new Map()
+          shiftByMonth: new Map(),
+          eventsByDate: groupEventsByDate(readSpecialDays().events),
+          firstDataDate: null,
         };
+      },
+      firstDataDateOf: function(snapshot) {
+        if (snapshot.firstDataDate === null) {
+          snapshot.firstDataDate = Object.keys(snapshot.cache).filter((d) => snapshot.cache[d]).sort()[0] || "";
+        }
+        return snapshot.firstDataDate;
       },
       holidaysFor: function(dateStr, snapshot) {
         const year = dateStr.slice(0, 4);
@@ -2167,18 +2363,20 @@
           override: snapshot.overrides[dateStr], 
           settings: snapshot.settings, 
           holidays: IKG_DataStore.holidaysFor(dateStr, snapshot),
-          shift: IKG_DataStore.shiftFor(dateStr, snapshot)
+          shift: IKG_DataStore.shiftFor(dateStr, snapshot),
+          events: snapshot.eventsByDate.get(dateStr) || [],
+          firstDataDate: IKG_DataStore.firstDataDateOf(snapshot) || null
         };
       }
     };
 
   const loggedSchedules = new Set();
   const logScheduleOnce = (dateStr, schedule, ptoHrs) => {
-    const key = `${dateStr}|${schedule.mode}|${schedule.span}|${ptoHrs}`;
+    const key = `${dateStr}|${schedule.mode}|${schedule.span}|${ptoHrs}|${schedule.eventCredit}`;
     if (loggedSchedules.has(key)) return;
     loggedSchedules.add(key);
     const windows = schedule.windows.map(IkgWorkRules.formatWindow).join(", ") || "none";
-    IkgLog.info(`[Target Engine] ${dateStr} ${schedule.mode} | pto ${ptoHrs}h | windows ${windows} | span ${schedule.span}h | credit ${schedule.ptoCredit}h`);
+    IkgLog.info(`[Target Engine] ${dateStr} ${schedule.mode} | pto ${ptoHrs}h | windows ${windows} | span ${schedule.span}h | credit ${schedule.ptoCredit}h (event ${schedule.eventCredit}h)`);
     if (schedule.hoursMismatch) IkgLog.warn(`[Target Engine] ${dateStr} PTO window ${windows} does not match Deel ${ptoHrs}h`);
   };
 
@@ -2192,8 +2390,13 @@
     };
   };
 
+  const decimalHourOf = (ms) => {
+    const t = new Date(ms);
+    return t.getHours() + t.getMinutes() / 60 + t.getSeconds() / 3600;
+  };
+
   const evaluateDay = (ctx) => {
-    const { dateStr, record, note, override, settings, holidays, shift } = ctx;
+    const { dateStr, record, note, override, settings, holidays, shift, events = [], firstDataDate = null } = ctx;
     let ptoHrs = note ? (parseFloat(note.deductedHours) || 0) : 0;
     const ptoType = note && (note.isPTO || ptoHrs > 0) ? (note.type || 'PTO') : '';
 
@@ -2211,7 +2414,8 @@
       ? safeFloat((effEnd - effStart) / 3600000) 
       : ((record && record.workHours) ? parseFloat(record.workHours) : 0);
 
-    let actualHrs = (isWFH && settings.includeWfhInHours === false) ? 0 : rawActualHrs;
+    const isWfhExcluded = isWFH && settings.includeWfhInHours === false;
+    let actualHrs = isWfhExcluded ? 0 : rawActualHrs;
     
     // Strict Spoofed Check: Only true when explicit manual times exist
     let isSpoofed = false;
@@ -2252,15 +2456,16 @@
     
     const isYesterdayGrace = (dateStr === toYMD(yesterdayD)) && (nowReal.getHours() < 18);
 
-    const schedule = IkgWorkRules.computeDaySchedule({ shift, ptoWindows: note?.ptoWindows || [], ptoHrs, isFullPTO });
-    if (ptoHrs > 0) logScheduleOnce(dateStr, schedule, ptoHrs);
+    const eventWindows = isRestDay ? [] : IkgWorkRules.eventWindowsFor(events, shift);
+    const schedule = IkgWorkRules.computeDaySchedule({ shift, ptoWindows: note?.ptoWindows || [], ptoHrs, isFullPTO, eventWindows });
+    if (ptoHrs > 0 || schedule.eventCredit > 0) logScheduleOnce(dateStr, schedule, ptoHrs);
 
     let targetHrs = 0;
     let ptoCredit = 0;
     let isWorkingDay = false;
     const hasNoPunches = !effStart && !effEnd && actualHrs === 0;
 
-    if (hasNoPunches && ptoHrs === 0) { 
+    if (isWfhExcluded || (hasNoPunches && ptoHrs === 0)) { 
       isWorkingDay = false; 
     } else if (!isRestDay || ptoHrs > 0) { 
       targetHrs = schedule.span;
@@ -2270,13 +2475,26 @@
       isWorkingDay = true; 
     }
 
+    const inHour = effStart ? decimalHourOf(effStart) : null;
+    const outHour = effEnd ? decimalHourOf(effEnd) : null;
+    const workedInEventHrs = Math.min(schedule.eventCredit, IkgWorkRules.eventOverlapHrs(eventWindows, inHour, outHour));
     const baselineHrs = targetHrs + ptoCredit;
-    const effectiveHrs = isFullPTO ? IkgWorkRules.GROSS_SHIFT_HRS : safeFloat(actualHrs + ptoCredit);
+    const effectiveHrs = isFullPTO ? IkgWorkRules.GROSS_SHIFT_HRS : safeFloat(Math.max(0, actualHrs - workedInEventHrs) + ptoCredit);
     const flexHrs = (isWorkingDay && !isToday && !isYesterdayGrace && !isIgnored) 
       ? safeFloat(effectiveHrs - baselineHrs) 
       : 0;
 
-    const grade = IkgWorkRules.gradeDay({ effectiveHrs, baselineHrs, isToday, isYesterdayGrace });
+    const grade = isWfhExcluded ? { label: "wfh-excluded" } : IkgWorkRules.gradeDay({ effectiveHrs, baselineHrs, isToday, isYesterdayGrace });
+    const pendingPTO = summarizePendingPTO(note?.pendingPTO);
+    const isPastWorkday = !isRestDay && !isToday && !isFuture && !isYesterdayGrace && !!firstDataDate && dateStr >= firstDataDate;
+    const needsReason = isPastWorkday && !isIgnored && !isWfhExcluded && !isFullPTO && schedule.mode !== "event-full"
+      && (grade.label === "deficit" || (hasNoPunches && ptoHrs === 0));
+    const shortfall = needsReason
+      ? IkgWorkRules.explainShortfall({
+          isSynced: record !== undefined, inHour, outHour, corrections: record?.corrections || [], pendingPTO,
+          schedule, shift, events, shortByHrs: Math.max(0, baselineHrs - effectiveHrs),
+        })
+      : null;
 
     let dayStatus = grade.label;
     if (isPublicHoliday && hasNoPunches) {
@@ -2294,8 +2512,13 @@
       ptoWindowLabel: schedule.windows.map(IkgWorkRules.formatWindow).join(", "),
       ptoDescription: note?.rawDescription || "",
       isFuture,
-      plannedWindow: isPartialPTO && schedule.earliestCheckin != null ? { start: schedule.earliestCheckin, end: schedule.earliestCheckout } : null,
-      pendingPTO: summarizePendingPTO(note?.pendingPTO),
+      plannedWindow: (isPartialPTO || schedule.eventCredit > 0) && schedule.earliestCheckin != null ? { start: schedule.earliestCheckin, end: schedule.earliestCheckout } : null,
+      pendingPTO,
+      events,
+      eventCredit: isWorkingDay ? schedule.eventCredit : 0,
+      eventLabel: events.map((e) => e.name).join(" + "),
+      isWfhExcluded, rawActualHrs,
+      shortfall,
       punchSources: {
         in: isSpoofed && override?.manualIn ? null : record?.punchSources?.in ?? null,
         out: isSpoofed && override?.manualOut ? null : record?.punchSources?.out ?? null,
@@ -2396,6 +2619,7 @@
         acceptable: "#84CC16",
         surplus: "#10B981",
         overachiever: "#059669",
+        "wfh-excluded": "var(--text-muted)",
       });
       const toneColor = (grade) => TONE_COLORS[grade?.label] || TONE_COLORS.none;
       const goalColor = (isGoalMet) => (isGoalMet ? "var(--success)" : "var(--danger)");
@@ -2438,16 +2662,49 @@
       const partialPtoPillHtml = (evalDay) => {
         if (!evalDay.isPartialPTO) return "";
         const tip = ptoTooltip(evalDay, `${evalDay.ptoType} (+${evalDay.ptoHrs}h)`);
-        return `<div class="ikg-pill ikg-pill--pto ikg-fast-tt no-dot" data-title="${tip}"><span class="ikg-pill-text">+${evalDay.ptoHrs}h ${escapeAttr(ptoShortLabel(evalDay.ptoType))}</span></div>`;
+        return `<div class="ikg-pill ikg-pill--pto ikg-fast-tt no-dot" data-title="${tip}">${IkgWorkRules.ptoIconsOf(evalDay.ptoType)} +${IkgWorkRules.formatAmount(evalDay.ptoHrs)}h</div>`;
       };
       const pendingPtoPillHtml = ({ pendingPTO }) => {
         if (!pendingPTO) return "";
         const tip = [`Awaiting approval · ${pendingPTO.type} · ${pendingPTO.hours}h`, pendingPTO.windowLabel, pendingPTO.description, "Not counted until approved"];
-        return headerPillHtml("pending", `⏳ ${IkgWorkRules.formatAmount(pendingPTO.hours)}h`, tip.filter(Boolean).join("\n"));
+        return headerPillHtml("pending", `⏳ ${IkgWorkRules.ptoIconsOf(pendingPTO.type)} ${IkgWorkRules.formatAmount(pendingPTO.hours)}h`, tip.filter(Boolean).join("\n"));
       };
+      const fullPtoLabel = (ptoType) => `${IkgWorkRules.ptoIconsOf(ptoType)} ${ptoType.split(" + ").map(ptoShortLabel).join(" + ")}`;
+
+      const decToHHMM = (dec) => IkgWorkRules.formatWindow({ start: dec, end: 0 }).split("–")[0];
+      const eventRuleText = (e) => {
+        if (e.allDay) return "whole day counts as work";
+        return [e.clockInFrom !== null ? `clock in from ${decToHHMM(e.clockInFrom)}` : "", e.clockOutFrom !== null ? `clock out from ${decToHHMM(e.clockOutFrom)}` : ""]
+          .filter(Boolean).join(" · ");
+      };
+      const eventTooltip = (evalDay) => {
+        const lines = evalDay.events.map((e) => `🎉 ${[e.name, e.time, eventRuleText(e)].filter(Boolean).join(" · ")}`);
+        const effect = evalDay.eventCredit > 0 ? `Credited ${IkgWorkRules.formatAmount(evalDay.eventCredit)}h as work` : evalDay.isWorkingDay ? "No change to your shift" : "";
+        return [...lines, effect].filter(Boolean).join("\n");
+      };
+      const eventPillLabel = (events) => {
+        if (events.some((e) => e.allDay)) return "🎉 all day";
+        const release = IkgWorkRules.eventReleaseLabel(events);
+        if (release) return `🎉 ${release}`;
+        const ins = events.map((e) => e.clockInFrom).filter((t) => t !== null);
+        return ins.length ? `🎉 in ${decToHHMM(Math.max(...ins))}` : "🎉";
+      };
+      const eventPillHtml = (evalDay) =>
+        evalDay.events.length ? `<div class="ikg-pill ikg-pill--event ikg-fast-tt no-dot" data-title="${escapeAttr(eventTooltip(evalDay))}">${eventPillLabel(evalDay.events)}</div>` : "";
+      const shortfallTip = ({ detail, action }) => escapeAttr([detail, action ? `→ ${action}` : ""].filter(Boolean).join("\n"));
+      const shortfallBadgeHtml = ({ shortfall }) =>
+        shortfall?.badge ? `<span class="ikg-reason-badge ikg-fast-tt no-dot" data-title="${shortfallTip(shortfall)}">${shortfall.badge}</span>` : "";
+      const shortfallCellHtml = ({ shortfall }) =>
+        `<div class="ikg-reason-cell ikg-fast-tt no-dot" data-title="${shortfallTip(shortfall)}"><span class="ikg-reason-badge">${shortfall.badge}</span><span>${escapeAttr(shortfall.detail.split(".")[0])}</span></div>`;
+      const WFH_EXCLUDED_TIP = "Work From Home · not counted\nSettings → \"Calculate WFH hours\" is off, so this day is left out of hours, target and balance";
       const plannedCellHtml = (evalDay) => {
         const work = IkgWorkRules.formatWindow(evalDay.plannedWindow).replace("–", " → ");
-        const tip = [`Planned work ${work} · ${evalDay.targetHrs}h`, `PTO ${evalDay.ptoWindowLabel || `${evalDay.ptoHrs}h`}${ptoCreditNote(evalDay)}`, `Shift ${evalDay.shift.label}`];
+        const tip = [
+          `Planned work ${work} · ${evalDay.targetHrs}h`,
+          evalDay.isPartialPTO ? `PTO ${evalDay.ptoWindowLabel || `${evalDay.ptoHrs}h`}${ptoCreditNote(evalDay)}` : "",
+          evalDay.events.length ? eventTooltip(evalDay) : "",
+          `Shift ${evalDay.shift.label}`,
+        ].filter(Boolean);
         return `
           <div class="ikg-cell-data ikg-planned ikg-fast-tt no-dot" data-title="${escapeAttr(tip.join("\n"))}">
             <div class="ikg-planned-label">PLANNED</div>
@@ -2987,6 +3244,32 @@
 
         .ikg-pill-text { display: inline-block; max-width: 65px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
         .ikg-pill--pending { background: transparent; color: var(--pto); border: 1px dashed var(--pto); padding: 1px 4px; }
+        .ikg-pill--event { background: rgba(59, 130, 246, 0.1); color: var(--primary-hover); border: 1px solid var(--primary); padding: 1px 4px; }
+        .ikg-pill--wfh-off { background: transparent; color: var(--text-muted); border: 1px solid var(--border); padding: 1px 4px; }
+        .ikg-event-cell { background: rgba(59, 130, 246, 0.1) !important; color: var(--primary-hover) !important; border-color: var(--primary) !important; display: block; }
+        .ikg-reason-badge { display: inline-block; font-size: 9px; line-height: 12px; font-weight: 800; letter-spacing: 0.4px; color: var(--danger); background: var(--danger-bg); border: 1px solid rgba(239, 68, 68, 0.55); padding: 1px 4px; border-radius: 4px; white-space: nowrap; flex-shrink: 0; cursor: help; }
+        .ikg-reason-cell { margin-top: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-size: 10.5px; color: var(--text-muted); line-height: 1.3; }
+        .ikg-wfh-off-line { font-size: 10px; color: var(--text-muted); font-weight: 500; text-align: right; margin-top: 2px; }
+        .ikg-miss-group { display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; border-bottom: 1px dashed rgba(239, 68, 68, 0.25); }
+        .ikg-miss-group:last-child { border-bottom: none; padding-bottom: 0; }
+        .ikg-miss-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .ikg-miss-action { font-size: 11px; color: var(--text-muted); }
+        .ikg-legend { margin: 8px 32px 12px; font-size: 11px; color: var(--text-muted); }
+        .ikg-legend summary { cursor: pointer; user-select: none; width: max-content; }
+        .ikg-legend summary:hover, .ikg-legend summary:focus-visible { color: var(--text-main); outline: none; }
+        .ikg-legend-body { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; align-items: center; }
+        .ikg-legend-body > span { display: inline-flex; align-items: center; gap: 5px; }
+        .ikg-legend-swatch { display: inline-block; width: 16px; height: 10px; border-radius: 3px; }
+        .dm-day-notes { display: none; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+        .dm-note { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.4; color: var(--text-main); background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+        .dm-note div div { color: var(--text-muted); font-size: 11px; }
+        .dm-note--bad { border-color: rgba(239, 68, 68, 0.5); background: var(--danger-bg); }
+        .dm-note--event { border-color: rgba(59, 130, 246, 0.5); background: rgba(59, 130, 246, 0.08); }
+        .dm-note--pto { border-color: rgba(139, 92, 246, 0.5); background: var(--pto-bg); }
+        .ikg-sd-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+        .ikg-sd-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 12px; font-size: 12.5px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-surface); }
+        .ikg-sd-row.is-past { opacity: 0.55; }
+        .ikg-sd-rule { color: var(--primary-hover); font-family: monospace; font-size: 11.5px; }
         .ikg-planned { display: flex; flex-direction: column; gap: 1px; margin-top: auto; border: 1px dashed rgba(139, 92, 246, 0.45); border-radius: 6px; padding: 5px 6px; background: rgba(139, 92, 246, 0.05); }
         .ikg-planned-label { font-size: 8.5px; font-weight: 800; letter-spacing: 0.1em; color: var(--pto); opacity: 0.85; }
         .ikg-planned-times { font-family: monospace; font-size: 10.5px; color: var(--text-main); letter-spacing: -0.3px; white-space: nowrap; }
@@ -3541,7 +3824,7 @@
 
       const heroBalanceHtml = (b, booked, pending) => `
         <section class="ikg-pto-hero ikg-fast-tt no-dot" data-title="${escapeAttr(balanceTooltip(b, booked, pending))}">
-          <div class="ikg-pto-hero-top"><span class="ikg-pto-hero-name">${escapeAttr(b.name)}</span>${expiryHtml(b)}</div>
+          <div class="ikg-pto-hero-top"><span class="ikg-pto-hero-name">${IkgWorkRules.ptoKindOf(b.fullName).icon} ${escapeAttr(b.name)}</span>${expiryHtml(b)}</div>
           <div class="ikg-pto-hero-num${b.isNegative ? " is-negative" : ""}">${IkgWorkRules.formatBalance(b.available, b.unit)}<small> left${b.daysEquivalent !== null ? ` · ≈${IkgWorkRules.formatAmount(b.daysEquivalent)} d` : ""}</small></div>
           ${barHtml(b)}
           <div class="ikg-pto-sub">${[usedText(b), aheadText(b, booked, pending)].filter(Boolean).join(" · ")}</div>
@@ -3549,7 +3832,7 @@
 
       const balanceRowHtml = (b, booked, pending) => `
         <div class="ikg-pto-row ikg-fast-tt no-dot" data-title="${escapeAttr(balanceTooltip(b, booked, pending))}">
-          <span class="ikg-pto-row-name">${escapeAttr(balanceRowName(b.name))}</span>
+          <span class="ikg-pto-row-name">${IkgWorkRules.ptoKindOf(b.fullName).icon} ${escapeAttr(balanceRowName(b.name))}</span>
           <span class="ikg-pto-row-num${b.isNegative ? " is-negative" : ""}">${IkgWorkRules.formatBalance(b.available, b.unit)}${b.daysEquivalent !== null ? `<small>≈${IkgWorkRules.formatAmount(b.daysEquivalent)} d</small>` : ""}</span>
           ${barHtml(b)}
           <span class="ikg-pto-row-used">${[usedText(b), aheadText(b, booked, pending)].filter(Boolean).join(" · ")}</span>
@@ -3568,7 +3851,7 @@
         return [
           hero ? heroBalanceHtml(...withTotals(hero)) : "",
           rows.length ? `<div class="ikg-pto-rows">${rows.map((b) => balanceRowHtml(...withTotals(b))).join("")}</div>` : "",
-          usedUp.length ? `<div class="ikg-pto-usedup">Used up: ${usedUp.map((b) => escapeAttr(b.name)).join(", ")}</div>` : "",
+          usedUp.length ? `<div class="ikg-pto-usedup">Used up: ${usedUp.map((b) => `${IkgWorkRules.ptoKindOf(b.fullName).icon} ${escapeAttr(b.name)}`).join(", ")}</div>` : "",
         ].join("");
       };
 
@@ -3584,7 +3867,7 @@
       const ptoItemHtml = (i) => `
         <button type="button" class="ikg-pto-item${i.isPending ? " is-pending" : ""} ikg-fast-tt no-dot" data-pto-focus="${escapeAttr(i.id)}" data-title="${escapeAttr(ptoItemTooltip(i))}">
           <span class="ikg-pto-item-range">${i.rangeLabel}</span>
-          <span class="ikg-pto-item-type">${escapeAttr(balanceRowName(i.type))}</span>
+          <span class="ikg-pto-item-type">${IkgWorkRules.ptoKindOf(i.fullType).icon} ${escapeAttr(balanceRowName(i.type))}</span>
           <span class="ikg-pto-item-window">${escapeAttr(i.windowLabel)}</span>
           <span class="ikg-pto-item-total">${i.totalLabel}</span>
           <span class="ikg-pto-item-rel">${i.relativeLabel}</span>
@@ -3616,7 +3899,7 @@
         const keep = (items) => (ptoTypeFilter === "all" ? items : items.filter((i) => i.type === ptoTypeFilter));
         const chip = (value, label) =>
           `<button type="button" class="ikg-pto-chip${ptoTypeFilter === value ? " active" : ""}" data-pto-filter="${escapeAttr(value)}">${escapeAttr(label)}</button>`;
-        const chips = types.length >= 2 ? `<div class="ikg-pto-chips">${chip("all", "All")}${types.map((t) => chip(t, balanceRowName(t))).join("")}</div>` : "";
+        const chips = types.length >= 2 ? `<div class="ikg-pto-chips">${chip("all", "All")}${types.map((t) => chip(t, `${IkgWorkRules.ptoKindOf(t).icon} ${balanceRowName(t)}`)).join("")}</div>` : "";
         return [
           chips,
           ptoSectionHtml("Ongoing", keep(groups.ongoing)),
@@ -3726,6 +4009,51 @@
         chip.innerHTML = `<span class="ikg-focus-chip">🏝️ ${focus.label}${continues}<button type="button" data-pto-back="1">← Back to PTO</button></span>`;
       };
 
+      const renderDayModalNotes = (dateStr) => {
+        const el = document.getElementById("dm-day-notes");
+        if (!el) return;
+        const evalDay = evaluateDay(IKG_DataStore.getDayContext(dateStr, IKG_DataStore.buildSnapshot()));
+        const note = (icon, title, body, tone = "") =>
+          `<div class="dm-note${tone ? ` dm-note--${tone}` : ""}"><span>${icon}</span><div><b>${escapeAttr(title)}</b>${body ? `<div>${escapeAttr(body)}</div>` : ""}</div></div>`;
+        const notes = [
+          evalDay.shortfall ? note("⚠️", evalDay.shortfall.badge ? `${evalDay.shortfall.badge} · ${evalDay.shortfall.detail}` : evalDay.shortfall.detail, evalDay.shortfall.action ? `→ ${evalDay.shortfall.action}` : "", "bad") : "",
+          evalDay.events.length ? note("🎉", evalDay.eventLabel, eventTooltip(evalDay).replace(/🎉 /g, "").split("\n").join(" · "), "event") : "",
+          evalDay.isFullPTO || evalDay.isPartialPTO ? note(IkgWorkRules.ptoIconsOf(evalDay.ptoType), `${evalDay.ptoType}${evalDay.isPartialPTO ? ` · ${evalDay.ptoHrs}h` : ""}`, [evalDay.ptoWindowLabel, evalDay.ptoDescription].filter(Boolean).join(" · "), "pto") : "",
+          evalDay.pendingPTO ? note("⏳", `${evalDay.pendingPTO.type} · ${evalDay.pendingPTO.hours}h awaiting approval`, "Not counted until approved", "pto") : "",
+          evalDay.isWfhExcluded ? note("🏠", "WFH · not counted", "Settings → Calculate WFH hours is off") : "",
+        ].filter(Boolean);
+        el.innerHTML = notes.join("");
+        el.style.display = notes.length ? "flex" : "none";
+      };
+
+      function renderSpecialDaysCard() {
+        const card = document.getElementById("ikg-special-days-card");
+        if (!card) return;
+        const store = readSpecialDays();
+        const todayStr = toYMD(new Date());
+        const sorted = [...store.events].sort((a, b) => a.date.localeCompare(b.date));
+        const upcoming = sorted.filter((e) => e.date >= todayStr);
+        const recent = sorted.filter((e) => e.date < todayStr).slice(-3);
+        const rule = (e) => (e.allDay ? "whole day" : eventRuleText(e));
+        const row = (e, isPast) => `
+          <div class="ikg-sd-row${isPast ? " is-past" : ""}">
+            <span>${formatYmd(e.date, true)}</span>
+            <span>🎉 ${escapeAttr(e.name)}${e.time ? ` <span style="color:var(--text-muted)">· ${escapeAttr(e.time)}</span>` : ""}</span>
+            <span class="ikg-sd-rule">${escapeAttr(rule(e))}</span>
+          </div>`;
+        const status = !SPECIAL_DAYS_URL
+          ? "Not configured"
+          : store.fetchedAt ? formatSyncedAgo(store.fetchedAt) : "Not synced yet";
+        const rejected = store.rejected?.length
+          ? `<div style="margin-top:8px; font-size:11px; color:var(--warn);">⚠️ ${store.rejected.length} entr${store.rejected.length > 1 ? "ies" : "y"} skipped: ${store.rejected.map((r) => `#${r.index + 1} ${escapeAttr(r.reason)}`).join(" · ")}</div>`
+          : "";
+        card.innerHTML = `
+          <div class="ikg-card-title" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>🎉 Special days</span><span style="text-transform:none; letter-spacing:0; font-weight:500;">${status}</span></div>
+          <div style="font-size:12px; color:var(--text-muted); line-height:1.5;">Company events shared by the team. "Clock out from 17:30" means leaving at 17:30 meets that day's target; the rest of your shift counts as work.</div>
+          <div class="ikg-sd-list">${[...recent.map((e) => row(e, true)), ...upcoming.map((e) => row(e, false))].join("") || `<div class="ikg-pto-empty">No special days announced.</div>`}</div>
+          ${rejected}`;
+      }
+
       const renderUpcomingSummary = (plannedDays, plannedHours) => {
         const set = (id, html) => {
           const el = document.getElementById(id);
@@ -3781,7 +4109,9 @@
         let monthWFHHours = 0, monthOfficeHours = 0, monthPTOHours = 0;
         let monthWFHDays = 0, monthOfficeDays = 0;
         let plannedPtoDays = 0, plannedPtoHours = 0;
+        let wfhOffDays = 0, wfhOffHours = 0;
         const missingDays = [];
+        const reasonsByDate = {};
 
         // 🎯 DYNAMIC MONTH EVALUATION RULES (Grace Period Checks)
         const currentRealMonthStr = `${todayReal.getFullYear()}-${String(todayReal.getMonth() + 1).padStart(2, "0")}`;
@@ -3823,8 +4153,13 @@
           let partialPill = "";
 
           // 🎯 MISSING-DAY EVALUATION
-          if (isTargetForWarning && evalDay.isWorkingDay && !isToday && evalDay.actualHrs === 0 && !evalDay.isFullPTO && evalDay.ptoHrs === 0) {
+          if (isTargetForWarning && evalDay.shortfall && MISSING_PUNCH_CODES.has(evalDay.shortfall.code)) {
             missingDays.push(dateStr);
+            reasonsByDate[dateStr] = evalDay.shortfall;
+          }
+          if (evalDay.isWfhExcluded && !isToday) {
+            wfhOffDays++;
+            wfhOffHours = safeFloat(wfhOffHours + evalDay.rawActualHrs);
           }
 
           // 🔑 ACCUMULATE MONTHLY TOTALS (Fixed PTO Ghost Hours in July)
@@ -3877,7 +4212,9 @@
                   cellContent = `<div style="margin:auto; color:var(--text-muted); font-size:11px; font-weight:600; text-align:center; opacity: 0.5;">No Punches</div>`;
               }
           } else if (evalDay.isFullPTO) {
-              cellContent = `<div class="pto-pill${ptoPillTip.cls}"${ptoPillTip.attr}>🏝️ ${evalDay.ptoType}</div>`;
+              cellContent = `<div class="pto-pill${ptoPillTip.cls}"${ptoPillTip.attr}>${escapeAttr(fullPtoLabel(evalDay.ptoType))}</div>`;
+          } else if (evalDay.schedule.mode === "event-full" && hasNoPunchesYet(evalDay)) {
+              cellContent = `<div class="pto-pill ikg-event-cell ikg-fast-tt no-dot" data-title="${escapeAttr(eventTooltip(evalDay))}">🎉 ${escapeAttr(evalDay.eventLabel)}</div>`;
           } else if (evalDay.plannedWindow && (evalDay.isFuture || (isToday && hasNoPunchesYet(evalDay)))) {
               partialPill += partialPtoPillHtml(evalDay);
               cellContent = plannedCellHtml(evalDay);
@@ -3894,7 +4231,9 @@
                 outTimeDisplay = "Pending";
             }
 
-            if (evalDay.isWFH) {
+            if (evalDay.isWfhExcluded) {
+                partialPill += headerPillHtml("wfh-off", "🏠 WFH · not counted", WFH_EXCLUDED_TIP);
+            } else if (evalDay.isWFH) {
                 partialPill += headerPillHtml("wfh", "🏠 WFH", "Work From Home");
             }
             partialPill += correctionPillHtml(evalDay);
@@ -3917,15 +4256,19 @@
                 graceBadge = `<span class="ikg-fast-tt no-dot" data-title="Shift actively in progress today." style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:1px 4px; border-radius:4px; font-weight:700; white-space:nowrap; flex-shrink:0; cursor:help;">⏱️ IN PROGRESS</span>`;
             }
 
-            const flexTooltip = evalDay.flexHrs >= 0 ? `+${formatDurFromDec(evalDay.flexHrs, false)}` : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
+            const flexTooltip = evalDay.isWfhExcluded
+              ? "Not counted (WFH excluded in Settings)"
+              : evalDay.shortfall ? shortfallTip(evalDay.shortfall)
+              : evalDay.flexHrs >= 0 ? `+${formatDurFromDec(evalDay.flexHrs, false)}` : `Short by ${formatDurFromDec(Math.abs(evalDay.flexHrs), false)}`;
+            const shownHrs = evalDay.isWfhExcluded ? evalDay.rawActualHrs : evalDay.actualHrs;
             let activeShiftStyles = isToday && evalDay.status !== "pass" && evalDay.status !== "partial-pto-pass" ? "background:var(--primary-glow); border:1px solid var(--border);" : "";
 
             cellContent = `
                 <div class="ikg-cell-data">
                     <div class="ikg-total-hrs" style="color:${toneColor(evalDay.grade)}; width:100%; margin-bottom:4px; min-height:22px; display:flex; align-items:center; justify-content:space-between; gap:4px;">
-                        <span class="ikg-fast-tt no-dot" data-title="${flexTooltip}">${evalDay.actualHrs > 0 ? evalDay.actualHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"}</span>
+                        <span class="ikg-fast-tt no-dot" data-title="${flexTooltip}">${shownHrs > 0 ? shownHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"}</span>
                         <div style="display:flex; align-items:center; gap:3px; flex-wrap:nowrap; overflow:hidden; margin-left:auto;">
-                            ${pendingIcon} ${graceBadge} ${overrideBadge} ${ignoredBadge}
+                            ${pendingIcon} ${graceBadge} ${overrideBadge} ${ignoredBadge} ${shortfallBadgeHtml(evalDay)}
                         </div>
                     </div>
                     <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
@@ -3933,9 +4276,12 @@
                         <div>OUT ${punchTimeHtml("out", outTimeDisplay, evalDay.punchSources.out)}</div>
                     </div>
                 </div>`;
+        } else if (evalDay.shortfall) {
+            cellContent = shortfallCellHtml(evalDay);
         }
 
           partialPill += pendingPtoPillHtml(evalDay);
+          partialPill = eventPillHtml(evalDay) + partialPill;
 
         // 🎯 Check if this date was updated during the latest sync cycle
       const isRecentlyUpdated = window.ikgUpdatedDates && window.ikgUpdatedDates.has(dateStr);
@@ -4025,7 +4371,8 @@
           if (isFutureMonth) renderUpcomingSummary(plannedPtoDays, plannedPtoHours);
 
           // 🎯 RENDER INTERACTIVE WARNING CARD WITH UN-IGNORE TRAY
-          renderMissingDaysWarning(missingDays);
+          renderMissingDaysWarning(missingDays, reasonsByDate);
+          renderWfhOffLine(isFutureMonth ? 0 : wfhOffDays, wfhOffHours);
 
           updateActiveShiftUI();
         });
@@ -4034,7 +4381,40 @@
       // 🎯 INTERACTIVE SIDEBAR WARNING CARD (WITH UN-IGNORE MANAGEMENT)
       const IGNORED_WARNINGS_KEY = `IKG_IGNORED_MISSING_DAYS_${APP_VER}`;
 
-      const renderMissingDaysWarning = (missingDays = []) => {
+      const MISSING_PUNCH_CODES = new Set(["no-punches", "missing-in", "missing-out", "fix-rejected", "not-synced"]);
+
+      const renderWfhOffLine = (days, hours) => {
+        const actualEl = document.getElementById("side-val-actual");
+        if (!actualEl) return;
+        actualEl.querySelector(".ikg-wfh-off-line")?.remove();
+        if (!days) return;
+        actualEl.insertAdjacentHTML(
+          "beforeend",
+          `<div class="ikg-wfh-off-line ikg-fast-tt no-dot tt-right" data-title="${escapeAttr(WFH_EXCLUDED_TIP)}">🏠 not counted · ${days} d · ${formatDurFromDec(hours, false)}</div>`,
+        );
+      };
+
+      const missingGroupsHtml = (dates, reasonsByDate) => {
+        const groups = dates.reduce((acc, d) => {
+          const r = reasonsByDate[d] || { code: "no-punches", badge: "NO PUNCH", action: "" };
+          const g = acc.get(r.code) || { reason: r, dates: [] };
+          return acc.set(r.code, { ...g, dates: [...g.dates, d] });
+        }, new Map());
+        return [...groups.values()]
+          .map(({ reason, dates: ds }) => `
+            <div class="ikg-miss-group">
+              <div class="ikg-miss-head"><span class="ikg-reason-badge">${reason.badge}</span><b>${ds.length} day${ds.length > 1 ? "s" : ""}</b>${reason.action ? `<span class="ikg-miss-action">→ ${escapeAttr(reason.action)}</span>` : ""}</div>
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">${ds.map(missingDateChipHtml).join("")}</div>
+            </div>`)
+          .join("");
+      };
+      const missingDateChipHtml = (d) => `
+          <span style="display:inline-flex; align-items:center; gap:4px; background:rgba(239,68,68,0.2); padding:2px 6px; border-radius:4px; font-size:11px;">
+              <b style="color:var(--text-main); font-family:monospace;">${d}</b>
+              <button class="ikg-ignore-date-btn" data-date="${d}" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:10px; padding:0 2px; line-height:1;" title="Ignore warning for ${d}">✕</button>
+          </span>`;
+
+      const renderMissingDaysWarning = (missingDays = [], reasonsByDate = {}) => {
         let warnContainer = document.getElementById("ikg-missing-days-card");
         let userIgnoredDays = [];
         try { userIgnoredDays = JSON.parse(localStorage.getItem(IGNORED_WARNINGS_KEY) || "[]"); } catch(e){}
@@ -4058,14 +4438,6 @@
           if (summaryPane) summaryPane.appendChild(warnContainer);
         }
 
-        // HTML template for active warnings
-        const activeBadgesHtml = activeMissing.map(d => `
-          <span style="display:inline-flex; align-items:center; gap:4px; background:rgba(239,68,68,0.2); padding:2px 6px; border-radius:4px; font-size:11px;">
-              <b style="color:var(--text-main); font-family:monospace;">${d}</b>
-              <button class="ikg-ignore-date-btn" data-date="${d}" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:10px; padding:0 2px; line-height:1;" title="Ignore warning for ${d}">✕</button>
-          </span>
-        `).join(" ");
-
         // HTML template for un-ignoring dates
         const ignoredBadgesHtml = monthIgnored.map(d => `
           <span style="display:inline-flex; align-items:center; gap:4px; background:var(--bg-elevated); border:1px solid var(--border); padding:2px 6px; border-radius:4px; font-size:11px;">
@@ -4079,17 +4451,7 @@
               ⚠️ Missing Attendance (${activeMissing.length} Days)
           </div>
           <div style="font-size: 12px; color: var(--text-main); line-height: 1.5; display:flex; flex-direction:column; gap:10px;">
-              <div>
-                  Working day(s) with <b>no punches, no WFH, and no PTO</b>:
-                  <div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px;">${activeBadgesHtml}</div>
-              </div>
-              <div style="border-top:1px dashed rgba(239,68,68,0.3); padding-top:8px;">
-                  <b style="color:var(--warn);">Required Action:</b>
-                  <ol style="margin:4px 0 0 16px; padding:0; display:flex; flex-direction:column; gap:4px; color:var(--text-muted); font-size:11px;">
-                      <li><b>Forgot PTO?</b> Apply on Deel for these date(s).</li>
-                      <li><b>Forgot Punchcard?</b> Report to HR with browser history or colleague vouch via Slack.</li>
-                  </ol>
-              </div>
+              ${missingGroupsHtml(activeMissing, reasonsByDate)}
           </div>
         ` : `<div style="font-size:12px; color:var(--success); font-weight:600;">✅ All active warnings resolved or ignored.</div>`;
 
@@ -4756,6 +5118,18 @@
                                 </div>
                                 <div class="ikg-grid-header"><div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div></div>
                                 <div class="ikg-grid" id="ikg-cal-grid"></div>
+                                <details class="ikg-legend">
+                                    <summary>What the tags mean</summary>
+                                    <div class="ikg-legend-body">
+                                        <span><span class="ikg-pill ikg-pill--wfh">🏠 WFH</span> work from home</span>
+                                        <span><span class="ikg-pill ikg-pill--fixed">📝 FIXED</span> forgot-punch request</span>
+                                        <span><span class="ikg-pill ikg-pill--event">🎉 17:30</span> company event, clock out from</span>
+                                        <span><span class="ikg-pill ikg-pill--pto">🤒 +1h</span> leave: 🏝️ annual 🤒 sick 👤 personal 👪 family ⏱️ comp 🎂 birthday 🌴 other</span>
+                                        <span><span class="ikg-pill ikg-pill--pending">⏳ 🏝️ 8h</span> dashed = awaiting approval</span>
+                                        <span><span class="ikg-reason-badge">OUT?</span> why a day is short (hover for what to do)</span>
+                                        <span><span class="ikg-legend-swatch" style="background:#EF4444"></span><span class="ikg-legend-swatch" style="background:#84CC16"></span><span class="ikg-legend-swatch" style="background:#10B981"></span> short · ok · surplus</span>
+                                    </div>
+                                </details>
 
                                 <div class="day-modal-overlay"></div>
                                 <div id="ikg-day-modal" class="ikg-popup-modal">
@@ -4766,6 +5140,7 @@
                                         </div>
                                         <span id="dm-close-btn" style="cursor:pointer; color:var(--text-muted); font-size:24px; line-height:1;">&times;</span>
                                     </div>
+                                    <div id="dm-day-notes" class="dm-day-notes"></div>
                                     <div style="background:var(--bg-base); padding:16px; border-radius:12px; border:1px solid var(--border);">
                                         <div style="font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:12px; display:flex; align-items:center; gap:6px;">
                                             ⏱️ Manual Shift Override
@@ -4943,7 +5318,7 @@
                                     </label>
                                     <label class="checkbox-label">
                                         <input type="checkbox" id="set-include-wfh" style="width:16px; height:16px; accent-color: var(--primary);">
-                                        <span>Calculate WFH hours into Work Totals & Flex</span>
+                                        <span>Calculate WFH hours into Work Totals & Flex<br><small style="color:var(--text-muted); font-weight:400;">Off: WFH days are left out of hours, target and balance, and never counted as missing.</small></span>
                                     </label>
                                     <label class="checkbox-label" style="margin-bottom: 8px;">
                                         <input type="checkbox" id="set-use-overrides" style="width:16px; height:16px; accent-color: var(--primary);">
@@ -5078,6 +5453,8 @@
                                     <div class="set-header">📜 Shift & Flex Rules</div>
                                 </div>
 
+                                <div class="ikg-card" id="ikg-special-days-card"></div>
+
                                 <div class="ikg-card">
                                     <div class="ikg-card-title">1. Core Shifts</div>
                                     <div style="display: flex; gap: 12px; margin-top: 8px;">
@@ -5200,6 +5577,7 @@
           IkgLog.debug("Modal opened.");
           backdrop.classList.add("open");
           renderCalendar();
+          syncSpecialDays().then((changed) => changed && renderCalendar());
         });
         document.getElementById("ikg-close").addEventListener("click", () => {
           IkgLog.debug("Modal closed.");
@@ -5256,6 +5634,7 @@
         document.getElementById("tab-rules").addEventListener("click", () => {
           switchTab("tab-rules", "view-rules");
           activeTab = "rules";
+          renderSpecialDaysCard();
         });
         document.getElementById("tab-settings").addEventListener("click", () => {
           switchTab("tab-settings", "view-settings");
@@ -5700,6 +6079,7 @@
                 ignoreToggle.checked = !!overrides[activeModalDate]?.isIgnored;
 
               updateModalPreviewAndBadge();
+              renderDayModalNotes(activeModalDate);
 
               if (dmModal) dmModal.classList.add("open");
             }
@@ -5965,6 +6345,7 @@
       const triggerUIRefresh = () => {
         renderCalendar();
         if (activeTab === "pto") renderPtoTab();
+        if (activeTab === "rules") renderSpecialDaysCard();
         if (activeTab === "stats") renderAnalytics(localCache);
         if (activeTab === "audit") renderAudit(localCache);
       };
@@ -6189,7 +6570,8 @@
         updateSyncProgressUI();
 
         // 🎯 STEP 1: AWS & Deel PTO run in parallel, rendering UI as each finishes
-        await Promise.all([runAttendanceSync(), runDeelSync()]);
+        const runSpecialDaysSync = () => syncSpecialDays({ force: true }).then((changed) => changed && triggerUIRefresh());
+        await Promise.all([runAttendanceSync(), runDeelSync(), runSpecialDaysSync()]);
 
         // 🎯 STEP 2: WFH runs with full cache & PTO awareness
         await runWfhSync();

@@ -157,6 +157,42 @@ regenerate_readme() {
   echo "  · README.md regenerated ($((index - 1)) scripts listed)"
 }
 
+# ── Special days → its own secret gist (git-ignored, never in the public repo) ─
+SPECIAL_DAYS_FILE="${ROOT}/IKG-special-days.json"
+SPECIAL_DAYS_GIST="b16c14c7de8b95114e7d0450914fb972"
+
+validate_special_days() {
+  node -e '
+    const fs = require("fs");
+    const src = fs.readFileSync(process.argv[1], "utf8");
+    const rules = src.slice(src.indexOf("// @@work-rules:start"), src.indexOf("// @@work-rules:end"));
+    const parsed = new Function(`${rules}\nreturn IkgWorkRules;`)().parseSpecialDays(fs.readFileSync(process.argv[2], "utf8"));
+    if (!parsed) { console.error("  ❌ IKG-special-days.json is not valid (JSON, version 1, events array)"); process.exit(1); }
+    parsed.rejected.forEach((r) => console.error(`  ❌ event #${r.index + 1}: ${r.reason}`));
+    if (parsed.rejected.length) process.exit(1);
+    console.log(`  ✓ ${parsed.events.length} special day(s) valid`);
+  ' "${ROOT}/IKG-attendance.user.js" "$SPECIAL_DAYS_FILE"
+}
+
+sync_special_days() {
+  [ -f "$SPECIAL_DAYS_FILE" ] || return 0
+  echo "→ Checking IKG-special-days.json"
+  local remote
+  remote=$(gh gist view "$SPECIAL_DAYS_GIST" -f IKG-special-days.json --raw)
+  if [ "$remote" = "$(cat "$SPECIAL_DAYS_FILE")" ]; then
+    echo "  · unchanged"
+    return 0
+  fi
+  if ! validate_special_days; then
+    echo "  ⛔ Not published — fix IKG-special-days.json and rerun"
+    exit 1
+  fi
+  gh gist edit "$SPECIAL_DAYS_GIST" -f IKG-special-days.json "$SPECIAL_DAYS_FILE"
+  echo "  ☁️  Published to secret gist $SPECIAL_DAYS_GIST (users pick it up on next sync)"
+}
+
+sync_special_days
+
 # ── Main Run Loop ─────────────────────────────────────────────────────────────
 found=0
 for file in "$ROOT"/*.js; do

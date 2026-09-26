@@ -28,12 +28,12 @@ Before installing any scripts, configure your browser:
 
 ## 📦 Available Scripts
 
-### 1. [7.133] IKG Attendance Pro (Autopilot & Alarms)
+### 1. [7.134] IKG Attendance Pro (Autopilot & Alarms)
 
 Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
 
 
-👉 **[Install [7.133] IKG Attendance Pro (Autopilot & Alarms)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js)**
+👉 **[Install [7.134] IKG Attendance Pro (Autopilot & Alarms)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js)**
 
 ---
 

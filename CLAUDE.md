@@ -32,3 +32,13 @@
 - The normalized request list (`toDeelPtoList`: USED/APPROVED/REQUESTED/PENDING) is stored as `DEEL_PTO_LIST_KEY` and grouped by `IkgWorkRules.groupPtoRequests` into ongoing/upcoming/pending/taken. `focusDates` are charged dates only.
 - Clicking a request calls `focusPtoItem` → `ptoFocus` (dates, months, glow/chip deadlines); `renderCalendar` re-applies it on every render via `activePtoFocus` / `applyPtoFocus` and drops it once the viewed month has none of its dates.
 - Deel dates are `…T00:00:00Z`: always `substring(0, 10)`, never `new Date()` them.
+
+## Special days (company events)
+- Source of truth: `IKG-special-days.json` in the repo root, **git-ignored** (the repo is public and mirrors to the script gist). `deploy.sh` (`git acp`) validates it with `parseSpecialDays` and publishes it to its own secret gist, read by the script via `SPECIAL_DAYS_URL`. Unlisted, not private: no venues.
+- **Compatibility contract (every installed version reads the latest file):** never rename the file or gist (`SPECIAL_DAYS_URL` has no revision, so it always serves the latest). Only *add* optional fields; readers ignore unknown top-level and event keys, accept any `version ≥ 1` (missing = 1), and skip only events they can't act on. Never change the meaning of `date`, `name`, `time`, `clockOutFrom`, `clockInFrom`, `allDay`. A new effect field must ship with a v1 fallback (e.g. keep `clockOutFrom`) or old readers skip that event. Tests: "a file from a newer format version…". Format `{version:1, events:[{date, name, time?, clockOutFrom?|clockInFrom?|allDay?}]}`, parsed by `IkgWorkRules.parseSpecialDays` (bad entries → `rejected`, bad file → keep last good). Cached in `IKG_SPECIAL_DAYS`, refreshed each sync and on modal open after 6h.
+- `clockOutFrom` credits `[t, shift.end]`, `clockInFrom` credits `[shift.start, t]`, `allDay` the whole shift (`eventWindowsFor`), subtracted like PTO windows in `computeDaySchedule` (`ptoCredit` stays the total credit, `eventCredit` is the event part). Time worked inside an event window is not credited twice (`eventOverlapHrs`). Rest days ignore events.
+
+## Shortfall reasons / WFH off / PTO icons
+- `evaluateDay().shortfall` comes from `IkgWorkRules.explainShortfall` (priority: not-synced, fix-pending, fix-rejected, leave-pending, missing-out/in, no-punches, left-early, late-in, short); only past workdays graded deficit or with no punches. The UI shows `shortfall.badge`, never recomputes reasons.
+- WFH with "Calculate WFH hours" off → `isWfhExcluded`: not a working day, grade `wfh-excluded`, `actualHrs` 0, `rawActualHrs` for display.
+- PTO type icon = `IkgWorkRules.ptoKindOf` / `ptoIconsOf`, used by calendar and PTO tab. Colour stays purple; border = status (solid approved, dashed pending).
