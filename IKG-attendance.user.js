@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.134] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.135] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.134
+    // @version      7.135
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -4253,7 +4253,7 @@
             if (evalDay.status === "yesterday-grace") {
                 graceBadge = `<span class="ikg-fast-tt no-dot" data-title="System checkout syncs lag by 1 day. Hour thresholds remain unpenalized until 6:00 PM today." style="font-size:9px; background:rgba(148,163,184,0.15); border:1px solid rgba(148,163,184,0.3); color:var(--text-muted); padding:1px 4px; border-radius:4px; font-weight:700; white-space:nowrap; flex-shrink:0; cursor:help;">⏳ LAG</span>`;
             } else if (evalDay.status === "today-active") {
-                graceBadge = `<span class="ikg-fast-tt no-dot" data-title="Shift actively in progress today." style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:1px 4px; border-radius:4px; font-weight:700; white-space:nowrap; flex-shrink:0; cursor:help;">⏱️ IN PROGRESS</span>`;
+                graceBadge = `<span class="ikg-fast-tt no-dot" data-title="Shift actively in progress today." style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:1px 4px; border-radius:4px; font-weight:700; white-space:nowrap; flex-shrink:0; cursor:help;">⏱️ TODAY</span>`;
             }
 
             const flexTooltip = evalDay.isWfhExcluded
