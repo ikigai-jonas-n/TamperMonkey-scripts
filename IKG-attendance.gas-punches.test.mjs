@@ -141,3 +141,44 @@ describe("parseGasEnvelope", () => {
   });
   test("an error envelope yields null", () => assert.equal(R.parseGasEnvelope(`)]}'\n[["er",null,null,null,null,401],["di",301]]`), null));
 });
+
+describe("pickWfhSyncDates", () => {
+  const NOW = Date.UTC(2026, 8, 29, 6);
+  const HOUR = 3600e3;
+  const day = (dateStr, extra = {}) => ({ dateStr, gasSynced: true, needsMigration: false, isShort: false, gasCheckedAt: NOW - HOUR, shortfallCode: null, ...extra });
+  const pick = (candidates, limit = 7) => R.pickWfhSyncDates(candidates, { nowMs: NOW, limit });
+  const recentShort = Array.from({ length: 10 }, (_, i) => day(`2026-09-${String(28 - i).padStart(2, "0")}`, { isShort: true, gasCheckedAt: NOW - 30 * HOUR }));
+
+  test("a missing day three weeks ago is picked even when ten recent short days compete", () => {
+    const { urgent, routine } = pick([...recentShort, day("2026-09-07", { shortfallCode: "no-punches" })]);
+    assert.deepEqual(urgent, ["2026-09-07"]);
+    assert.equal(routine.length, 7);
+  });
+  test("every missing day is picked even when there are more than the limit", () => {
+    const missing = Array.from({ length: 9 }, (_, i) => day(`2026-08-${String(10 + i).padStart(2, "0")}`, { shortfallCode: "missing-out" }));
+    assert.equal(pick(missing).urgent.length, 9);
+  });
+  test("an already-synced no-punch day is re-checked on every sync", () => {
+    assert.deepEqual(pick([day("2026-09-09", { shortfallCode: "no-punches", gasCheckedAt: NOW - 60e3 })]).urgent, ["2026-09-09"]);
+  });
+  test("a pending forgot-punch request is re-checked like a missing day", () => {
+    assert.deepEqual(pick([day("2026-09-10", { shortfallCode: "fix-pending" })]).urgent, ["2026-09-10"]);
+  });
+  test("a short day checked 2h ago is skipped and one checked 25h ago is picked", () => {
+    assert.deepEqual(pick([day("2026-09-15", { isShort: true, gasCheckedAt: NOW - 2 * HOUR })]).routine, []);
+    assert.deepEqual(pick([day("2026-09-15", { isShort: true, gasCheckedAt: NOW - 25 * HOUR })]).routine, ["2026-09-15"]);
+  });
+  test("a short day never checked counts as stale", () => assert.deepEqual(pick([day("2026-09-15", { isShort: true, gasCheckedAt: undefined })]).routine, ["2026-09-15"]));
+  test("never-synced and migration days are routine picks", () => {
+    assert.deepEqual(pick([day("2026-09-01", { gasSynced: false }), day("2026-09-02", { needsMigration: true })]).routine, ["2026-09-02", "2026-09-01"]);
+  });
+  test("routine picks are capped at the limit, newest first", () => {
+    assert.deepEqual(pick(recentShort, 3).routine, ["2026-09-28", "2026-09-27", "2026-09-26"]);
+  });
+  test("forced dates are routine picks even when fresh", () => assert.deepEqual(pick([day("2026-09-23", { isForced: true })]).routine, ["2026-09-23"]));
+  test("a missing day is never picked twice", () => {
+    const { urgent, routine } = pick([day("2026-09-09", { shortfallCode: "no-punches", gasSynced: false, isForced: true })]);
+    assert.deepEqual([urgent, routine], [["2026-09-09"], []]);
+  });
+  test("a fully synced day with no gap is not picked", () => assert.deepEqual(pick([day("2026-09-14")]), { urgent: [], routine: [] }));
+});

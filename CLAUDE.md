@@ -42,3 +42,7 @@
 - `evaluateDay().shortfall` comes from `IkgWorkRules.explainShortfall` (priority: not-synced, fix-pending, fix-rejected, leave-pending, missing-out/in, no-punches, left-early, late-in, short); only past workdays graded deficit or with no punches. The UI shows `shortfall.badge`, never recomputes reasons.
 - WFH with "Calculate WFH hours" off → `isWfhExcluded`: not a working day, grade `wfh-excluded`, `actualHrs` 0, `rawActualHrs` for display.
 - PTO type icon = `IkgWorkRules.ptoKindOf` / `ptoIconsOf`, used by calendar and PTO tab. Colour stays purple; border = status (solid approved, dashed pending).
+
+## Month totals / WFH sync priority
+- "This Month" card = `IkgWorkRules.summarizeMonth(rows)`: Actual = Σ `effectiveHrs`, Target = Σ `baselineHrs` (span + credit), so Net = Σ daily flex. Never subtract `targetHrs` (span only) from effective — that counts PTO/event credit as surplus. Breakdown 🏢 + 🏠 + 🏝️ credit + 🎉 credit always equals Actual.
+- `runWfhSync` dates = `IkgWorkRules.pickWfhSyncDates`: every missing-attendance day (`no-punches`, `missing-in/out`, `fix-pending`) in the current, previous and viewed month is re-checked on every sync, uncapped and first; then ≤7 routine dates (never synced, schema migration, short days not checked for 24h via `gasCheckedAt`, today and the last two Wednesdays).

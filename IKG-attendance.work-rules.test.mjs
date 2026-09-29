@@ -181,3 +181,39 @@ describe("gradeDay", () => {
 describe("formatWindow", () => {
   test("decimal hours format as HH:MM–HH:MM", () => assert.equal(R.formatWindow(win(9.5, 17.75)), "09:30–17:45"));
 });
+
+describe("summarizeMonth", () => {
+  const day = (extra) => ({
+    isCounted: true, isFullPTO: false, isPartialPTO: false, isWFH: false,
+    actualHrs: 9, ptoCredit: 0, eventCredit: 0, baselineHrs: 9, effectiveHrs: 9, ...extra,
+  });
+  const sep7 = day({ isPartialPTO: true, actualHrs: 4.53, ptoCredit: 5, baselineHrs: 9, effectiveHrs: 9.53 });
+
+  test("a partial-PTO day adds its flex, not its PTO credit, to the net balance", () => {
+    assert.equal(R.summarizeMonth([sep7]).netHrs, 0.53);
+  });
+  test("net always equals the sum of effective minus baseline over counted days", () => {
+    const days = [day({ actualHrs: 8.67, effectiveHrs: 8.67 }), sep7, day({ isWFH: true, actualHrs: 9.61, effectiveHrs: 9.61 })];
+    const expected = days.reduce((s, d) => s + d.effectiveHrs - d.baselineHrs, 0);
+    assert.equal(R.summarizeMonth(days).netHrs, Math.round(expected * 1e6) / 1e6);
+  });
+  test("a full-PTO day adds nothing to actual, target or net", () => {
+    const s = R.summarizeMonth([day({ isFullPTO: true, actualHrs: 0, ptoCredit: 9, effectiveHrs: 9 })]);
+    assert.deepEqual([s.actualHrs, s.targetHrs, s.netHrs, s.fullPtoDays, s.workedDays], [0, 0, 0, 1, 1]);
+  });
+  test("an event day with 1.5h credit and a full effective day adds zero", () => {
+    assert.equal(R.summarizeMonth([day({ actualHrs: 7.5, ptoCredit: 1.5, eventCredit: 1.5, effectiveHrs: 9 })]).netHrs, 0);
+  });
+  test("office, WFH, PTO credit and event credit add up to the actual total", () => {
+    const s = R.summarizeMonth([day({}), sep7, day({ isWFH: true, actualHrs: 9.61, effectiveHrs: 9.61 }), day({ actualHrs: 7.5, ptoCredit: 1.5, eventCredit: 1.5, effectiveHrs: 9 })]);
+    assert.deepEqual([s.officeHrs, s.wfhHrs, s.ptoCreditHrs, s.eventCreditHrs], [21.03, 9.61, 5, 1.5]);
+    assert.equal(Math.round((s.officeHrs + s.wfhHrs + s.ptoCreditHrs + s.eventCreditHrs) * 1e6) / 1e6, s.actualHrs);
+  });
+  test("working past an event release still breaks down exactly into the actual total", () => {
+    const s = R.summarizeMonth([day({ actualHrs: 9, ptoCredit: 1.5, eventCredit: 1.5, effectiveHrs: 9 })]);
+    assert.deepEqual([s.officeHrs, s.eventCreditHrs, s.actualHrs, s.netHrs], [9, 0, 9, 0]);
+  });
+  test("uncounted days (today, grace, ignored) are left out entirely", () => {
+    assert.deepEqual(R.summarizeMonth([day({ isCounted: false, actualHrs: 3, effectiveHrs: 3 })]), R.summarizeMonth([]));
+  });
+});

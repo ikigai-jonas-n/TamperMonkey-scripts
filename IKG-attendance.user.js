@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.135] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.136] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.135
+    // @version      7.136
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1570,6 +1570,42 @@
           return reason("short", "", `Short by ${durLabel(shortByHrs)}`, "");
         };
 
+        const summarizeMonth = (days) => {
+          const counted = (days || []).filter((d) => d.isCounted);
+          const worked = counted.filter((d) => !d.isFullPTO);
+          const sum = (list, pick) => round(list.reduce((s, d) => s + pick(d), 0));
+          const hasHours = (d) => d.actualHrs > 0;
+          const actualHrs = sum(worked, (d) => d.effectiveHrs);
+          const targetHrs = sum(worked, (d) => d.baselineHrs);
+          return Object.freeze({
+            workedDays: counted.length,
+            fullPtoDays: counted.length - worked.length,
+            partialPtoDays: worked.filter((d) => d.isPartialPTO).length,
+            officeDays: worked.filter((d) => hasHours(d) && !d.isWFH).length,
+            wfhDays: worked.filter((d) => hasHours(d) && d.isWFH).length,
+            officeHrs: sum(worked.filter((d) => !d.isWFH), (d) => d.actualHrs),
+            wfhHrs: sum(worked.filter((d) => d.isWFH), (d) => d.actualHrs),
+            ptoCreditHrs: sum(worked, (d) => d.ptoCredit - d.eventCredit),
+            eventCreditHrs: sum(worked, (d) => d.effectiveHrs - d.actualHrs - (d.ptoCredit - d.eventCredit)),
+            actualHrs,
+            targetHrs,
+            netHrs: round(actualHrs - targetHrs),
+          });
+        };
+
+        const WFH_RECHECK_CODES = new Set(["no-punches", "missing-in", "missing-out", "fix-pending"]);
+        const SHORT_DAY_RECHECK_MS = 24 * 3600 * 1000;
+        const pickWfhSyncDates = (candidates, { nowMs, limit = 7 }) => {
+          const newestFirst = [...(candidates || [])].sort((a, b) => b.dateStr.localeCompare(a.dateStr));
+          const urgent = newestFirst.filter((c) => WFH_RECHECK_CODES.has(c.shortfallCode)).map((c) => c.dateStr);
+          const isStaleShort = (c) => c.isShort && !(nowMs - (c.gasCheckedAt || 0) < SHORT_DAY_RECHECK_MS);
+          const routine = newestFirst
+            .filter((c) => !urgent.includes(c.dateStr) && (c.isForced || !c.gasSynced || c.needsMigration || isStaleShort(c)))
+            .slice(0, limit)
+            .map((c) => c.dateStr);
+          return Object.freeze({ urgent, routine });
+        };
+
         const PTO_KINDS = Object.freeze([
           { key: "annual", icon: "🏝️", label: "Annual", pattern: /annual|特休|年假/i },
           { key: "sick", icon: "🤒", label: "Sick", pattern: /sick|病假/i },
@@ -1592,6 +1628,7 @@
         return Object.freeze({
           GROSS_SHIFT_HRS, FULL_PTO_HRS, GRADE_THRESHOLDS, SHIFT_LABELS,
           parseSpecialDays, eventWindowsFor, eventOverlapHrs, eventReleaseLabel, explainShortfall, ptoKindOf, ptoIconsOf,
+          summarizeMonth, pickWfhSyncDates,
           shiftFromLabel, resolveShift, resolveShiftFromHistory, parsePtoWindows, disambiguateWindows,
           computeDaySchedule, gradeDay, isGoalMet, formatWindow,
           normalizeGasType, normalizeGasTime, normalizeGasDate, normalizeReviewStatus,
@@ -4106,12 +4143,12 @@
         const snapshot = IKG_DataStore.buildSnapshot();
 
         let monthWorkedDays = 0, monthTotalHours = 0, monthTargetHours = 0, monthFullPTODays = 0, monthPartialPTODays = 0;
-        let monthWFHHours = 0, monthOfficeHours = 0, monthPTOHours = 0;
         let monthWFHDays = 0, monthOfficeDays = 0;
         let plannedPtoDays = 0, plannedPtoHours = 0;
         let wfhOffDays = 0, wfhOffHours = 0;
         const missingDays = [];
         const reasonsByDate = {};
+        const monthRows = [];
 
         // 🎯 DYNAMIC MONTH EVALUATION RULES (Grace Period Checks)
         const currentRealMonthStr = `${todayReal.getFullYear()}-${String(todayReal.getMonth() + 1).padStart(2, "0")}`;
@@ -4162,33 +4199,7 @@
             wfhOffHours = safeFloat(wfhOffHours + evalDay.rawActualHrs);
           }
 
-          // 🔑 ACCUMULATE MONTHLY TOTALS (Fixed PTO Ghost Hours in July)
-          if (evalDay.isWorkingDay && !isToday && !evalDay.isYesterdayGrace && !evalDay.isIgnored) {
-            monthWorkedDays++;
-
-            if (evalDay.isFullPTO) {
-              monthFullPTODays++;
-              // 🎯 Full PTO days add 0h to Actual Worked Hours & 0h to Target
-              // Net Flex balance for a Full PTO day is exactly 0.0h
-            } else {
-              // Real Worked Days: Add actual worked hours + partial PTO
-              monthTotalHours = safeFloat(monthTotalHours + evalDay.effectiveHrs);
-              monthTargetHours = safeFloat(monthTargetHours + evalDay.targetHrs);
-
-              if (evalDay.isPartialPTO) monthPartialPTODays++;
-              monthPTOHours = safeFloat(monthPTOHours + evalDay.ptoHrs);
-
-              if (evalDay.actualHrs > 0) {
-                if (evalDay.isWFH) {
-                  monthWFHHours = safeFloat(monthWFHHours + evalDay.actualHrs);
-                  monthWFHDays++;
-                } else {
-                  monthOfficeHours = safeFloat(monthOfficeHours + evalDay.actualHrs);
-                  monthOfficeDays++;
-                }
-              }
-            }
-          }
+          monthRows.push({ ...evalDay, isCounted: evalDay.isWorkingDay && !isToday && !evalDay.isYesterdayGrace && !evalDay.isIgnored });
 
           if (evalDay.isFuture && (evalDay.isFullPTO || evalDay.isPartialPTO)) {
             plannedPtoDays++;
@@ -4297,6 +4308,15 @@
           </div>`;
         }
 
+        const month = IkgWorkRules.summarizeMonth(monthRows);
+        monthWorkedDays = month.workedDays;
+        monthFullPTODays = month.fullPtoDays;
+        monthPartialPTODays = month.partialPtoDays;
+        monthOfficeDays = month.officeDays;
+        monthWFHDays = month.wfhDays;
+        monthTotalHours = month.actualHrs;
+        monthTargetHours = month.targetHrs;
+
         const totalCells = firstDay + daysInMonth;
         for (let i = 0; i < 42 - totalCells; i++) htmlBuffer += `<div class="ikg-day empty"></div>`;
 
@@ -4308,7 +4328,7 @@
           applyPtoFocus(grid, focus);
           renderFocusChip(focus);
 
-          const netBalance = safeFloat(monthTotalHours - monthTargetHours);
+          const netBalance = month.netHrs;
           let subDays = [];
           if (monthOfficeDays > 0) subDays.push(`🏢 ${monthOfficeDays}`);
           if (monthWFHDays > 0) subDays.push(`🏠 ${monthWFHDays}`);
@@ -4337,7 +4357,7 @@
             sideActualEl.innerHTML = `
                 <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
                     <div style="white-space:nowrap;">${formatDurFromDec(monthTotalHours, false)}</div>
-                    <div style="font-size:10px; color:var(--text-muted); font-weight:500; text-align:right;">🏢 ${formatDurFromDec(monthOfficeHours, false)} | 🏠 ${formatDurFromDec(monthWFHHours, false)} | 🏝️ ${formatDurFromDec(monthPTOHours, false)}</div>
+                    <div style="font-size:10px; color:var(--text-muted); font-weight:500; text-align:right;">${actualBreakdownText(month)}</div>
                 </div>`;
             if (sideActualEl.parentElement) {
                 sideActualEl.parentElement.style.alignItems = "flex-start";
@@ -4380,6 +4400,14 @@
 
       // 🎯 INTERACTIVE SIDEBAR WARNING CARD (WITH UN-IGNORE MANAGEMENT)
       const IGNORED_WARNINGS_KEY = `IKG_IGNORED_MISSING_DAYS_${APP_VER}`;
+
+      const actualBreakdownText = (month) =>
+        [
+          `🏢 ${formatDurFromDec(month.officeHrs, false)}`,
+          `🏠 ${formatDurFromDec(month.wfhHrs, false)}`,
+          `🏝️ ${formatDurFromDec(month.ptoCreditHrs, false)}`,
+          month.eventCreditHrs > 0 ? `🎉 ${formatDurFromDec(month.eventCreditHrs, false)}` : "",
+        ].filter(Boolean).join(" | ");
 
       const MISSING_PUNCH_CODES = new Set(["no-punches", "missing-in", "missing-out", "fix-rejected", "not-synced"]);
 
@@ -6433,6 +6461,7 @@
         // 🎯 TASK 3: Targeted WFH Sync (Fixed 12h/24h Time Parser for Sept 23)
         // =========================================================================
         let gasFoundCount = 0;
+        const WFH_ROUTINE_LIMIT = 7;
         const runWfhSync = async () => {
           syncStatus.wfh = "🔄";
           updateSyncProgressUI();
@@ -6446,7 +6475,14 @@
 
           localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
 
-          const datesToCheck = [];
+          const wfhSnapshot = IKG_DataStore.buildSnapshot();
+          const monthKey = (y, m) => `${y}-${String(m).padStart(2, "0")}`;
+          const prevMonthDate = new Date(todayReal.getFullYear(), todayReal.getMonth() - 1, 1);
+          const monthsToScan = [...new Set([
+            monthKey(todayReal.getFullYear(), todayReal.getMonth() + 1),
+            monthKey(prevMonthDate.getFullYear(), prevMonthDate.getMonth() + 1),
+            monthKey(currentViewYear, currentViewMonth),
+          ])];
 
           const getWednesday = (d) => {
             const date = new Date(d);
@@ -6454,43 +6490,36 @@
             const diff = date.getDate() - day + (day === 0 ? -4 : 3);
             return new Date(date.setDate(diff));
           };
-
           const currentWed = getWednesday(todayReal);
-          if (currentWed <= todayReal) datesToCheck.push(toYMD(currentWed));
-          
           const lastWed = new Date(currentWed);
           lastWed.setDate(lastWed.getDate() - 7);
-          datesToCheck.push(toYMD(lastWed));
+          const alwaysCheck = new Set([toYMD(currentWed), toYMD(lastWed), todayStr]);
 
-          const viewMonthPrefix = `${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`;
-          const daysInViewMonth = new Date(currentViewYear, currentViewMonth, 0).getDate();
-          const holidays = JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${currentViewYear}`) || "{}");
-          const wfhSnapshot = IKG_DataStore.buildSnapshot();
+          const candidates = monthsToScan.flatMap((month) => {
+            const [y, m] = month.split("-").map(Number);
+            return Array.from({ length: new Date(y, m, 0).getDate() }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`)
+              .filter((dStr) => dStr <= todayStr)
+              .map((dStr) => {
+                const dayOfWeek = new Date(y, m - 1, Number(dStr.slice(8))).getDay();
+                if (dayOfWeek === 0 || dayOfWeek === 6 || IKG_DataStore.holidaysFor(dStr, wfhSnapshot)[dStr]) return null;
+                const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, wfhSnapshot));
+                if (evalDay.isFullPTO) return null;
+                const record = localCache[dStr] || {};
+                return {
+                  dateStr: dStr,
+                  shortfallCode: evalDay.shortfall?.code ?? null,
+                  gasSynced: !!record.gasSynced,
+                  needsMigration: (record.gasSynced || record.isWFH) && record.gasSchemaVer !== GAS_SCHEMA_VER,
+                  isShort: evalDay.targetHrs > 0 && evalDay.actualHrs < evalDay.targetHrs,
+                  gasCheckedAt: record.gasCheckedAt,
+                  isForced: isForceRescan || alwaysCheck.has(dStr),
+                };
+              })
+              .filter(Boolean);
+          });
 
-          for (let i = 1; i <= daysInViewMonth; i++) {
-            const dStr = `${viewMonthPrefix}-${String(i).padStart(2, "0")}`;
-            if (dStr > todayStr) break;
-
-            const dObj = new Date(currentViewYear, currentViewMonth - 1, i);
-            const dayOfWeek = dObj.getDay();
-
-            if (dayOfWeek !== 0 && dayOfWeek !== 6 && !holidays[dStr]) {
-              const record = localCache[dStr] || {};
-              const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, wfhSnapshot));
-
-              const hasIn = !!record.startTime;
-              const hasOut = !!record.endTime;
-              const isIncomplete = (hasIn && !hasOut) || (!hasIn && hasOut);
-              const isShort = evalDay.targetHrs > 0 && evalDay.actualHrs < evalDay.targetHrs;
-
-              const needsSchemaMigration = (record.gasSynced || record.isWFH) && record.gasSchemaVer !== GAS_SCHEMA_VER;
-              if (isIncomplete || isShort || !record.gasSynced || needsSchemaMigration || isForceRescan) {
-                datesToCheck.push(dStr);
-              }
-            }
-          }
-
-          const uniqueDates = [...new Set(datesToCheck)].sort().reverse().slice(0, 7);
+          const { urgent, routine } = IkgWorkRules.pickWfhSyncDates(candidates, { nowMs: Date.now(), limit: WFH_ROUTINE_LIMIT });
+          const uniqueDates = [...urgent, ...routine];
 
           if (uniqueDates.length === 0) {
             syncStatus.wfh = "✅";
@@ -6498,7 +6527,7 @@
             return;
           }
 
-          IkgLog.info(`⚡ Targeted WFH Sync: Querying ${uniqueDates.length} dates:`, uniqueDates);
+          IkgLog.info(`⚡ Targeted WFH Sync: ${urgent.length} missing-attendance date(s) first, then ${routine.length} routine:`, { urgent, routine });
 
           let completedCount = 0;
 
@@ -6535,7 +6564,7 @@
                 ? { officeIn: existing.officeIn ?? null, officeOut: existing.officeOut ?? null }
                 : legacyOfficePunches(dStr, existing, punches);
               const next = withResolvedPunches(dStr, {
-                ...existing, ...office, gasPunches: punches, gasSynced: true, gasSchemaVer: GAS_SCHEMA_VER,
+                ...existing, ...office, gasPunches: punches, gasSynced: true, gasSchemaVer: GAS_SCHEMA_VER, gasCheckedAt: Date.now(),
               });
               localCache[dStr] = next;
 
@@ -6558,6 +6587,10 @@
               completedCount++;
               syncStatus.wfh = `(${completedCount}/${uniqueDates.length})`;
               updateSyncProgressUI();
+              if (completedCount === urgent.length && routine.length) {
+                localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
+                triggerUIRefresh();
+              }
             }
           }
 
