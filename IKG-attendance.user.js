@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.136] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.137] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.136
+    // @version      7.137
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -17,6 +17,7 @@
     // @grant        GM_removeValueChangeListener
     // @grant        GM_openInTab
     // @grant        GM_info
+    // @grant        unsafeWindow
     // @connect      gist.github.com
     // @connect      gist.githubusercontent.com
     // @connect      github.com
@@ -59,6 +60,56 @@
       const RUNTIME_VER = (typeof GM_info !== "undefined" && GM_info.script) ? GM_info.script.version : "7.118";
       IkgLog.info(`Attendance Pro Script Initialized v${RUNTIME_VER} (CSP Worker Bypass)`);
 
+      // @@login-guard:start — pure auto-login loop breaker; tested by IKG-attendance.login-guard.test.mjs
+      const IkgLoginGuard = (() => {
+        const AUTO_LOGIN_MAX = 2;
+        const AUTO_LOGIN_WINDOW_MS = 5 * 60e3;
+        const CALLBACK_MARKERS = ["code", "state", "token", "callback", "sso", "saml"];
+        const JWT_RE = /^eyJ[\w-]*\.[\w-]+\.[\w-]*$/;
+        const EMPTY_VALUES = new Set(["", "null", "undefined"]);
+
+        const allowAutoLogin = (history, nowMs, { max = AUTO_LOGIN_MAX, windowMs = AUTO_LOGIN_WINDOW_MS } = {}) => {
+          const recent = (Array.isArray(history) ? history : []).filter((t) => Number.isFinite(t) && nowMs - t < windowMs);
+          if (recent.length >= max) return { allowed: false, history };
+          return { allowed: true, history: [...recent, nowMs] };
+        };
+
+        const isSsoCallbackUrl = (url) => {
+          try {
+            const u = new URL(url);
+            const segments = u.pathname.toLowerCase().split("/");
+            return CALLBACK_MARKERS.some((m) => u.searchParams.has(m) || segments.includes(m));
+          } catch (e) {
+            return false;
+          }
+        };
+
+        const isJwt = (value) => typeof value === "string" && JWT_RE.test(value);
+
+        const jwtExpiryMs = (token) => {
+          try {
+            const exp = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).exp;
+            return Number.isFinite(exp) ? exp * 1000 : null;
+          } catch (e) {
+            return null;
+          }
+        };
+
+        const pickDeelToken = (candidates, nowMs) => {
+          for (const { source, value } of candidates) {
+            const token = typeof value === "string" ? value.trim().replace(/^"(.*)"$/, "$1") : "";
+            if (EMPTY_VALUES.has(token)) continue;
+            const expMs = isJwt(token) ? jwtExpiryMs(token) : null;
+            if (expMs !== null && expMs <= nowMs) continue;
+            return { source, value: token };
+          }
+          return null;
+        };
+
+        return { allowAutoLogin, isSsoCallbackUrl, isJwt, pickDeelToken };
+      })();
+      // @@login-guard:end
+
       // ==========================================
       // 1. GOOGLE SSO AUTOPILOT (Bypasses Worker CSP)
       // ==========================================
@@ -68,6 +119,13 @@
         // 🛡️ SECURITY: Only run if the Attendance portal triggered this within the last 60 seconds
         if (Date.now() - lastSSOClick > 60000) {
           return; // Exit silently. Let the user use their normal Google accounts elsewhere.
+        }
+
+        const ssoGate = IkgLoginGuard.allowAutoLogin(GM_getValue("IKG_SSO_CLICKS", []), Date.now());
+        if (!ssoGate.allowed) {
+          GM_setValue("IKG_SSO_TRIGGERED", 0);
+          IkgLog.warn("⛔ Google auto-pick paused (looping) — pick the account manually");
+          return;
         }
 
         IkgLog.info("Attendance-triggered SSO detected. Engaging Autopilot.");
@@ -80,6 +138,7 @@
             if (clickable) {
               IkgLog.debug("Target email found. Simulatin' click.");
               GM_setValue("IKG_SSO_TRIGGERED", 0); // Clear the flag instantly
+              GM_setValue("IKG_SSO_CLICKS", ssoGate.history);
               clickable.click();
               return true;
             }
@@ -109,87 +168,138 @@
       // ==========================================
       if (location.hostname === "ikg.deel.team") {
         IkgLog.info("Deel Domain Detected. Hunting for Auth Token...");
-        let hasClickedDeelLogin = false;
+        const DEEL_AUTOCLICKED_KEY = "IKG_DEEL_AUTOCLICKED";
+        const LOGIN_BUTTON_SETTLE_MS = 1500;
+        const pageWin = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+        let headerToken = null;
+        let tokenSent = false;
+        let loginButtonSeenAt = 0;
+        let pausedLogged = false;
+        let deelObserver = null;
 
-        // 🎯 Helper: Safely checks and sends the token if valid
-        const checkAndSendToken = () => {
-          const token =
-            localStorage.getItem("token") || sessionStorage.getItem("token");
-          if (token) {
+        const storageCandidates = (onlyJwtKeys) => {
+          const out = [];
+          for (const [label, store] of [["localStorage", localStorage], ["sessionStorage", sessionStorage]]) {
             try {
-              const payload = JSON.parse(atob(token.split(".")[1]));
-              if (payload.exp && payload.exp * 1000 < Date.now()) {
-                return false; // Token is expired, wait for Deel to refresh it
+              if (!onlyJwtKeys) out.push({ source: `${label}.token`, value: store.getItem("token") });
+              else for (let i = 0; i < store.length; i++) {
+                const key = store.key(i);
+                const value = store.getItem(key);
+                if (key !== "token" && IkgLoginGuard.isJwt(value)) out.push({ source: `${label}.${key}`, value });
               }
-            } catch (e) {
-              /* Not a standard JWT, proceed anyway */
-            }
-
-            GM_setValue("IKG_DEEL_TOKEN", token);
-            IkgLog.info(
-              "✅ FRESH Deel Token secured. Handing back to Attendance App...",
-            );
-            setTimeout(() => {
-              window.close();
-            }, 500);
-            return true;
+            } catch (e) { /* storage blocked */ }
           }
-          return false;
+          return out;
         };
 
-        // 🎯 Helper: Hunts for the login button
-        const attemptDeelLogin = () => {
-          if (hasClickedDeelLogin) return false;
-          const elements = Array.from(document.querySelectorAll("span, button, a"));
+        const cookieCandidates = () =>
+          document.cookie.split(";").map((c) => c.trim().split("="))
+            .filter(([key]) => key === "token" || key === "auth-token")
+            .map(([key, ...rest]) => ({ source: `cookie.${key}`, value: decodeURIComponent(rest.join("=")) }));
 
-          const loginBtn = elements.find(
-            (el) =>
-              el.innerText &&
-              (el.innerText.includes("IKG Google Workspace") ||
-                el.innerText.includes("Log in with IKG")),
+        const tokenCandidates = () => [
+          ...storageCandidates(false),
+          { source: "header.x-auth-token", value: headerToken },
+          ...cookieCandidates(),
+          ...storageCandidates(true),
+        ];
+
+        const checkAndSendToken = () => {
+          if (tokenSent) return true;
+          const found = IkgLoginGuard.pickDeelToken(tokenCandidates(), Date.now());
+          if (!found) return false;
+          tokenSent = true;
+          GM_setValue("IKG_DEEL_TOKEN", found.value);
+          GM_setValue("IKG_DEEL_LOGIN_CLICKS", []);
+          sessionStorage.removeItem(DEEL_AUTOCLICKED_KEY);
+          if (deelObserver) deelObserver.disconnect();
+          IkgLog.info(`✅ FRESH Deel Token secured from ${found.source}. Handing back to Attendance App...`);
+          setTimeout(() => window.close(), 500);
+          return true;
+        };
+
+        const captureAuthHeader = (name, value) => {
+          if (tokenSent || String(name).toLowerCase() !== "x-auth-token" || !value) return;
+          headerToken = String(value);
+          checkAndSendToken();
+        };
+
+        try {
+          const xhrProto = pageWin.XMLHttpRequest.prototype;
+          const originalSetHeader = xhrProto.setRequestHeader;
+          xhrProto.setRequestHeader = function (name, value) {
+            captureAuthHeader(name, value);
+            return originalSetHeader.apply(this, arguments);
+          };
+          const originalFetch = pageWin.fetch;
+          pageWin.fetch = function (input, init) {
+            try {
+              const headers = new Headers((init && init.headers) || (input && typeof input === "object" && input.headers) || undefined);
+              captureAuthHeader("x-auth-token", headers.get("x-auth-token"));
+            } catch (e) { /* unreadable headers */ }
+            return originalFetch.apply(this, arguments);
+          };
+        } catch (e) {
+          IkgLog.warn("Deel request header capture unavailable", e?.message);
+        }
+
+        const findLoginButton = () =>
+          Array.from(document.querySelectorAll("button, a, span")).find(
+            (el) => /IKG Google Workspace|Log in with IKG/.test(el.innerText || "") && el.offsetParent !== null,
           );
 
-          if (loginBtn && loginBtn.offsetParent !== null) {
-            hasClickedDeelLogin = true;
-            IkgLog.info(
-              "Deel login button found. Engaging Autopilot and waiting for Google...",
-            );
-            GM_setValue("IKG_SSO_TRIGGERED", Date.now()); // Grant VIP pass for Google SSO
-            loginBtn.click();
-            return true;
+        const attemptDeelLogin = () => {
+          if (tokenSent || sessionStorage.getItem(DEEL_AUTOCLICKED_KEY) || IkgLoginGuard.isSsoCallbackUrl(location.href)) return;
+          const loginBtn = findLoginButton();
+          if (!loginBtn) {
+            loginButtonSeenAt = 0;
+            return;
           }
-          return false;
+          if (!loginButtonSeenAt) {
+            loginButtonSeenAt = Date.now();
+            setTimeout(attemptDeelLogin, LOGIN_BUTTON_SETTLE_MS + 50);
+            return;
+          }
+          if (Date.now() - loginButtonSeenAt < LOGIN_BUTTON_SETTLE_MS) return;
+
+          const gate = IkgLoginGuard.allowAutoLogin(GM_getValue("IKG_DEEL_LOGIN_CLICKS", []), Date.now());
+          if (!gate.allowed) {
+            if (!pausedLogged) IkgLog.warn("⛔ Deel auto-login paused (looping) — log in manually");
+            pausedLogged = true;
+            return;
+          }
+          GM_setValue("IKG_DEEL_LOGIN_CLICKS", gate.history);
+          sessionStorage.setItem(DEEL_AUTOCLICKED_KEY, String(Date.now()));
+          GM_setValue("IKG_SSO_TRIGGERED", Date.now());
+          IkgLog.info("Deel login button settled. Engaging Autopilot and waiting for Google...");
+          loginBtn.click();
         };
 
-        // 1. Check immediately on page load
-        if (!checkAndSendToken()) {
-          attemptDeelLogin();
-        }
-
-        // 2. 🎯 CRITICAL FIX: Use MutationObserver instead of spamming setInterval
-        const deelObserver = new MutationObserver(() => {
-          if (checkAndSendToken()) {
-            deelObserver.disconnect(); // Stop observing once we have the token
-          } else {
-            attemptDeelLogin();
-          }
-        });
-
-        // Start observing the DOM for React rendering the login button
-        if (document.body) {
-          deelObserver.observe(document.body, { childList: true, subtree: true });
-        } else {
-          document.addEventListener("DOMContentLoaded", () => {
-            deelObserver.observe(document.body, { childList: true, subtree: true });
+        const logDeelDiagnostics = () => {
+          const sources = tokenCandidates().filter((c) => c.value).map((c) => c.source);
+          IkgLog.info("Deel autopilot status", {
+            path: location.pathname,
+            ssoCallback: IkgLoginGuard.isSsoCallbackUrl(location.href),
+            autoClickedThisTab: !!sessionStorage.getItem(DEEL_AUTOCLICKED_KEY),
+            recentAutoClicks: (GM_getValue("IKG_DEEL_LOGIN_CLICKS", []) || []).length,
+            tokenSources: sources,
           });
-        }
+        };
 
-        // 3. Fallback: Listen for native storage changes (Instantly catches token generation)
-        window.addEventListener("storage", (e) => {
-          if (e.key === "token") {
-            if (checkAndSendToken()) deelObserver.disconnect();
-          }
-        });
+        const startDeelAutopilot = () => {
+          if (checkAndSendToken()) return;
+          setTimeout(logDeelDiagnostics, 3000);
+          deelObserver = new MutationObserver(() => {
+            if (!checkAndSendToken()) attemptDeelLogin();
+          });
+          deelObserver.observe(document.body, { childList: true, subtree: true });
+          attemptDeelLogin();
+        };
+
+        if (document.body) startDeelAutopilot();
+        else document.addEventListener("DOMContentLoaded", startDeelAutopilot);
+
+        window.addEventListener("storage", () => checkAndSendToken());
 
         return; // CRITICAL: Stop the rest of the Attendance script from rendering on Deel
       }
@@ -1693,11 +1803,21 @@
       };
 
       // --- DEEL PTO AUTO-SYNC ENGINE ---
-      const ensureDeelToken = () => {
-        return new Promise((resolve) => {
-          const existingToken = GM_getValue("IKG_DEEL_TOKEN", null);
-          if (existingToken) return resolve(existingToken);
+      const DEEL_HUNT_COOLDOWN_MS = 15 * 60e3;
+      const DEEL_HUNT_TIMEOUT_MS = 60e3;
+      let deelHunt = null;
 
+      const isDeelHuntCoolingDown = () => Date.now() - GM_getValue("IKG_DEEL_HUNT_FAILED_AT", 0) < DEEL_HUNT_COOLDOWN_MS;
+
+      const ensureDeelToken = () => {
+        const existingToken = GM_getValue("IKG_DEEL_TOKEN", null);
+        if (existingToken) return Promise.resolve(existingToken);
+        if (!deelHunt) deelHunt = huntDeelToken().finally(() => { deelHunt = null; });
+        return deelHunt;
+      };
+
+      const huntDeelToken = () => {
+        return new Promise((resolve) => {
           const errorMsg = "⚠️ Deel Auth Token missing! You might not have logged into Deel (ikg.deel.team) in this browser before.";
           IkgLog.warn(`${errorMsg} Opening background tab to auto-snatch...`);
           updateHeaderStatus("Auto-Syncing PTO...", "var(--warn)");
@@ -1722,6 +1842,7 @@
               if (new_value) {
                 IkgLog.info("✅ Token caught from Deel tab! Closing background tab...");
                 GM_removeValueChangeListener(listenerId);
+                GM_setValue("IKG_DEEL_HUNT_FAILED_AT", 0);
                 try { deelTab.close(); } catch (e) {} 
                 resolve(new_value);
               }
@@ -1731,20 +1852,21 @@
           setTimeout(() => {
             GM_removeValueChangeListener(listenerId);
             if (!GM_getValue("IKG_DEEL_TOKEN", null)) {
-              IkgLog.error(`❌ ${errorMsg} Auto-snatch timed out after 30s.`);
-              updateHeaderStatus("❌ Deel Auth Failed. Log in manually!", "var(--danger)");
+              IkgLog.error(`❌ ${errorMsg} Auto-snatch timed out after ${DEEL_HUNT_TIMEOUT_MS / 1000}s. Leaving the Deel tab open for a manual login.`);
+              updateHeaderStatus("❌ Deel login needed", "var(--danger)");
 
-              alert(
-                "Attendance Pro Alert:\n\n" +
-                "Could not retrieve your Deel PTO token automatically.\n" +
-                "Reason: You haven't logged into Deel (ikg.deel.team) in this browser session, or SSO timed out.\n\n" +
-                "Please open https://ikg.deel.team/ and log in once manually."
-              );
-
-              try { deelTab.close(); } catch (e) {}
+              const alreadyWarned = isDeelHuntCoolingDown();
+              GM_setValue("IKG_DEEL_HUNT_FAILED_AT", Date.now());
+              if (!alreadyWarned) {
+                alert(
+                  "Attendance Pro Alert:\n\n" +
+                  "Could not retrieve your Deel PTO token automatically.\n" +
+                  "A background Deel tab (ikg.deel.team) is left open: log in there once manually and PTO syncs on the next sync."
+                );
+              }
               resolve(null);
             }
-          }, 30000); // 30 seconds timeout
+          }, DEEL_HUNT_TIMEOUT_MS);
         });
       };
 
@@ -2240,7 +2362,7 @@
               .catch(() => {});
           }
 
-          if (!GM_getValue("IKG_DEEL_TOKEN", null)) {
+          if (!GM_getValue("IKG_DEEL_TOKEN", null) && !deelHunt && !isDeelHuntCoolingDown()) {
             IkgLog.info("Missing Deel token on focus. Snatching silently...");
             ensureDeelToken();
           }

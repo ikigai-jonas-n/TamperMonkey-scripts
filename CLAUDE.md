@@ -46,3 +46,9 @@
 ## Month totals / WFH sync priority
 - "This Month" card = `IkgWorkRules.summarizeMonth(rows)`: Actual = Σ `effectiveHrs`, Target = Σ `baselineHrs` (span + credit), so Net = Σ daily flex. Never subtract `targetHrs` (span only) from effective — that counts PTO/event credit as surplus. Breakdown 🏢 + 🏠 + 🏝️ credit + 🎉 credit always equals Actual.
 - `runWfhSync` dates = `IkgWorkRules.pickWfhSyncDates`: every missing-attendance day (`no-punches`, `missing-in/out`, `fix-pending`) in the current, previous and viewed month is re-checked on every sync, uncapped and first; then ≤7 routine dates (never synced, schema migration, short days not checked for 24h via `gasCheckedAt`, today and the last two Wednesdays).
+
+## Login autopilot (Google / Deel)
+- Loop breaker = `IkgLoginGuard` between `// @@login-guard:start` / `:end` near the top (pure; tested by `IKG-attendance.login-guard.test.mjs`). `allowAutoLogin` caps auto-clicks at 2 per 5 min: Deel button via `IKG_DEEL_LOGIN_CLICKS`, Google account pick via `IKG_SSO_CLICKS`. Tripped → log `⛔ … paused`, user logs in manually.
+- Deel tab clicks the login button at most once per tab (`sessionStorage IKG_DEEL_AUTOCLICKED`), only after it stays visible 1.5s, never on an SSO callback URL (`isSsoCallbackUrl`).
+- Deel token sources, in order: storage `token`, `x-auth-token` header of Deel's own XHR/fetch (via `unsafeWindow`), cookies `token`/`auth-token`, any other storage JWT. `pickDeelToken` skips expired JWTs. The `Deel autopilot status` log lists source names only, never values.
+- `ensureDeelToken` is single-flight (`deelHunt`); a failed hunt sets `IKG_DEEL_HUNT_FAILED_AT`, leaves the Deel tab open, alerts once, and focus re-hunts wait 15 min. Sync still hunts.
