@@ -118,7 +118,8 @@ regenerate_readme() {
 
     local name install_url filename readme_file
     filename=$(basename "$userscript")
-    readme_file="${ROOT}/${filename%.js}-README.md"
+    readme_file="${ROOT}/${filename%.user.js}-README.md"
+    [ -f "$readme_file" ] || readme_file="${ROOT}/${filename%.js}-README.md"
 
     name=$(grep -m1 '// @name' "$userscript" | sed 's|.*// @name[[:space:]]*||;s/[[:space:]]*$//')
     install_url=$(grep -m1 '// @downloadURL' "$userscript" | grep -oE 'https://[^ ]+' 2>/dev/null \

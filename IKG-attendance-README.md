@@ -1,8 +1,10 @@
-A complete overhaul of the [Attendance System](https://attendance.iki-utl.cc/). Includes a high-level analytics dashboard, auto-login, and cross-device alarms.
+A complete overhaul of the [Attendance System](https://attendance.iki-utl.cc/): a monthly dashboard that knows your shift, leave and company events.
 
-**✨ Key Features:**
-* **🤖 Autopilot Mode:** Automatically handles "Sign in with Google," selects your @ikigai.team account, and fetches data so you never have to click manually.
-* **⏱️ Active Shift & Alarms:** Detects your clock-in time and calculates exactly when you can leave (8h mark).
-* **🔔 macOS & GCal Integration:** One-click buttons to send a native macOS Alarm (via Apple Shortcuts) or create a "Busy" block on your Google Calendar.
-* **📊 Monthly Analytics:** View total days worked, average hours, and a "Lack" column that accounts for manual PTO/Sick leave entries.
-* **💾 Persistent Cache:** Loads instantly using `localStorage`. No more waiting for the scan every time you refresh.
+* **🤖 Auto-login:** signs in with your @ikigai.team Google account and keeps the session alive.
+* **⏱️ Leave time & alarms:** shows when you can clock out; one click sets a macOS alarm or a Google Calendar block.
+* **🏝️ Deel PTO sync:** leave, pending requests and balances appear on the calendar.
+* **🏠 WFH & forgot-punch fixes:** pulled from the WFH form and counted per day.
+* **🎉 Company special days:** early release / late start events are credited automatically.
+* **📊 Monthly flex balance:** actual vs target hours, with the reason for every short day.
+
+**First run:** the script opens Deel and Google tabs on its own to sign in. Let them finish; they close themselves.
