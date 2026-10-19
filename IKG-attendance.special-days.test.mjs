@@ -106,6 +106,40 @@ describe("event schedule", () => {
   });
 });
 
+describe("judgeEventDay", () => {
+  const judge = (events, extra = {}) => {
+    const schedule = scheduleFor(LATE, events, extra.scheduleExtra);
+    return R.judgeEventDay({ events, shift: LATE, schedule, inHour: 10, outHour: null, ...extra });
+  };
+  const release = eventsOf(event({ clockOutFrom: "17:30" }));
+  const lateStart = eventsOf(event({ clockInFrom: "11:00" }));
+
+  test("an early-release day with an on-time clock-in and no clock-out passes", () => {
+    assert.deepEqual([judge(release).isEventDay, judge(release).verdict], [true, "pass"]);
+  });
+  test("an early-release day with a late clock-in is LATE", () => assert.equal(judge(release, { inHour: 10.5 }).verdict, "late-in"));
+  test("leaving before the release on an event day is not EARLY", () => assert.equal(judge(release, { outHour: 15 }).verdict, "pass"));
+  test("an early-release day with only a clock-out asks for the clock-in", () => assert.equal(judge(release, { inHour: null, outHour: 18 }).verdict, "missing-in"));
+  test("a late-start day with no clock-in and an on-time clock-out passes", () => assert.equal(judge(lateStart, { inHour: null, outHour: 19 }).verdict, "pass"));
+  test("a late-start day that leaves early is EARLY", () => assert.equal(judge(lateStart, { inHour: null, outHour: 18 }).verdict, "left-early"));
+  test("a late-start day with only a clock-in asks for the clock-out", () => assert.equal(judge(lateStart, { inHour: 11, outHour: null }).verdict, "missing-out"));
+  test("no punches at all on an event day is NO PUNCH", () => assert.equal(judge(release, { inHour: null }).verdict, "no-punches"));
+  test("release and late start on one day need no punch check", () => {
+    assert.equal(judge(eventsOf(event({ clockInFrom: "11:00", clockOutFrom: "17:30" })), { inHour: 12, outHour: null }).verdict, "pass");
+  });
+  test("a release at or after the shift end is not an event day", () => assert.equal(judge(eventsOf(event({ clockOutFrom: "19:00" }))).isEventDay, false));
+  test("an all-day event stays a credited day, not an attendance check", () => assert.equal(judge(eventsOf(event({ allDay: true }))).isEventDay, false));
+  test("after a morning PTO window the clock-in is judged against the end of the leave", () => {
+    const j = judge(release, { inHour: 13, scheduleExtra: { ptoWindows: [{ start: 10, end: 12 }], ptoHrs: 2 } });
+    assert.equal(j.verdict, "pass");
+  });
+  test("a failed event check becomes the day's shortfall after sync and fix checks", () => {
+    const base = { isSynced: true, inHour: 10.5, outHour: null, schedule: scheduleFor(LATE, release), shift: LATE, events: release };
+    assert.equal(R.explainShortfall({ ...base, eventVerdict: "late-in" }).badge, "LATE");
+    assert.equal(R.explainShortfall({ ...base, eventVerdict: "late-in", corrections: [{ kind: "out", status: "pending" }] }).code, "fix-pending");
+  });
+});
+
 describe("explainShortfall", () => {
   const base = { isSynced: true, inHour: 10, outHour: 17, schedule: R.computeDaySchedule({ shift: LATE }), shift: LATE, shortByHrs: 2 };
   const why = (extra) => R.explainShortfall({ ...base, ...extra });

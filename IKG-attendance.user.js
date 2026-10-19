@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.137] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.138] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.137
+    // @version      7.138
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -109,6 +109,9 @@
         return { allowAutoLogin, isSsoCallbackUrl, isJwt, pickDeelToken };
       })();
       // @@login-guard:end
+
+      const AUTOPILOT_KEY = "IKG_AUTOPILOT";
+      const autopilotPrefs = () => ({ attendance: true, deel: true, ...(GM_getValue(AUTOPILOT_KEY, null) || {}) });
 
       // ==========================================
       // 1. GOOGLE SSO AUTOPILOT (Bypasses Worker CSP)
@@ -249,7 +252,7 @@
           );
 
         const attemptDeelLogin = () => {
-          if (tokenSent || sessionStorage.getItem(DEEL_AUTOCLICKED_KEY) || IkgLoginGuard.isSsoCallbackUrl(location.href)) return;
+          if (tokenSent || !autopilotPrefs().deel || sessionStorage.getItem(DEEL_AUTOCLICKED_KEY) || IkgLoginGuard.isSsoCallbackUrl(location.href)) return;
           const loginBtn = findLoginButton();
           if (!loginBtn) {
             loginButtonSeenAt = 0;
@@ -281,6 +284,7 @@
             path: location.pathname,
             ssoCallback: IkgLoginGuard.isSsoCallbackUrl(location.href),
             autoClickedThisTab: !!sessionStorage.getItem(DEEL_AUTOCLICKED_KEY),
+            autoSignIn: autopilotPrefs().deel,
             recentAutoClicks: (GM_getValue("IKG_DEEL_LOGIN_CLICKS", []) || []).length,
             tokenSources: sources,
           });
@@ -368,6 +372,36 @@
       let authToken = null;
       let autopilotEnabled = true;
 
+      const ATT_LOGIN_CLICKS_KEY = "IKG_ATT_LOGIN_CLICKS";
+      let attLoginPausedLogged = false;
+      const tryAttendanceAutoLogin = (loginBtn) => {
+        if (!autopilotPrefs().attendance) return false;
+        const gate = IkgLoginGuard.allowAutoLogin(GM_getValue(ATT_LOGIN_CLICKS_KEY, []), Date.now());
+        if (!gate.allowed) {
+          if (!attLoginPausedLogged) IkgLog.warn("⛔ Attendance auto sign-in paused (looping) — sign in manually");
+          attLoginPausedLogged = true;
+          return false;
+        }
+        GM_setValue(ATT_LOGIN_CLICKS_KEY, gate.history);
+        GM_setValue("IKG_SSO_TRIGGERED", Date.now());
+        loginBtn.click();
+        return true;
+      };
+
+      const findAppLoginButton = () =>
+        Array.from(document.querySelectorAll("button")).find((b) => (b.innerText || "").toUpperCase().includes("SIGN IN WITH GOOGLE"));
+      const showManualSignIn = () => {
+        const statusEl = document.getElementById("ikg-header-status");
+        if (statusEl && !statusEl.querySelector("[data-ikg-signin]")) {
+          statusEl.innerHTML = `🔒 Signed out — <button type="button" data-ikg-signin style="all:unset; cursor:pointer; text-decoration:underline;">Sign in</button>`;
+          statusEl.style.color = "var(--warn)";
+        }
+      };
+      document.addEventListener("click", (e) => {
+        if (!e.target.closest || !e.target.closest("[data-ikg-signin]")) return;
+        findAppLoginButton()?.click();
+      });
+
       // Bypasses browser tab-sleeping to check if session died
       const watchdogBlob = new Blob(
         [
@@ -391,9 +425,7 @@
           autopilotEnabled = true;
           authToken = null;
 
-          // 🎟️ Create the 60-second VIP Pass
-          GM_setValue("IKG_SSO_TRIGGERED", Date.now());
-          loginBtn.click();
+          if (!tryAttendanceAutoLogin(loginBtn)) showManualSignIn();
         }
       };
 
@@ -429,7 +461,14 @@
       const DEFAULT_GIF_URL =
         "https://gist.github.com/ikigai-jonas-n/7b0a0efcec645ab87ab73c0b3b038d0e/raw/dd23f7a3baa0c680e1b4e92abd18cbb6bf5c3397/bubu-dudu-sseeyall.gif";
 
+      const DEFAULT_SOUND = "pro_wendy";
       const PRO_TRACKS = [
+        {
+          id: "pro_wendy",
+          name: "Wendy Wander - 我想和你一起",
+          url: "https://gist.githubusercontent.com/ikigai-jonas-n/7b0a0efcec645ab87ab73c0b3b038d0e/raw/50b42e7f0eabb3bdc4725547329c48d8ecb1d1d9/Wendy%20Wander%20-%20%E6%88%91%E6%83%B3%E5%92%8C%E4%BD%A0%E4%B8%80%E8%B5%B7%20(alarm).m4a",
+          ver: "1.0",
+        },
         {
           id: "pro_fkj",
           name: "FKJ - Just Piano",
@@ -496,7 +535,10 @@
             url: url,
             responseType: "blob",
             onload: (res) => {
-              if (res.status !== 200) return;
+              if (res.status !== 200) {
+                IkgLog.warn(`Alarm sound ${name} download failed (HTTP ${res.status}); it will stream from the web when the alarm rings`);
+                return;
+              }
               const reader = new FileReader();
               reader.onloadend = async () => {
                 await this.save(dataKey, reader.result);
@@ -528,7 +570,7 @@
 
       const getSettings = () => {
         const def = {
-          soundType: "pro_fkj",
+          soundType: DEFAULT_SOUND,
           mp3Name: "",
           snoozeMins: 5,
           useFlexDef: true,
@@ -584,8 +626,10 @@
           osc.stop(startTime + duration);
           this.activeOscillators.push(osc);
         },
+        playId: 0,
         play: async function (overrideType = null) {
           this.stop();
+          const playId = ++this.playId;
           this.isPlaying = true;
           const settings = getSettings();
           const typeToPlay = overrideType || settings.soundType;
@@ -593,15 +637,23 @@
           if (typeToPlay.startsWith("pro_") || typeToPlay === "custom") {
             const key =
               typeToPlay === "custom" ? "custom_alarm_mp3" : `data_${typeToPlay}`;
-            const mp3Data = await IKG_DB.get(key);
+            const cached = await IKG_DB.get(key);
+            if (playId !== this.playId || !this.isPlaying) return;
+            const mp3Data = cached || PRO_TRACKS.find((t) => t.id === typeToPlay)?.url;
 
             if (mp3Data) {
+              if (!cached) IkgLog.warn(`Alarm sound "${typeToPlay}" not cached yet; streaming it from the web`);
               this.audioEl = new Audio(mp3Data);
               this.audioEl.volume =
                 settings.volume !== undefined ? settings.volume : 0.8;
               this.audioEl.loop = true;
-              this.audioEl.play().catch((e) => this.playSynthesis("chime"));
+              this.audioEl.play().catch((e) => {
+                if (playId !== this.playId || !this.isPlaying) return;
+                IkgLog.warn(`Alarm sound "${typeToPlay}" blocked by the browser (${e?.name || e}); playing the built-in chime instead`);
+                this.playSynthesis("chime");
+              });
             } else {
+              IkgLog.warn(`Alarm sound "${typeToPlay}" not found in storage; playing the built-in chime instead`);
               this.playSynthesis("chime");
             }
           } else {
@@ -635,6 +687,7 @@
         },
         stop: function () {
           this.isPlaying = false;
+          this.playId++;
           if (this.timeoutId) clearTimeout(this.timeoutId);
           this.activeOscillators.forEach((o) => {
             try {
@@ -682,6 +735,10 @@
         snoozeTimeout: null,
         currentIsTest: false,
         fire: async function (isTest = false) {
+          if (this.overlay?.classList.contains("active")) {
+            IkgLog.info("Alarm already ringing; ignoring a duplicate trigger.");
+            return;
+          }
           this.currentIsTest = isTest;
           const settings = getSettings();
           AudioEngine.play();
@@ -811,6 +868,19 @@
         updateHeaderStatus("🔕 Alarms Cleared", "var(--text-muted)");
       };
 
+      const ALARM_CLAIM_SETTLE_MS = 150;
+      const claimAlarmTrigger = (todayStr, triggerKey) =>
+        new Promise((resolve) => {
+          const storeKey = `IKG_ALARM_CLAIMS_${todayStr}`;
+          const read = () => {
+            try { return JSON.parse(localStorage.getItem(storeKey) || "{}"); } catch (e) { return {}; }
+          };
+          if (read()[triggerKey]) return resolve(false);
+          const token = `${Date.now()}-${Math.random()}`;
+          localStorage.setItem(storeKey, JSON.stringify({ ...read(), [triggerKey]: token }));
+          setTimeout(() => resolve(read()[triggerKey] === token), ALARM_CLAIM_SETTLE_MS);
+        });
+
       const scheduleAlarms = (endTimeMs, silent = false) => {
         const todayReal = new Date();
         const pad = (n) => String(n).padStart(2, "0");
@@ -838,13 +908,23 @@
         const now = Date.now();
         const tMult = settings.triggerUnit === "s" ? 1000 : 60000;
 
-        settings.triggers.forEach((val) => {
+        [...new Set(settings.triggers)].forEach((val) => {
           const triggerTimeMs = endTimeMs + val * tMult;
           const triggerDelay = triggerTimeMs - now;
 
           if (triggerDelay > 0) {
-            const tid = setTimeout(() => {
-              if (val === 0) {
+            const tid = setTimeout(async () => {
+              const action = IkgWorkRules.alarmTriggerAction({ triggerTimeMs, nowMs: Date.now(), val });
+              if (action === "skip") {
+                IkgLog.warn(`Alarm trigger ${val} skipped: fired ${Math.round((Date.now() - triggerTimeMs) / 1000)}s late (computer asleep?)`);
+                return;
+              }
+              if (localStorage.getItem(`IKG_ALARM_DISMISSED_${todayStr}`) === "true") return;
+              if (!(await claimAlarmTrigger(todayStr, `${endTimeMs}|${val}`))) {
+                IkgLog.info(`Alarm trigger ${val} handled by another Attendance tab.`);
+                return;
+              }
+              if (action === "ring") {
                 AlarmSystem.fire(false);
               } else if (Notification.permission === "granted") {
                 const absVal = Math.abs(val);
@@ -864,6 +944,7 @@
                 new Notification("⏰ Shift Update", {
                   body: bodyText,
                   icon: "https://attendance.iki-utl.cc/favicon.png",
+                  tag: `ikg-shift-${endTimeMs}`,
                 });
               }
             }, triggerDelay);
@@ -1039,6 +1120,7 @@
       // 4. CORE LOGIC & STATE
       // ==========================================
       let isFetchingData = false;
+      const ATTENDANCE_API_WINDOW_DAYS = 90;
       const API_BASE = "https://9a2igbhvdb.execute-api.us-west-2.amazonaws.com";
       const CACHE_KEY = `IKG_ATTENDANCE_CACHE_${APP_VER}`;
       const DAY_NOTES_KEY = `IKG_DAY_NOTES_${APP_VER}`;
@@ -1074,7 +1156,7 @@
           }
         });
 
-        const dailyPattern = /^(IKG_ALARM_DISMISSED_|IKG_AUTO_ALARM_|IKG_TODAY_FLEX_)(\d{4}-\d{2}-\d{2})$/;
+        const dailyPattern = /^(IKG_ALARM_DISMISSED_|IKG_ALARM_CLAIMS_|IKG_AUTO_ALARM_|IKG_TODAY_FLEX_)(\d{4}-\d{2}-\d{2})$/;
         const versionPattern = /^IKG_.*_V(\d+)$/;
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
@@ -1655,7 +1737,32 @@
           return h ? `${h}h${mins % 60 ? ` ${String(mins % 60).padStart(2, "0")}m` : ""}` : `${mins}m`;
         };
 
-        const explainShortfall = ({ isSynced, inHour, outHour, corrections = [], pendingPTO = null, schedule, shift, events = [], shortByHrs = 0 }) => {
+        const eventChecksOf = (events, shift) => {
+          const timed = (events || []).filter((e) => !e.allDay);
+          const releases = timed.some((e) => e.clockOutFrom !== null && e.clockOutFrom < shift.end);
+          const lateStart = timed.some((e) => e.clockInFrom !== null && e.clockInFrom > shift.start);
+          if (releases && lateStart) return "none";
+          if (releases) return "in";
+          return lateStart ? "out" : null;
+        };
+
+        const judgeEventDay = ({ events = [], shift, schedule, inHour = null, outHour = null }) => {
+          const checks = shift && schedule && schedule.mode !== "event-full" && schedule.mode !== "full" ? eventChecksOf(events, shift) : null;
+          if (!checks) return Object.freeze({ isEventDay: false, verdict: null, checks: null });
+          const verdictOf = () => {
+            if (inHour == null && outHour == null) return "no-punches";
+            if (checks === "none") return "pass";
+            if (checks === "in") {
+              if (inHour == null) return "missing-in";
+              return schedule.earliestCheckin != null && inHour >= schedule.earliestCheckin + LATE_IN_TOLERANCE_HRS ? "late-in" : "pass";
+            }
+            if (outHour == null) return "missing-out";
+            return schedule.earliestCheckout != null && outHour <= schedule.earliestCheckout - LEFT_EARLY_TOLERANCE_HRS ? "left-early" : "pass";
+          };
+          return Object.freeze({ isEventDay: true, verdict: verdictOf(), checks });
+        };
+
+        const explainShortfall = ({ isSynced, inHour, outHour, corrections = [], pendingPTO = null, schedule, shift, events = [], shortByHrs = 0, eventVerdict = null }) => {
           const hasIn = inHour != null;
           const hasOut = outHour != null;
           const reason = (code, badge, detail, action = "") => Object.freeze({ code, badge, detail, action });
@@ -1667,6 +1774,8 @@
           const rejected = (!hasIn && rejectedFor("in")) || (!hasOut && rejectedFor("out"));
           if (rejected) return reason("fix-rejected", "FIX ❌", `Forgot-${rejected.kind === "in" ? "clock-in" : "clock-out"} request rejected${rejected.note ? ` · ${rejected.note}` : ""}`, "Resubmit on the WFH site");
           if (pendingPTO) return reason("leave-pending", "LEAVE ⏳", `${pendingPTO.type} ${pendingPTO.hours}h awaiting approval on Deel — counts once approved`, "");
+          if (eventVerdict === "late-in") return reason("late-in", "LATE", `Arrived ${hhmm(inHour)} on an event day · clock in by ${hhmm(schedule.earliestCheckin)}`, "");
+          if (eventVerdict === "left-early") return reason("left-early", "EARLY", `Left ${hhmm(outHour)} on a late-start event day · clock out from ${hhmm(schedule.earliestCheckout)}`, "Forgot to apply partial leave?");
           if (hasIn && !hasOut) return reason("missing-out", "OUT?", `No clock-out after ${hhmm(inHour)}. Forgot to clock out?`, "Submit a forgot-punch request on the WFH site");
           if (!hasIn && hasOut) return reason("missing-in", "IN?", `No clock-in before ${hhmm(outHour)}. Forgot to clock in?`, "Submit a forgot-punch request on the WFH site");
           if (!hasIn && !hasOut) return reason("no-punches", "NO PUNCH", "No attendance. Forgot both punches, or forgot to apply leave?", "Forgot-punch request on the WFH site, or leave on Deel");
@@ -1735,10 +1844,195 @@
         };
         const ptoIconsOf = (typeNames) => [...new Set(String(typeNames || "").split(" + ").map((t) => ptoKindOf(t).icon))].join("");
 
+        const COUNTED_REASONS = new Set(["counted", "full-pto"]);
+        const isCountedReason = (reason) => COUNTED_REASONS.has(reason);
+        const countedReason = (d) => {
+          if (d.isFuture) return "future";
+          if (d.isToday) return "today";
+          if (d.isYesterdayGrace) return "yesterday-lag";
+          if (d.isIgnored) return "ignored";
+          if (d.isWfhExcluded) return "wfh-excluded";
+          if (d.isEventDay) return "event";
+          if (!d.isWorkingDay) return d.isPublicHoliday ? "holiday" : d.isWeekend ? "weekend" : "no-punches";
+          return d.isFullPTO ? "full-pto" : "counted";
+        };
+
+        const explainMonth = (rows) => {
+          const sorted = [...(rows || [])]
+            .map((d) => {
+              const reason = d.countedReason ?? countedReason(d);
+              return { ...d, countedReason: reason, isCounted: isCountedReason(reason) };
+            })
+            .sort((a, b) => String(a.dateStr).localeCompare(String(b.dateStr)));
+          let effectiveSum = 0;
+          let baselineSum = 0;
+          const lines = sorted.map((d) => {
+            const included = d.isCounted && !d.isFullPTO;
+            if (included) {
+              effectiveSum += d.effectiveHrs;
+              baselineSum += d.baselineHrs;
+            }
+            const ptoCreditHrs = included ? round(d.ptoCredit - d.eventCredit) : 0;
+            return Object.freeze({
+              dateStr: d.dateStr,
+              reason: d.countedReason,
+              included,
+              officeHrs: included && !d.isWFH ? round(d.actualHrs) : 0,
+              wfhHrs: included && d.isWFH ? round(d.actualHrs) : 0,
+              ptoCreditHrs,
+              eventCreditHrs: included ? round(d.effectiveHrs - d.actualHrs - ptoCreditHrs) : 0,
+              effectiveHrs: included ? round(d.effectiveHrs) : 0,
+              baselineHrs: included ? round(d.baselineHrs) : 0,
+              flexHrs: included ? round(d.effectiveHrs - d.baselineHrs) : 0,
+              runningNetHrs: round(round(effectiveSum) - round(baselineSum)),
+            });
+          });
+          const excluded = sorted
+            .filter((d) => !d.isCounted)
+            .reduce((acc, d) => ({ ...acc, [d.countedReason]: (acc[d.countedReason] || 0) + 1 }), {});
+          return Object.freeze({ lines, totals: Object.freeze({ ...summarizeMonth(sorted), excluded: Object.freeze(excluded) }) });
+        };
+
+        const arrow = (from, to) => `${hhmm(from)} → ${hhmm(to)}`;
+        const explainDayTarget = ({ shift, schedule, ptoHrs = 0, isFullPTO = false, events = [], isEventDay = false, ptoType = "" }) => {
+          const result = (steps) => Object.freeze({ steps: Object.freeze(steps), requiredHrs: schedule.span, creditHrs: schedule.ptoCredit });
+          const leave = ptoType || "Leave";
+          const names = events.map((e) => e.name).join(" + ") || "Company event";
+          const shiftLine = `Shift ${formatWindow(shift)} = ${durLabel(GROSS_SHIFT_HRS)} gross, lunch ${formatWindow({ start: shift.mealStart, end: shift.mealEnd })} included`;
+          const creditLine = `+ ${durLabel(schedule.ptoCredit)} credit (${durLabel(GROSS_SHIFT_HRS)} − ${durLabel(schedule.span)}) → target ${durLabel(GROSS_SHIFT_HRS)}`;
+
+          if (isFullPTO || schedule.mode === "full") return result([`${leave} covers the whole day → nothing required`, `+ ${durLabel(GROSS_SHIFT_HRS)} credit`]);
+          if (schedule.mode === "event-full") return result([`🎉 ${names} covers the whole shift → nothing required`, `+ ${durLabel(GROSS_SHIFT_HRS)} event credit`]);
+          if (isEventDay) {
+            const checks = eventChecksOf(events, shift);
+            const check = checks === "in" ? `only your clock-in is checked (by ${hhmm(schedule.earliestCheckin)})`
+              : checks === "out" ? `only your clock-out is checked (from ${hhmm(schedule.earliestCheckout)})`
+              : "no punch time is checked";
+            return result([`🎉 ${names}: ${check}`, "Hours on event days are shown but not counted in Net Balance"]);
+          }
+          if (schedule.mode === "legacy") {
+            return result([
+              shiftLine,
+              `− ${leave} ${durLabel(ptoHrs)} from Deel, no time window`,
+              `${durLabel(GROSS_SHIFT_HRS)} − ${durLabel(ptoHrs)} = ${durLabel(schedule.span)} required, earliest out ${hhmm(schedule.earliestCheckout)}`,
+              creditLine,
+            ]);
+          }
+          if (schedule.mode === "window-outside") {
+            return result([shiftLine, `${leave} ${schedule.windows.map(formatWindow).join(", ")} is outside your shift → full ${durLabel(GROSS_SHIFT_HRS)} required`]);
+          }
+          if (schedule.mode === "window") {
+            const lunchOutside = schedule.earliestCheckin >= shift.mealEnd || schedule.earliestCheckout <= shift.mealStart;
+            const lunchNote = lunchOutside ? ` · lunch ${formatWindow({ start: shift.mealStart, end: shift.mealEnd })} also inside your leave` : "";
+            return result([
+              shiftLine,
+              `− ${leave} ${schedule.windows.map(formatWindow).join(", ")}${lunchNote}`,
+              `→ punch window ${arrow(schedule.earliestCheckin, schedule.earliestCheckout)} = ${durLabel(schedule.span)} required`,
+              creditLine,
+            ]);
+          }
+          return result([shiftLine, `→ punch window ${arrow(schedule.earliestCheckin, schedule.earliestCheckout)} = ${durLabel(schedule.span)} required`]);
+        };
+
+        const HEATMAP_CELL_MIN = 34;
+        const HEATMAP_CELL_MAX = 96;
+        const HEATMAP_GAP_PX = 4;
+        const heatmapLayout = ({ weeks, availablePx }) => {
+          if (!(weeks > 0)) return Object.freeze({ cellPx: HEATMAP_CELL_MAX, scrolls: false });
+          const fitPx = Math.floor(((availablePx || 0) - HEATMAP_GAP_PX * (weeks - 1)) / weeks);
+          if (fitPx < HEATMAP_CELL_MIN) return Object.freeze({ cellPx: HEATMAP_CELL_MIN, scrolls: true });
+          return Object.freeze({ cellPx: Math.min(HEATMAP_CELL_MAX, fitPx), scrolls: false });
+        };
+
+        const DAY_MS = 86400000;
+        const WEEK_MS = 7 * DAY_MS;
+        const MAX_HISTORY_WEEKS = 522;
+        const strictUtcOf = (dateStr) => {
+          const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr));
+          return m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : NaN;
+        };
+        const ymdOfUtc = (ms) => new Date(ms).toISOString().slice(0, 10);
+        const sundayOf = (ms) => ms - new Date(ms).getUTCDay() * DAY_MS;
+
+        const weekColumns = (firstStr, lastStr) => {
+          const first = strictUtcOf(firstStr);
+          const last = strictUtcOf(lastStr);
+          if (!Number.isFinite(first) || !Number.isFinite(last) || last < first) return [];
+          const lastSunday = sundayOf(last);
+          const weeks = Math.min(MAX_HISTORY_WEEKS, Math.round((lastSunday - sundayOf(first)) / WEEK_MS) + 1);
+          const firstSunday = lastSunday - (weeks - 1) * WEEK_MS;
+          const columns = [];
+          for (let w = 0; w < weeks; w++) {
+            const column = [];
+            for (let d = 0; d < 7; d++) column.push(ymdOfUtc(firstSunday + w * WEEK_MS + d * DAY_MS));
+            columns.push(Object.freeze(column));
+          }
+          return Object.freeze(columns);
+        };
+
+        const bucketByWeek = (rows) => {
+          const byWeek = new Map();
+          for (const r of rows || []) {
+            const t = strictUtcOf(r.dateStr);
+            if (!Number.isFinite(t)) continue;
+            const weekStart = ymdOfUtc(t - ((new Date(t).getUTCDay() + 6) % 7) * DAY_MS);
+            const w = byWeek.get(weekStart) || { weekStart, effectiveHrs: 0, baselineHrs: 0, actualHrs: 0, days: 0 };
+            byWeek.set(weekStart, {
+              weekStart,
+              effectiveHrs: round(w.effectiveHrs + (r.effectiveHrs || 0)),
+              baselineHrs: round(w.baselineHrs + (r.baselineHrs || 0)),
+              actualHrs: round(w.actualHrs + (r.actualHrs || 0)),
+              days: w.days + 1,
+            });
+          }
+          return [...byWeek.values()].sort((a, b) => a.weekStart.localeCompare(b.weekStart)).map((w) => Object.freeze(w));
+        };
+
+        const ALARM_RING_GRACE_MS = 15 * 60e3;
+        const ALARM_NOTICE_GRACE_MS = 2 * 60e3;
+        const ALARM_EARLY_TOLERANCE_MS = 1000;
+        const alarmTriggerAction = ({ triggerTimeMs, nowMs, val }) => {
+          const lateMs = nowMs - triggerTimeMs;
+          if (lateMs < -ALARM_EARLY_TOLERANCE_MS) return "skip";
+          if (val === 0) return lateMs <= ALARM_RING_GRACE_MS ? "ring" : "skip";
+          return lateMs <= ALARM_NOTICE_GRACE_MS ? "notify" : "skip";
+        };
+
+        const planAlarmSoundMigration = ({ stored, soundType, targetVersion, defaultSound }) => {
+          let prev = null;
+          try {
+            prev = JSON.parse(stored);
+          } catch {}
+          if (prev && Number(prev.version) >= targetVersion) return { apply: false, next: prev };
+          const previous = soundType || defaultSound;
+          return { apply: true, next: { version: targetVersion, previous, decided: previous === defaultSound } };
+        };
+
+        const mapPool = async (items, limit, fn) => {
+          const list = [...(items || [])];
+          const results = new Array(list.length);
+          let next = 0;
+          const worker = async () => {
+            while (next < list.length) {
+              const i = next++;
+              try {
+                results[i] = { ok: true, value: await fn(list[i], i) };
+              } catch (error) {
+                results[i] = { ok: false, error };
+              }
+            }
+          };
+          const workers = Math.min(Math.max(1, Math.floor(limit) || 1), list.length);
+          await Promise.all(Array.from({ length: workers }, worker));
+          return results;
+        };
+
         return Object.freeze({
           GROSS_SHIFT_HRS, FULL_PTO_HRS, GRADE_THRESHOLDS, SHIFT_LABELS,
-          parseSpecialDays, eventWindowsFor, eventOverlapHrs, eventReleaseLabel, explainShortfall, ptoKindOf, ptoIconsOf,
-          summarizeMonth, pickWfhSyncDates,
+          HEATMAP_CELL_MIN, HEATMAP_CELL_MAX, HEATMAP_GAP_PX, MAX_HISTORY_WEEKS,
+          parseSpecialDays, eventWindowsFor, eventOverlapHrs, eventReleaseLabel, explainShortfall, judgeEventDay, ptoKindOf, ptoIconsOf,
+          summarizeMonth, pickWfhSyncDates, countedReason, isCountedReason, explainMonth, explainDayTarget,
+          heatmapLayout, weekColumns, bucketByWeek, mapPool, alarmTriggerAction, planAlarmSoundMigration,
           shiftFromLabel, resolveShift, resolveShiftFromHistory, parsePtoWindows, disambiguateWindows,
           computeDaySchedule, gradeDay, isGoalMet, formatWindow,
           normalizeGasType, normalizeGasTime, normalizeGasDate, normalizeReviewStatus,
@@ -1747,6 +2041,68 @@
         });
       })();
       // @@work-rules:end
+
+      const ALARM_SOUND_MIGRATION_KEY = "IKG_ALARM_SOUND_MIGRATION";
+      const ALARM_SOUND_MIGRATION_VERSION = 1;
+      const readAlarmSoundMigration = () => {
+        const settings = getSettings();
+        const { apply, next } = IkgWorkRules.planAlarmSoundMigration({
+          stored: localStorage.getItem(ALARM_SOUND_MIGRATION_KEY),
+          soundType: settings.soundType,
+          targetVersion: ALARM_SOUND_MIGRATION_VERSION,
+          defaultSound: DEFAULT_SOUND,
+        });
+        if (apply) {
+          localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...settings, soundType: DEFAULT_SOUND }));
+          localStorage.setItem(ALARM_SOUND_MIGRATION_KEY, JSON.stringify(next));
+          IkgLog.info(`🎵 Alarm sound switched from "${next.previous}" to the new default "${DEFAULT_SOUND}"`);
+        }
+        return next;
+      };
+      readAlarmSoundMigration();
+
+      const soundLabel = (soundType) => {
+        if (soundType === "custom") return getSettings().mp3Name || "your uploaded MP3";
+        return PRO_TRACKS.find((t) => t.id === soundType)?.name || soundType;
+      };
+
+      const openAlarmSoundPrompt = () => {
+        const state = readAlarmSoundMigration();
+        const modal = document.getElementById("ikg-sound-modal");
+        const overlay = document.getElementById("ikg-sound-overlay");
+        if (state.decided || !modal || modal.classList.contains("open")) return;
+        const preview = document.getElementById("snd-preview");
+        const keep = document.getElementById("snd-keep");
+        const setPreviewing = (on) => {
+          preview.textContent = on ? "⏹ Stop" : "▶ Preview";
+          preview.setAttribute("aria-pressed", String(on));
+        };
+        const decide = (soundType) => {
+          AudioEngine.stop();
+          setPreviewing(false);
+          localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...getSettings(), soundType }));
+          localStorage.setItem(ALARM_SOUND_MIGRATION_KEY, JSON.stringify({ ...state, decided: true }));
+          modal.classList.remove("open");
+          overlay?.classList.remove("open");
+          renderSettings();
+          IkgLog.info(`🎵 Alarm sound set to "${soundType}"`);
+        };
+        document.getElementById("snd-body").textContent =
+          `Your alarm now plays this song. Press Preview to hear it before your shift ends. Keep it, or go back to ${soundLabel(state.previous)}.`;
+        keep.textContent = `Keep my old sound (${soundLabel(state.previous)})`;
+        keep.style.display = state.previous === DEFAULT_SOUND ? "none" : "";
+        setPreviewing(false);
+        preview.onclick = () => {
+          const on = preview.getAttribute("aria-pressed") !== "true";
+          if (on) AudioEngine.play(DEFAULT_SOUND);
+          else AudioEngine.stop();
+          setPreviewing(on);
+        };
+        document.getElementById("snd-accept").onclick = () => decide(DEFAULT_SOUND);
+        keep.onclick = () => decide(state.previous);
+        modal.classList.add("open");
+        overlay?.classList.add("open");
+      };
 
       const populateMonthSelect = (selectId, localCache, currentVal) => {
         const selectEl = document.getElementById(selectId);
@@ -1759,7 +2115,11 @@
         if (JSON.stringify(currentOptions) !== JSON.stringify(sortedMonths)) {
           selectEl.innerHTML = "";
           if (sortedMonths.length === 0) { selectEl.innerHTML = `<option value="">No Data</option>`; return ""; }
-          sortedMonths.forEach((m) => { const [yyyy, mm] = m.split("-"); const name = `${monthNames[parseInt(mm, 10) - 1]} ${yyyy}`; selectEl.innerHTML += `<option value="${m}">${name}</option>`; });
+          const years = [...new Set(sortedMonths.map((m) => m.slice(0, 4)))];
+          selectEl.innerHTML = years.map((yyyy) => `<optgroup label="${yyyy}">${sortedMonths
+            .filter((m) => m.startsWith(yyyy))
+            .map((m) => `<option value="${m}">${monthNames[parseInt(m.slice(5), 10) - 1]} ${yyyy}</option>`)
+            .join("")}</optgroup>`).join("");
         }
         if (currentVal && sortedMonths.includes(currentVal)) { selectEl.value = currentVal; return currentVal; } 
         else if (sortedMonths.length > 0) { selectEl.value = sortedMonths[0]; return sortedMonths[0]; }
@@ -1812,6 +2172,11 @@
       const ensureDeelToken = () => {
         const existingToken = GM_getValue("IKG_DEEL_TOKEN", null);
         if (existingToken) return Promise.resolve(existingToken);
+        if (!autopilotPrefs().deel) {
+          IkgLog.info("Deel auto sign-in is off; waiting for a manual Deel login.");
+          updateHeaderStatus(`🔒 Deel sign-in needed — <a href="https://ikg.deel.team/" target="_blank" rel="noopener" style="color:inherit; text-decoration:underline;">Open Deel</a>`, "var(--warn)");
+          return Promise.resolve(null);
+        }
         if (!deelHunt) deelHunt = huntDeelToken().finally(() => { deelHunt = null; });
         return deelHunt;
       };
@@ -2158,6 +2523,7 @@
         if (!authToken) { 
           authToken = e.detail; 
           autopilotEnabled = false; 
+          GM_setValue(ATT_LOGIN_CLICKS_KEY, []);
           sessionStorage.removeItem("IKG_RELOAD_ATTEMPTS"); // Clear backoff count on valid token
           IkgLog.info("AWS Token Intercepted."); 
         }
@@ -2180,14 +2546,29 @@
       });
 
       // --- GAS DATA FETCHER (Silent Scraper - Supports ACHNx & AEDo Tokens) ---
-  const ensureGasToken = () => {
-    return new Promise((resolve) => {
-      let gasData = null;
-      try { gasData = JSON.parse(GM_getValue("IKG_GAS_DATA", "null")); } catch(e){}
-      
-      // Reuse token if valid
-      if (gasData && gasData.token && gasData.exp > Date.now()) return resolve(gasData);
+  const GAS_TOKEN_MAX_AGE_MS = 12 * 3600 * 1000;
+  let gasTokenHunt = null;
 
+  const readGasData = () => {
+    try { return JSON.parse(GM_getValue("IKG_GAS_DATA", "null")); } catch (e) { return null; }
+  };
+
+  const gasTokenAgeMs = (gasData) => {
+    const issuedAt = Number(String(gasData?.token || "").split(":").pop());
+    return Number.isFinite(issuedAt) && issuedAt > 1e12 ? Date.now() - issuedAt : null;
+  };
+
+  const ensureGasToken = ({ force = false } = {}) => {
+    const cached = readGasData();
+    const age = gasTokenAgeMs(cached);
+    if (!force && cached?.token && (age === null || age < GAS_TOKEN_MAX_AGE_MS)) return Promise.resolve(cached);
+    if (!gasTokenHunt) gasTokenHunt = scrapeGasToken().finally(() => { gasTokenHunt = null; });
+    return gasTokenHunt;
+  };
+
+  const scrapeGasToken = () => {
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
       IkgLog.info("No active WFH Token. Silently scraping from Google Apps Script HTML...");
       updateHeaderStatus("Securing WFH Token...", "var(--warn)");
 
@@ -2214,7 +2595,7 @@
             }
 
             if (rawToken) {
-              IkgLog.info(`✅ WFH Token Secured: ${rawToken.substring(0, 12)}...`);
+              IkgLog.info(`✅ WFH Token Secured in ${Date.now() - startedAt}ms: ${rawToken.substring(0, 12)}...`);
               const newGasData = {
                 token: rawToken,
                 callbackUrl: "https://script.google.com/a/ikigai.team/macros/s/AKfycbyFf90WKuTH_HuePNWHWx6mji5vsgOCR4-g2u8b1n9P7HBedub9YgjzzPY-cBJd9Kax/callback",
@@ -2289,11 +2670,7 @@
           (b.innerText || "").toUpperCase().includes("SIGN IN WITH GOOGLE"),
         );
 
-        if (loginBtn && loginBtn.offsetParent !== null) {
-          GM_setValue("IKG_SSO_TRIGGERED", Date.now());
-          loginBtn.click();
-          return true;
-        }
+        if (loginBtn && loginBtn.offsetParent !== null) return tryAttendanceAutoLogin(loginBtn);
 
         if (!authToken && !hasClickedFetch) {
           const fetchBtn = buttons.find((b) =>
@@ -2326,6 +2703,7 @@
           const target = e.target.closest ? e.target : e.target.parentElement;
           if (!target) return;
           if (
+            autopilotPrefs().attendance &&
             (target.innerText || "").toUpperCase().includes("SIGN IN WITH GOOGLE")
           ) {
             GM_setValue("IKG_SSO_TRIGGERED", Date.now());
@@ -2362,7 +2740,7 @@
               .catch(() => {});
           }
 
-          if (!GM_getValue("IKG_DEEL_TOKEN", null) && !deelHunt && !isDeelHuntCoolingDown()) {
+          if (!GM_getValue("IKG_DEEL_TOKEN", null) && autopilotPrefs().deel && !deelHunt && !isDeelHuntCoolingDown()) {
             IkgLog.info("Missing Deel token on focus. Snatching silently...");
             ensureDeelToken();
           }
@@ -2639,19 +3017,24 @@
     const workedInEventHrs = Math.min(schedule.eventCredit, IkgWorkRules.eventOverlapHrs(eventWindows, inHour, outHour));
     const baselineHrs = targetHrs + ptoCredit;
     const effectiveHrs = isFullPTO ? IkgWorkRules.GROSS_SHIFT_HRS : safeFloat(Math.max(0, actualHrs - workedInEventHrs) + ptoCredit);
-    const flexHrs = (isWorkingDay && !isToday && !isYesterdayGrace && !isIgnored) 
+    const eventJudgement = isRestDay || isFullPTO || isWfhExcluded ? null : IkgWorkRules.judgeEventDay({ events, shift, schedule, inHour, outHour });
+    const isEventDay = !!eventJudgement?.isEventDay;
+    const eventVerdict = isEventDay ? eventJudgement.verdict : null;
+    const flexHrs = (isWorkingDay && !isToday && !isYesterdayGrace && !isIgnored && !isEventDay)
       ? safeFloat(effectiveHrs - baselineHrs) 
       : 0;
 
-    const grade = isWfhExcluded ? { label: "wfh-excluded" } : IkgWorkRules.gradeDay({ effectiveHrs, baselineHrs, isToday, isYesterdayGrace });
+    const grade = isWfhExcluded ? { label: "wfh-excluded" }
+      : isEventDay && !isToday ? { label: "event" }
+      : IkgWorkRules.gradeDay({ effectiveHrs, baselineHrs, isToday, isYesterdayGrace });
     const pendingPTO = summarizePendingPTO(note?.pendingPTO);
     const isPastWorkday = !isRestDay && !isToday && !isFuture && !isYesterdayGrace && !!firstDataDate && dateStr >= firstDataDate;
     const needsReason = isPastWorkday && !isIgnored && !isWfhExcluded && !isFullPTO && schedule.mode !== "event-full"
-      && (grade.label === "deficit" || (hasNoPunches && ptoHrs === 0));
+      && (isEventDay ? eventVerdict !== "pass" : grade.label === "deficit" || (hasNoPunches && ptoHrs === 0));
     const shortfall = needsReason
       ? IkgWorkRules.explainShortfall({
           isSynced: record !== undefined, inHour, outHour, corrections: record?.corrections || [], pendingPTO,
-          schedule, shift, events, shortByHrs: Math.max(0, baselineHrs - effectiveHrs),
+          schedule, shift, events, shortByHrs: Math.max(0, baselineHrs - effectiveHrs), eventVerdict,
         })
       : null;
 
@@ -2666,7 +3049,8 @@
       isFullPTO, isPartialPTO, ptoHrs, ptoType, isIgnored, isWFH, 
       actualHrs, effStart, effEnd, effectiveHrs, targetHrs, ptoCredit, baselineHrs, flexHrs, 
       isWorkingDay, isPublicHoliday, holidayName, status: dayStatus, grade,
-      isGoalMet: IkgWorkRules.isGoalMet(effectiveHrs),
+      isGoalMet: isEventDay && !isToday ? eventVerdict === "pass" : IkgWorkRules.isGoalMet(effectiveHrs),
+      isEventDay, eventVerdict, isWeekend, isRestDay, isToday, dateStr,
       shift, schedule,
       ptoWindowLabel: schedule.windows.map(IkgWorkRules.formatWindow).join(", "),
       ptoDescription: note?.rawDescription || "",
@@ -2779,6 +3163,7 @@
         surplus: "#10B981",
         overachiever: "#059669",
         "wfh-excluded": "var(--text-muted)",
+        event: "var(--primary)",
       });
       const toneColor = (grade) => TONE_COLORS[grade?.label] || TONE_COLORS.none;
       const goalColor = (isGoalMet) => (isGoalMet ? "var(--success)" : "var(--danger)");
@@ -2829,6 +3214,20 @@
         return headerPillHtml("pending", `⏳ ${IkgWorkRules.ptoIconsOf(pendingPTO.type)} ${IkgWorkRules.formatAmount(pendingPTO.hours)}h`, tip.filter(Boolean).join("\n"));
       };
       const fullPtoLabel = (ptoType) => `${IkgWorkRules.ptoIconsOf(ptoType)} ${ptoType.split(" + ").map(ptoShortLabel).join(" + ")}`;
+
+      const calendarVisual = (evalDay) => {
+        const marks = [
+          evalDay.isPartialPTO ? IkgWorkRules.ptoIconsOf(evalDay.ptoType) : "",
+          evalDay.isWFH && !evalDay.isWfhExcluded ? "🏠" : "",
+          evalDay.events?.length ? "🎉" : "",
+          evalDay.pendingPTO ? "⏳" : "",
+        ].filter(Boolean).join("");
+        const base = { marks, ptoStripe: evalDay.isPartialPTO, pending: !!evalDay.pendingPTO, muted: false };
+        if (evalDay.isIgnored) return { ...base, fill: "var(--border)", muted: true, text: "⚠️" };
+        if (evalDay.isWfhExcluded) return { ...base, fill: "var(--bg-elevated)", muted: true, text: "🏠" };
+        if (evalDay.isFullPTO) return { ...base, fill: "var(--pto)", ptoStripe: false, marks: "", text: IkgWorkRules.ptoIconsOf(evalDay.ptoType) };
+        return { ...base, fill: toneColor(evalDay.grade), text: "" };
+      };
 
       const decToHHMM = (dec) => IkgWorkRules.formatWindow({ start: dec, end: 0 }).split("–")[0];
       const eventRuleText = (e) => {
@@ -2907,7 +3306,8 @@
         ctx.font = "11px sans-serif";
         ctx.textAlign = "right";
         ctx.textBaseline = "middle";
-        for (let i = 0; i <= maxVal; i += 2) {
+        const tickStep = maxVal > 30 ? 10 : 2;
+        for (let i = 0; i <= maxVal; i += tickStep) {
           const y = padTop + chartH - (i / maxVal) * chartH;
           ctx.fillText(i, padLeft - 10, y);
           ctx.beginPath();
@@ -2919,6 +3319,7 @@
 
         const spacing = chartW / dataItems.length;
         const barW = Math.min(spacing * 0.8, 40);
+        const labelEvery = Math.max(1, Math.ceil(18 / spacing));
         ctx.textAlign = "center";
 
         dataItems.forEach((item, i) => {
@@ -2963,23 +3364,39 @@
             ctx.fill();
           }
 
+          if (item.pending) {
+            ctx.save();
+            ctx.setLineDash([3, 2]);
+            ctx.strokeStyle = "#8B5CF6";
+            ctx.strokeRect(x - barW / 2, yBase - Math.max(actualBarH + ptoBarH, 6), barW, Math.max(actualBarH + ptoBarH, 6));
+            ctx.restore();
+          }
+
           const totalVal = item.effectiveHrs;
-          if (totalVal > 0) {
+          if (totalVal > 0 && spacing >= 24) {
             ctx.fillStyle = item.isIgnored ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.9)";
             ctx.font = "bold 10px sans-serif";
             ctx.textBaseline = "bottom";
             ctx.fillText(totalVal.toFixed(1), x, yBase - actualBarH - ptoBarH - 4);
           }
+          if (item.marks && spacing >= 14) {
+            ctx.font = "10px sans-serif";
+            ctx.textBaseline = "bottom";
+            ctx.fillText(item.marks, x, yBase - actualBarH - ptoBarH - (totalVal > 0 ? 18 : 4));
+          }
 
-          ctx.fillStyle = "#94A3B8";
-          ctx.font = "11px sans-serif";
-          ctx.textBaseline = "middle";
-          ctx.textAlign = "right";
-          ctx.save();
-          ctx.translate(x, padTop + chartH + 16);
-          ctx.rotate(-Math.PI / 4);
-          ctx.fillText(labels[i], 0, 0);
-          ctx.restore();
+          if (i % labelEvery === 0) {
+            ctx.fillStyle = "#94A3B8";
+            ctx.font = "11px sans-serif";
+            ctx.textBaseline = "middle";
+            ctx.textAlign = "right";
+            ctx.save();
+            ctx.translate(x, padTop + chartH + 16);
+            ctx.rotate(-Math.PI / 4);
+            ctx.fillText(labels[i], 0, 0);
+            ctx.restore();
+          }
+          ctx.textAlign = "center";
         });
 
         let tooltip = document.getElementById("ikg-chart-tooltip");
@@ -3035,6 +3452,12 @@
             }
             if (item.pto > 0) text += ptoDetailHtml(item);
 
+            if (item.isWeek) {
+              text += `
+                <div style="text-align:center; font-size:14px;" title="Target">🎯</div>
+                <div style="color:var(--text-muted);">target <b>${item.baselineHrs.toFixed(2)}h</b> · ${item.days} day(s)</div>
+              `;
+            }
             if (totalHrs > 0) {
               text += `<div style="grid-column: 1 / -1; margin: 4px 0; border-top: 1px dashed var(--border);"></div>`;
               text += `
@@ -3166,6 +3589,31 @@
             .ikg-popup-modal { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.95); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 16px; padding: 24px; box-shadow: 0 24px 48px rgba(0,0,0,0.9); z-index: 100; display: none; opacity: 0; transition: all 0.2s ease; }
             .ikg-popup-modal.open { display: block; opacity: 1; transform: translate(-50%, -50%) scale(1); }
             #ikg-day-modal { width: 320px; }
+            #ikg-net-modal { width: min(820px, 92%); max-height: 86%; overflow-y: auto; }
+            #ikg-sound-modal { width: min(380px, 92%); z-index: 102; }
+            #ikg-sound-overlay { z-index: 101; }
+            .snd-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+            .snd-actions > button { margin: 0; padding: 12px; font-size: 13px; }
+            .snd-keep { all: unset; display: block; margin: 12px auto 0; font-size: 12px; color: var(--text-muted); cursor: pointer; text-decoration: underline; }
+            .snd-keep:hover, .snd-keep:focus-visible { color: var(--text-main); }
+            .ikg-net-explain { all: unset; cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; border-radius: 4px; border: 1px solid var(--border); }
+            .ikg-net-explain:hover, .ikg-net-explain:focus-visible { border-color: var(--primary); }
+            .nl-formula { font-size: 14px; font-weight: 600; color: var(--text-main); margin-bottom: 4px; }
+            .nl-split { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+            .pos { color: var(--success); } .neg { color: var(--danger); }
+            .nl-chart { width: 100%; height: auto; display: block; margin-bottom: 12px; }
+            .nl-empty { color: var(--text-muted); font-size: 13px; padding: 16px 0; }
+            .nl-tape { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; border-top: 1px solid var(--border); }
+            .nl-row { display: grid; grid-template-columns: 92px 1fr 90px 90px; gap: 8px; padding: 5px 6px; border-bottom: 1px dashed var(--border); align-items: baseline; cursor: pointer; color: var(--text-main); }
+            .nl-row:hover, .nl-row.is-flash { background: var(--primary-glow); }
+            .nl-head, .nl-total { cursor: default; color: var(--text-muted); font-weight: 700; }
+            .nl-head:hover, .nl-total:hover { background: transparent; }
+            .nl-total { color: var(--text-main); border-bottom: none; border-top: 1px solid var(--border); }
+            .nl-run { text-align: right; border-left: 1px solid var(--border); padding-left: 8px; }
+            .nl-steps { grid-column: 2 / -1; color: var(--text-muted); font-size: 11px; white-space: pre-wrap; padding: 2px 0 2px 8px; border-left: 2px solid var(--pto); }
+            .nl-excluded { margin-top: 12px; font-size: 12px; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px; }
+            .nl-excluded summary { cursor: pointer; color: var(--text-main); font-weight: 600; }
+            .nl-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
             .modal-overlay { position: absolute; top:0; left:0; right:0; bottom:0; background: rgba(0,0,0,0.5); backdrop-filter: blur(2px); z-index: 99; display: none; }
             .modal-overlay.open { display: block; }
             .dm-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; color: var(--text-main); display:flex; justify-content:space-between; align-items:center;}
@@ -3266,34 +3714,40 @@
             .ikg-canvas-container { flex: 1; position: relative; width: 100%; height: 100%; min-height: 0; }
             .ikg-canvas-container canvas { width: 100% !important; height: 100% !important; display: block; }
 
-            #ikg-heatmap-wrapper { display: none; height: 100%; width: 100%; flex-direction: column; gap: 4px; overflow-x: hidden; padding-bottom: 8px; align-items: center;}
-            #ikg-heatmap-months { position: relative; height: 16px; margin-left: 36px; width: 100%; max-width: 100%; }
-            .hm-layout { display: flex; flex: 1; min-height: 0; gap: 8px; width: 100%; max-width: 100%; justify-content: center; }
-            .hm-y-axis { display: grid; grid-template-rows: repeat(7, 1fr); gap: 4px; font-size: 10px; color: var(--text-muted); width: 28px; padding-right: 6px; text-align: right; }
-            #ikg-heatmap-grid { display: grid; grid-template-rows: repeat(7, 1fr); grid-auto-flow: column; gap: 4px; flex: 1; align-content: stretch; width: 100%; justify-content: center; }
-
+            #ikg-heatmap-wrapper { display: none; height: 100%; width: 100%; flex-direction: column; gap: 8px; min-height: 0; --hm-cell: 34px; }
+            .hm-scroller { flex: 1; min-height: 0; overflow-x: auto; overflow-y: auto; padding-bottom: 6px; scrollbar-width: thin; }
+            .hm-scroller::-webkit-scrollbar { height: 6px; width: 6px; }
+            .hm-scroller::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+            .hm-inner { display: flex; gap: 6px; width: max-content; min-width: 100%; }
+            .hm-y-axis { position: sticky; left: 0; z-index: 2; background: var(--bg-surface); display: grid; grid-template-rows: 16px repeat(7, var(--hm-cell)); gap: 4px; font-size: 10px; color: var(--text-muted); width: 30px; padding-right: 4px; text-align: right; align-items: center; }
+            .hm-body { display: flex; flex-direction: column; gap: 4px; }
+            #ikg-heatmap-months { display: grid; grid-auto-flow: column; grid-auto-columns: var(--hm-cell); gap: 4px; height: 16px; font-size: 11px; color: var(--text-muted); font-weight: 500; white-space: nowrap; }
+            #ikg-heatmap-months .hm-year { color: var(--text-main); font-weight: 700; border-left: 2px solid var(--text-muted); padding-left: 3px; }
+            #ikg-heatmap-grid { display: grid; grid-template-rows: repeat(7, var(--hm-cell)); grid-auto-flow: column; grid-auto-columns: var(--hm-cell); gap: 4px; }
             .ikg-heat-sq {
-                position: relative;
-                border-radius: 4px; width: 100%; height: 100%; min-width: 0; min-height: 0;
+                position: relative; box-sizing: border-box;
+                border-radius: 4px; width: var(--hm-cell); height: var(--hm-cell);
                 cursor: pointer; transition: transform 0.1s; display: flex; align-items: center; justify-content: center;
-                font-size: clamp(8px, 1.2vw, 12px); font-weight: 700; color: rgba(255,255,255,0.95); user-select: none;
-                overflow: hidden;
+                font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.95); user-select: none; overflow: hidden;
             }
-            #ikg-heatmap-wrapper::-webkit-scrollbar { height: 6px; }
-            #ikg-heatmap-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-            .ikg-heat-sq {
-                position: relative;
-                border-radius: 4px; width: 100%; height: 100%; min-width: 32px; min-height: 32px;
-                cursor: pointer; transition: transform 0.1s; display: flex; align-items: center; justify-content: center;
-                font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.95); user-select: none;
-            }
+            .ikg-heat-sq:hover { transform: scale(1.08); z-index: 1; }
+            .ikg-heat-sq.is-rest { opacity: 0.35; }
+            .ikg-heat-sq.is-norecord { background: repeating-linear-gradient(45deg, var(--bg-elevated) 0 4px, transparent 4px 8px) !important; color: var(--text-muted); }
+            .ikg-heat-sq.is-hidden { visibility: hidden; pointer-events: none; }
+            .ikg-heat-sq.has-pto-stripe::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--pto); }
+            .ikg-heat-sq.is-pending { outline: 1px dashed var(--pto); outline-offset: -1px; }
+            .ikg-heat-sq.is-muted { color: var(--text-muted); }
+            .heat-marks { position: absolute; top: 2px; right: 3px; font-size: 8px; line-height: 1; pointer-events: none; }
             .heat-date { position: absolute; top: 3px; left: 4px; font-size: 8px; color: rgba(255,255,255,0.6); font-weight: 600; pointer-events: none; transition: opacity 0.2s;}
-            @media (max-width: 1100px) {
-                .ikg-heat-sq { font-size: 10px; min-width: 24px; min-height: 24px; }
-                .heat-date { opacity: 0; }
-                .ikg-heat-sq:hover .heat-date { opacity: 1; }
-            }
+            .hm-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 11px; color: var(--text-muted); align-items: center; }
+            .hm-legend > span { display: inline-flex; align-items: center; gap: 5px; }
+            .hm-legend .ikg-heat-sq { --hm-cell: 14px; font-size: 7px; cursor: default; }
+            .hm-legend .ikg-heat-sq:hover { transform: none; }
+            .hm-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-muted); font-size: 13px; text-align: center; }
+            .hm-empty button { font: inherit; font-weight: 600; color: var(--primary); background: transparent; border: 1px solid var(--primary); border-radius: 8px; padding: 6px 14px; cursor: pointer; }
+            .hm-empty[hidden], .hm-scroller[hidden] { display: none; }
+            .hm-empty.is-syncing { animation: ikgHmPulse 1.4s ease-in-out infinite; }
+            @keyframes ikgHmPulse { 50% { opacity: 0.5; } }
             #view-audit { padding: 32px 48px; overflow-y: auto; background: var(--bg-surface); flex-direction: column;}
             .audit-table { width: 100%; border-collapse: collapse; margin-bottom: 32px; font-size: 13px; }
             .audit-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px;}
@@ -4168,6 +4622,112 @@
         chip.innerHTML = `<span class="ikg-focus-chip">🏝️ ${focus.label}${continues}<button type="button" data-pto-back="1">← Back to PTO</button></span>`;
       };
 
+      let lastCalendarMonth = { monthStr: "", rows: [] };
+
+      const LEDGER_REASON_LABELS = Object.freeze({
+        "full-pto": "Full-day leave (no effect)", weekend: "Weekend", holiday: "Public holiday", today: "Today (still in progress)",
+        "yesterday-lag": "Yesterday (checkout sync lags until 18:00)", ignored: "Ignored by you", "wfh-excluded": "WFH, not counted (Settings)",
+        event: "Event day (attendance only)", future: "Future", "no-punches": "No punches and no leave",
+      });
+
+      const ledgerChartSvg = (lines, rowsByDate, daysInMonth) => {
+        const points = lines.filter((l) => l.included);
+        if (!points.length) return "";
+        const W = 760, H = 180, padL = 58, padR = 12, padT = 12, padB = 24;
+        const axisLabel = (v) => {
+          const mins = Math.round(Math.abs(v) * 60);
+          const text = mins >= 60 ? `${Math.floor(mins / 60)}h${mins % 60 ? `${String(mins % 60).padStart(2, "0")}m` : ""}` : `${mins}m`;
+          return v > 0 ? `+${text}` : v < 0 ? `−${text}` : "0";
+        };
+        const values = [0, ...points.map((p) => p.runningNetHrs)];
+        const maxAbs = Math.max(1, ...values.map(Math.abs));
+        const x = (dateStr) => padL + ((Number(dateStr.slice(8)) - 1) / Math.max(1, daysInMonth - 1)) * (W - padL - padR);
+        const y = (v) => padT + ((maxAbs - v) / (2 * maxAbs)) * (H - padT - padB);
+        const zeroY = y(0);
+        const path = points.map((p, i) => `${i ? "L" : "M"}${x(p.dateStr).toFixed(1)},${y(p.runningNetHrs).toFixed(1)}`).join(" ");
+        const ringOf = (d) => (d.isPartialPTO ? "var(--pto)" : d.events?.length ? "var(--primary)" : d.isWFH ? "var(--primary)" : "transparent");
+        const dots = points.map((p) => {
+          const d = rowsByDate.get(p.dateStr);
+          const tip = `${p.dateStr} · ${formatDurFromDec(p.effectiveHrs, false)} − ${formatDurFromDec(p.baselineHrs, false)} = ${formatDurFromDec(p.flexHrs, true)} · running ${formatDurFromDec(p.runningNetHrs, true)}`;
+          return `<circle data-tape-date="${p.dateStr}" cx="${x(p.dateStr).toFixed(1)}" cy="${y(p.runningNetHrs).toFixed(1)}" r="4.5" fill="${p.flexHrs >= 0 ? "var(--success)" : "var(--danger)"}" stroke="${ringOf(d)}" stroke-width="2.5" style="cursor:pointer;"><title>${escapeAttr(tip)}</title></circle>`;
+        }).join("");
+        const ticks = [maxAbs, maxAbs / 2, 0, -maxAbs / 2, -maxAbs].map((v) =>
+          `<text x="${padL - 6}" y="${y(v) + 3}" text-anchor="end" font-size="10" fill="var(--text-muted)">${axisLabel(v)}</text>`).join("");
+        const dayTicks = [1, 8, 15, 22, daysInMonth].map((dNum) => {
+          const tx = padL + ((dNum - 1) / Math.max(1, daysInMonth - 1)) * (W - padL - padR);
+          return `<text x="${tx}" y="${H - 6}" text-anchor="middle" font-size="10" fill="var(--text-muted)">${dNum}</text>`;
+        }).join("");
+        return `<svg class="nl-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Running net balance by day">
+          <defs>
+            <clipPath id="nl-above"><rect x="0" y="0" width="${W}" height="${zeroY}"/></clipPath>
+            <clipPath id="nl-below"><rect x="0" y="${zeroY}" width="${W}" height="${H - zeroY}"/></clipPath>
+          </defs>
+          ${ticks}${dayTicks}
+          <line x1="${padL}" x2="${W - padR}" y1="${zeroY}" y2="${zeroY}" stroke="var(--border)" stroke-dasharray="4 3"/>
+          <path d="${path}" fill="none" stroke="var(--success)" stroke-width="2" clip-path="url(#nl-above)"/>
+          <path d="${path}" fill="none" stroke="var(--danger)" stroke-width="2" clip-path="url(#nl-below)"/>
+          ${dots}
+        </svg>`;
+      };
+
+      const ledgerRowHtml = (line, d) => {
+        const fmt = (h) => formatDurFromDec(h, false);
+        const parts = [
+          line.officeHrs ? `🏢 ${fmt(line.officeHrs)}` : "",
+          line.wfhHrs ? `🏠 ${fmt(line.wfhHrs)}` : "",
+          line.ptoCreditHrs ? `🏝️ ${fmt(line.ptoCreditHrs)}` : "",
+          line.eventCreditHrs ? `🎉 ${fmt(line.eventCreditHrs)}` : "",
+        ].filter(Boolean);
+        const worked = parts.length ? parts.join(" + ") : "0m";
+        const needsSteps = d.isPartialPTO || d.events?.length || d.schedule?.mode === "event-full";
+        const steps = needsSteps ? IkgWorkRules.explainDayTarget({ ...d, isEventDay: d.isEventDay }).steps : [];
+        const flexClass = line.flexHrs > 0 ? "pos" : line.flexHrs < 0 ? "neg" : "";
+        return `<div class="nl-row" data-date="${line.dateStr}">
+            <span>${formatYmd(line.dateStr)} ${new Date(`${line.dateStr}T00:00:00`).toLocaleDateString("en-US", { weekday: "short" })}${d.isSpoofed ? " ✏️" : ""}</span>
+            <span>${worked} − ${fmt(line.baselineHrs)}</span>
+            <span class="nl-flex ${flexClass}">= ${formatDurFromDec(line.flexHrs, true)}</span>
+            <span class="nl-run">${formatDurFromDec(line.runningNetHrs, true)}</span>
+            ${steps.length ? `<div class="nl-steps">${steps.map(escapeAttr).join("\n")}</div>` : ""}
+          </div>`;
+      };
+
+      const ledgerCsv = (lines) =>
+        [["date", "reason", "office_h", "wfh_h", "pto_credit_h", "event_credit_h", "effective_h", "target_h", "flex_h", "running_net_h"].join(","),
+          ...lines.map((l) => [l.dateStr, l.reason, l.officeHrs, l.wfhHrs, l.ptoCreditHrs, l.eventCreditHrs, l.effectiveHrs, l.baselineHrs, l.flexHrs, l.included ? l.runningNetHrs : ""].join(","))].join("\n");
+
+      const renderNetLedger = () => {
+        const body = document.getElementById("nl-body");
+        const title = document.getElementById("nl-title");
+        if (!body) return;
+        const { monthStr, rows } = lastCalendarMonth;
+        const [y, m] = monthStr.split("-").map(Number);
+        title.textContent = `🧮 How ${new Date(y, m - 1, 1).toLocaleString("default", { month: "long", year: "numeric" })} Net Balance is calculated`;
+        const { lines, totals } = IkgWorkRules.explainMonth(rows);
+        const rowsByDate = new Map(rows.map((r) => [r.dateStr, r]));
+        const counted = lines.filter((l) => l.included);
+        const fmt = (h) => formatDurFromDec(h, false);
+        const excludedLines = lines.filter((l) => !l.included);
+        const excludedHtml = Object.keys(LEDGER_REASON_LABELS)
+          .map((reason) => {
+            const dates = excludedLines.filter((l) => l.reason === reason).map((l) => formatYmd(l.dateStr));
+            return dates.length ? `<div><b>${LEDGER_REASON_LABELS[reason]}</b> (${dates.length}): ${dates.join(", ")}</div>` : "";
+          })
+          .join("");
+
+        body.innerHTML = `
+          <div class="nl-formula">Net = Σ Effective − Σ Target = ${fmt(totals.actualHrs)} − ${fmt(totals.targetHrs)} = <span class="${totals.netHrs >= 0 ? "pos" : "neg"}">${formatDurFromDec(totals.netHrs, true)}</span></div>
+          <div class="nl-split">Σ Effective = 🏢 office ${fmt(totals.officeHrs)} + 🏠 WFH ${fmt(totals.wfhHrs)} + 🏝️ PTO credit ${fmt(totals.ptoCreditHrs)} + 🎉 event credit ${fmt(totals.eventCreditHrs)}</div>
+          ${counted.length ? ledgerChartSvg(lines, rowsByDate, new Date(y, m, 0).getDate()) : `<div class="nl-empty">Nothing counted yet this month.</div>`}
+          <div class="nl-tape">
+            <div class="nl-row nl-head"><span>Day</span><span>worked + credit − target</span><span>± flex</span><span class="nl-run">running</span></div>
+            ${counted.map((l) => ledgerRowHtml(l, rowsByDate.get(l.dateStr))).join("")}
+            <div class="nl-row nl-total"><span></span><span>Net Balance</span><span></span><span class="nl-run ${totals.netHrs >= 0 ? "pos" : "neg"}">${formatDurFromDec(totals.netHrs, true)}</span></div>
+          </div>
+          ${excludedLines.length ? `<details class="nl-excluded"><summary>Not counted (${excludedLines.length} days)</summary>${excludedHtml}</details>` : ""}
+          <div class="nl-actions"><button type="button" class="ikg-btn-outline" id="nl-copy-csv" style="margin:0;">Copy as CSV</button></div>`;
+        body.dataset.csv = ledgerCsv(lines);
+      };
+
       const renderDayModalNotes = (dateStr) => {
         const el = document.getElementById("dm-day-notes");
         if (!el) return;
@@ -4180,6 +4740,9 @@
           evalDay.isFullPTO || evalDay.isPartialPTO ? note(IkgWorkRules.ptoIconsOf(evalDay.ptoType), `${evalDay.ptoType}${evalDay.isPartialPTO ? ` · ${evalDay.ptoHrs}h` : ""}`, [evalDay.ptoWindowLabel, evalDay.ptoDescription].filter(Boolean).join(" · "), "pto") : "",
           evalDay.pendingPTO ? note("⏳", `${evalDay.pendingPTO.type} · ${evalDay.pendingPTO.hours}h awaiting approval`, "Not counted until approved", "pto") : "",
           evalDay.isWfhExcluded ? note("🏠", "WFH · not counted", "Settings → Calculate WFH hours is off") : "",
+          (evalDay.isPartialPTO || evalDay.events.length) && !evalDay.isFullPTO
+            ? note("🎯", "How this day's target is set", IkgWorkRules.explainDayTarget(evalDay).steps.join(" · "))
+            : "",
         ].filter(Boolean);
         el.innerHTML = notes.join("");
         el.style.display = notes.length ? "flex" : "none";
@@ -4321,7 +4884,8 @@
             wfhOffHours = safeFloat(wfhOffHours + evalDay.rawActualHrs);
           }
 
-          monthRows.push({ ...evalDay, isCounted: evalDay.isWorkingDay && !isToday && !evalDay.isYesterdayGrace && !evalDay.isIgnored });
+          const countedReason = IkgWorkRules.countedReason({ ...evalDay, isToday });
+          monthRows.push({ ...evalDay, countedReason, isCounted: IkgWorkRules.isCountedReason(countedReason) });
 
           if (evalDay.isFuture && (evalDay.isFullPTO || evalDay.isPartialPTO)) {
             plannedPtoDays++;
@@ -4431,6 +4995,7 @@
         }
 
         const month = IkgWorkRules.summarizeMonth(monthRows);
+        lastCalendarMonth = { monthStr, rows: monthRows };
         monthWorkedDays = month.workedDays;
         monthFullPTODays = month.fullPtoDays;
         monthPartialPTODays = month.partialPtoDays;
@@ -4659,8 +5224,8 @@
         if (soundSelect) {
           soundSelect.value = settings.soundType;
           if (soundSelect.selectedIndex === -1) {
-            soundSelect.value = "pro_fkj";
-            settings.soundType = "pro_fkj";
+            soundSelect.value = DEFAULT_SOUND;
+            settings.soundType = DEFAULT_SOUND;
             localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
           }
         }
@@ -4817,6 +5382,117 @@
       }
 
     // --- ANALYTICS FIX ---
+      const HEATMAP_LEGEND_HTML = [
+        [`<span class="ikg-heat-sq" style="background:${TONE_COLORS.deficit}"></span><span class="ikg-heat-sq" style="background:${TONE_COLORS.acceptable}"></span><span class="ikg-heat-sq" style="background:${TONE_COLORS.surplus}"></span>`, "short · ok · surplus"],
+        [`<span class="ikg-heat-sq" style="background:var(--pto)"></span>`, "full leave"],
+        [`<span class="ikg-heat-sq has-pto-stripe" style="background:${TONE_COLORS.surplus}"></span>`, "partial leave"],
+        [`<span class="ikg-heat-sq is-pending" style="background:var(--bg-elevated)"></span>`, "leave awaiting approval"],
+        [`<span class="ikg-heat-sq" style="background:${TONE_COLORS.event}"></span>`, "🎉 event day (attendance only)"],
+        ["🏠", "WFH"],
+        [`<span class="ikg-heat-sq is-norecord"></span>`, "no record (older than the attendance system keeps)"],
+        [`<span class="ikg-heat-sq is-rest" style="background:var(--bg-elevated)"></span>`, "weekend / holiday"],
+      ].map(([swatch, label]) => `<span>${swatch} ${label}</span>`).join("");
+
+      let heatmapScrollKey = "";
+
+      const heatmapRangeEnd = (todayStr) => {
+        if (currentStatsRange === "MONTH" && currentStatsMonth) {
+          const [y, m] = currentStatsMonth.split("-").map(Number);
+          const monthEnd = toYMD(new Date(y, m, 0));
+          return monthEnd < todayStr ? monthEnd : todayStr;
+        }
+        if (currentStatsRange === "CUSTOM" && statsCalInstance?.rangeEnd) {
+          const end = toYMD(statsCalInstance.rangeEnd);
+          return end < todayStr ? end : todayStr;
+        }
+        return todayStr;
+      };
+
+      const heatmapEmptyHtml = () => {
+        if (isFetchingData) return "⏳ Syncing your attendance…";
+        if (!authToken) return "🔒 Waiting for sign-in…";
+        return `No working days in this range${currentStatsRange !== "ALL" ? `<button type="button" data-hm-show-all>Show all time</button>` : ""}`;
+      };
+
+      const heatmapCellHtml = (dStr, evalDay, { localCache, oldestRecordStr }) => {
+        const hidden = `<div class="ikg-heat-sq is-hidden"></div>`;
+        if (evalDay.isFuture && !evalDay.isFullPTO && !evalDay.isPartialPTO && !evalDay.pendingPTO) return hidden;
+        const isRest = (evalDay.isWeekend || evalDay.isPublicHoliday) && !(evalDay.actualHrs > 0) && !evalDay.isFullPTO;
+        const hasNoRecord = !isRest && !evalDay.isFullPTO && localCache[dStr] === undefined && dStr < oldestRecordStr;
+        const dayNum = `<div class="heat-date">${Number(dStr.slice(8))}</div>`;
+        if (isRest || hasNoRecord) {
+          const title = hasNoRecord ? `${dStr} · No record — older than the attendance system keeps` : `${dStr} · ${evalDay.holidayName || "Weekend"}`;
+          return `<div class="ikg-heat-sq ${isRest ? "is-rest" : "is-norecord"}" style="background:var(--bg-elevated);" title="${escapeAttr(title)}">${dayNum}</div>`;
+        }
+        const v = calendarVisual(evalDay);
+        const classes = ["ikg-heat-sq", v.muted ? "is-muted" : "", v.ptoStripe ? "has-pto-stripe" : "", v.pending ? "is-pending" : ""].filter(Boolean).join(" ");
+        const value = v.text || (evalDay.effectiveHrs > 0 ? evalDay.effectiveHrs.toFixed(1) : evalDay.status === "pending" ? "⌛" : "");
+        const marks = v.marks ? `<div class="heat-marks">${v.marks}</div>` : "";
+        return `<div class="${classes}" style="background:${v.fill};" data-date="${dStr}" data-jump="${dStr}">${dayNum}${marks}<div>${value}</div></div>`;
+      };
+
+      const renderHeatmap = ({ localCache, snapshot, filteredDates, todayStr }) => {
+        const wrapper = document.getElementById("ikg-heatmap-wrapper");
+        const scroller = document.getElementById("ikg-heatmap-scroller");
+        const grid = document.getElementById("ikg-heatmap-grid");
+        const months = document.getElementById("ikg-heatmap-months");
+        const empty = document.getElementById("ikg-heatmap-empty");
+        document.getElementById("ikg-heatmap-legend").innerHTML = HEATMAP_LEGEND_HTML;
+
+        if (!filteredDates.length) {
+          scroller.hidden = true;
+          empty.hidden = false;
+          empty.classList.toggle("is-syncing", isFetchingData);
+          empty.innerHTML = heatmapEmptyHtml();
+          return;
+        }
+        scroller.hidden = false;
+        empty.hidden = true;
+
+        const firstStr = filteredDates[0];
+        const rangeEnd = heatmapRangeEnd(todayStr);
+        const lastData = filteredDates[filteredDates.length - 1];
+        const lastStr = lastData > rangeEnd ? lastData : rangeEnd;
+        const columns = IkgWorkRules.weekColumns(firstStr, lastStr);
+        const layout = IkgWorkRules.heatmapLayout({ weeks: columns.length, availablePx: Math.max(0, scroller.clientWidth - 40) });
+        const heightCap = Math.floor((scroller.clientHeight - 16 - 4 - 6 * 4 - 8) / 7);
+        const fitsHeight = heightCap >= IkgWorkRules.HEATMAP_CELL_MIN;
+        const cellPx = !fitsHeight ? IkgWorkRules.HEATMAP_CELL_MIN
+          : layout.scrolls ? Math.min(IkgWorkRules.HEATMAP_CELL_MAX, heightCap)
+          : Math.min(layout.cellPx, heightCap);
+        wrapper.style.setProperty("--hm-cell", `${cellPx}px`);
+
+        const scrollKey = `${currentStatsRange}|${currentStatsMonth}|${firstStr}|${lastStr}`;
+        const wasAtEnd = scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 8;
+        const oldestRecordStr = toYMD(new Date(Date.now() - ATTENDANCE_API_WINDOW_DAYS * 86400000));
+        const spansYears = firstStr.slice(0, 4) !== lastStr.slice(0, 4);
+        const labels = [];
+        const cells = [];
+        columns.forEach((week, colIdx) => {
+          const labelDate = colIdx === 0 ? week.find((d) => d >= firstStr) || week[0] : week.find((d) => d.endsWith("-01"));
+          if (labelDate) {
+            const [y, m] = labelDate.split("-").map(Number);
+            const name = new Date(y, m - 1, 1).toLocaleString("default", { month: "short" });
+            const isYearMark = spansYears && (m === 1 || colIdx === 0);
+            labels.push(`<div class="${isYearMark ? "hm-year" : ""}">${name}${isYearMark ? ` '${String(y).slice(2)}` : ""}</div>`);
+          } else {
+            labels.push("<div></div>");
+          }
+          week.forEach((dStr) => {
+            if (dStr < firstStr || dStr > lastStr) cells.push(`<div class="ikg-heat-sq is-hidden"></div>`);
+            else cells.push(heatmapCellHtml(dStr, evaluateDay(IKG_DataStore.getDayContext(dStr, snapshot)), { localCache, oldestRecordStr }));
+          });
+        });
+        months.innerHTML = labels.join("");
+        grid.innerHTML = cells.join("");
+
+        if (scrollKey !== heatmapScrollKey || wasAtEnd) scroller.scrollLeft = scroller.scrollWidth;
+        heatmapScrollKey = scrollKey;
+      };
+
+      const WEEKLY_CHART_FROM_DAYS = 120;
+      const WEEK_ACCEPTABLE_SHORT_PER_DAY_HRS = IkgWorkRules.GROSS_SHIFT_HRS - IkgWorkRules.GRADE_THRESHOLDS.acceptable;
+
       async function renderAnalytics(localCache) {
         const targetY = currentStatsMonth ? parseInt(currentStatsMonth.split('-')[0], 10) : new Date().getFullYear();
         try { await ensureHolidaysSecured(targetY); } catch(e) { return; }
@@ -4852,6 +5528,9 @@
         } else if (currentStatsRange === "30D") {
           const cutoff = new Date(todayObj.getTime() - 29 * 86400000);
           filteredDates = allDates.filter((d) => new Date(d) >= cutoff);
+        } else if (currentStatsRange === "1Y") {
+          const cutoffStr = toYMD(new Date(todayObj.getFullYear() - 1, todayObj.getMonth(), todayObj.getDate() + 1));
+          filteredDates = allDates.filter((d) => d >= cutoffStr);
         } else if (currentStatsRange === "MONTH") {
           filteredDates = allDates.filter((d) => d.startsWith(currentStatsMonth));
         } else if (currentStatsRange === "CUSTOM") {
@@ -4879,33 +5558,12 @@
 
         const snapshot = IKG_DataStore.buildSnapshot();
 
+        const rangeRows = [];
         filteredDates.forEach((dateStr) => {
           const evalDay = evaluateDay(IKG_DataStore.getDayContext(dateStr, snapshot));
           const hrs = evalDay.actualHrs;
-          const isToday = dateStr === todayStr;
-
-          if (evalDay.isWorkingDay && !isToday) {
-            filterTotalDays++;
-            filterTotalHours = safeFloat(filterTotalHours + evalDay.effectiveHrs);
-            filterTargetHours = safeFloat(filterTargetHours + evalDay.targetHrs);
-            filterPTOHours = safeFloat(filterPTOHours + evalDay.ptoHrs);
-            
-            if (evalDay.isFullPTO) {
-                filterFullPTODays++;
-            } else {
-                if (evalDay.isPartialPTO) filterPartialPTODays++;
-                
-                if (evalDay.actualHrs > 0) {
-                    if (evalDay.isWFH) {
-                        filterWFHHours = safeFloat(filterWFHHours + evalDay.actualHrs);
-                        filterWFHDays++;
-                    } else {
-                        filterOfficeHours = safeFloat(filterOfficeHours + evalDay.actualHrs);
-                        filterOfficeDays++;
-                    }
-                }
-            }
-          }
+          const countedReason = IkgWorkRules.countedReason(evalDay);
+          rangeRows.push({ ...evalDay, countedReason, isCounted: IkgWorkRules.isCountedReason(countedReason) });
 
           if (!evalDay.isFullPTO && !evalDay.isIgnored && hrs > 0) {
             if (dateStr !== todayStr || evalDay.isGoalMet) {
@@ -4969,11 +5627,22 @@
         document.getElementById("habit-val-hrs-std").innerText = isNaN(getStdDev(shiftHrsArr, meanShift)) ? "--" : `±${formatDurFromDec(getStdDev(shiftHrsArr, meanShift), false)}`;
         document.getElementById("habit-val-hrs-range").innerText = isNaN(getRange(shiftHrsArr)) ? "--" : formatDurFromDec(getRange(shiftHrsArr), false);
 
-        filterTargetHours = safeFloat(filterTotalDays * IkgWorkRules.GROSS_SHIFT_HRS);
+        const rangeSummary = IkgWorkRules.summarizeMonth(rangeRows);
+        filterTotalDays = rangeSummary.workedDays;
+        filterTotalHours = rangeSummary.actualHrs;
+        filterTargetHours = rangeSummary.targetHrs;
+        filterFullPTODays = rangeSummary.fullPtoDays;
+        filterPartialPTODays = rangeSummary.partialPtoDays;
+        filterOfficeDays = rangeSummary.officeDays;
+        filterWFHDays = rangeSummary.wfhDays;
+        filterOfficeHours = rangeSummary.officeHrs;
+        filterWFHHours = rangeSummary.wfhHrs;
+        filterPTOHours = safeFloat(rangeSummary.ptoCreditHrs + rangeSummary.eventCreditHrs);
 
         const titleMap = {
           "7D": "Past 7 Working Days",
           "30D": "Past 30 Days",
+          "1Y": "Past 12 Months",
           MONTH: `${currentStatsMonth} Totals`,
           CUSTOM: "Custom Range Totals",
           ALL: "Lifetime System Stats",
@@ -5024,105 +5693,34 @@
         if (currentAnalyticsView === "GRID") {
           canvasContainer.style.display = "none";
           heatmapWrapper.style.display = "flex";
-          const heatmapGrid = document.getElementById("ikg-heatmap-grid");
-          const monthsContainer = document.getElementById("ikg-heatmap-months");
-          heatmapGrid.innerHTML = "";
-          monthsContainer.innerHTML = "";
-
-          if (filteredDates.length > 0) {
-            let start = new Date(filteredDates[0]);
-            let end = new Date(filteredDates[filteredDates.length - 1]);
-
-            start.setHours(0, 0, 0, 0);
-            start.setDate(start.getDate() - start.getDay());
-            end.setHours(0, 0, 0, 0);
-            end.setDate(end.getDate() + (6 - end.getDay()));
-
-            let maxEnd = new Date(todayObj);
-            maxEnd.setDate(maxEnd.getDate() + (6 - maxEnd.getDay()));
-            if (end > maxEnd) end = maxEnd;
-
-            const totalDays = Math.round((end - start) / 86400000) + 1;
-            const totalCols = totalDays / 7;
-
-            heatmapGrid.style.gridTemplateColumns = `repeat(${totalCols}, minmax(32px, 75px))`;
-
-            monthsContainer.style.display = "grid";
-            monthsContainer.style.gridTemplateColumns = `repeat(${totalCols}, minmax(32px, 75px))`;
-            monthsContainer.style.gap = "4px";
-
-            let curr = new Date(start);
-            let currentMonth = -1;
-            for (let c = 0; c < totalCols; c++) {
-              let isNewMonth = false;
-              let monthName = "";
-              for (let r = 0; r < 7; r++) {
-                const dStr = `${curr.getFullYear()}-${String(curr.getMonth() + 1).padStart(2, "0")}-${String(curr.getDate()).padStart(2, "0")}`;
-                if (curr.getMonth() !== currentMonth && curr.getDate() <= 7) {
-                  currentMonth = curr.getMonth();
-                  isNewMonth = true;
-                  monthName = curr.toLocaleString("default", { month: "short" });
-                }
-                
-                const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, snapshot));
-                const shortPto = evalDay.ptoType ? evalDay.ptoType.split(" - ")[0] : "PTO";
-
-                let color = "var(--bg-elevated)";
-                let title = dStr;
-                let pointerEvent = "";
-                let innerTxt = "";
-
-                if (curr > todayObj) {
-                  color = "transparent";
-                  title = "";
-                  pointerEvent = "pointer-events:none;";
-                } else if (evalDay.isIgnored) {
-                  color = "var(--border)";
-                  title = `${dStr} | Ignored`;
-                  innerTxt = "⚠️";
-                } else if (evalDay.status === "full-pto") {
-                  color = toneColor(evalDay.grade);
-                  title = `${dStr} | ${evalDay.ptoHrs}h ${shortPto}`;
-                  innerTxt = "PTO";
-                } else if (evalDay.actualHrs > 0) {
-                  color = toneColor(evalDay.grade);
-                  if (evalDay.isPartialPTO)
-                    title = `${dStr} | ${evalDay.effectiveHrs.toFixed(2)}h (${evalDay.actualHrs.toFixed(1)}h worked + ${evalDay.ptoHrs}h ${shortPto}${ptoCreditNote(evalDay)})`;
-                  else title = `${dStr} | ${evalDay.actualHrs.toFixed(2)}h worked`;
-
-                  if (evalDay.isSpoofed) title += " ⚠️(Override)";
-                  innerTxt = evalDay.effectiveHrs.toFixed(1);
-                } else if (evalDay.status === "pending") {
-                  color = toneColor(evalDay.grade);
-                  title += " | Pending";
-                  innerTxt = "⌛";
-                }
-
-                heatmapGrid.innerHTML += `
-                  <div class="ikg-heat-sq" style="background:${color}; ${pointerEvent}" data-date="${dStr}" data-jump="${dStr}">
-                      <div class="heat-date">${curr.getDate()}</div>
-                      <div>${innerTxt}</div>
-                  </div>`;
-                curr.setDate(curr.getDate() + 1);
-              }
-
-              if (isNewMonth) {
-                monthsContainer.innerHTML += `<div style="font-size:11px; color:var(--text-muted); font-weight:500;">${monthName}</div>`;
-              } else {
-                monthsContainer.innerHTML += `<div></div>`;
-              }
-            }
-          }
+          renderHeatmap({ localCache, snapshot, filteredDates, todayStr });
         } else {
           canvasContainer.style.display = "block";
           heatmapWrapper.style.display = "none";
           const dataItems = [];
           const labels = [];
-          
+
+          if (filteredDates.length > WEEKLY_CHART_FROM_DAYS) {
+            IkgWorkRules.bucketByWeek(rangeRows.filter((r) => r.isCounted)).forEach((w) => {
+              const shortHrs = w.baselineHrs - w.effectiveHrs;
+              const isGoalMet = shortHrs <= 0;
+              const weekTone = isGoalMet ? "surplus" : shortHrs <= WEEK_ACCEPTABLE_SHORT_PER_DAY_HRS * w.days ? "acceptable" : "deficit";
+              labels.push(`Wk ${Number(w.weekStart.slice(5, 7))}/${Number(w.weekStart.slice(8))}`);
+              dataItems.push({
+                dateStr: w.weekStart, isWeek: true, days: w.days, baselineHrs: w.baselineHrs,
+                val: w.actualHrs, pto: 0, ptoCredit: Math.max(0, safeFloat(w.effectiveHrs - w.actualHrs)), effectiveHrs: w.effectiveHrs,
+                isGoalMet, color: TONE_COLORS[weekTone], marks: "",
+              });
+            });
+            drawNativeChart("ikg-main-chart", labels, dataItems);
+            return;
+          }
+
           filteredDates.forEach((dStr) => {
             const d = new Date(dStr);
             const isDense = filteredDates.length > 60;
             const evalDay = evaluateDay(IKG_DataStore.getDayContext(dStr, snapshot));
+            const visual = calendarVisual(evalDay);
 
             labels.push(
               isDense
@@ -5140,7 +5738,9 @@
               isFullPTO: evalDay.isFullPTO,
               ptoWindowLabel: evalDay.ptoWindowLabel,
               ptoDescription: evalDay.ptoDescription,
-              color: toneColor(evalDay.grade),
+              color: evalDay.isFullPTO ? "var(--pto)" : visual.fill,
+              marks: visual.marks,
+              pending: visual.pending,
               isSpoofed: evalDay.isSpoofed,
               isIgnored: evalDay.isIgnored,
               isWFH: evalDay.isWFH,
@@ -5281,6 +5881,24 @@
                                     </div>
                                 </details>
 
+                                <div class="modal-overlay" id="ikg-net-overlay"></div>
+                                <div id="ikg-net-modal" class="ikg-popup-modal" role="dialog" aria-labelledby="nl-title">
+                                    <div class="dm-title"><span id="nl-title">🧮 Net Balance</span><span id="nl-close" style="cursor:pointer; font-size:20px;" aria-label="Close">&times;</span></div>
+                                    <div id="nl-body"></div>
+                                </div>
+
+                                <div class="modal-overlay" id="ikg-sound-overlay"></div>
+                                <div id="ikg-sound-modal" class="ikg-popup-modal" role="dialog" aria-labelledby="snd-title">
+                                    <div class="dm-title"><span id="snd-title">🎵 New default alarm</span></div>
+                                    <p style="margin:0 0 6px; font-size:15px; font-weight:700; color:var(--text-main);">Wendy Wander – 我想和你一起</p>
+                                    <p id="snd-body" style="margin:0 0 16px; font-size:13px; color:var(--text-muted); line-height:1.5;"></p>
+                                    <div class="snd-actions">
+                                        <button id="snd-preview" class="ikg-btn-outline" type="button" aria-pressed="false">▶ Preview</button>
+                                        <button id="snd-accept" class="dm-btn" type="button">Accept</button>
+                                    </div>
+                                    <button id="snd-keep" class="snd-keep" type="button">Keep my old sound</button>
+                                </div>
+
                                 <div class="day-modal-overlay"></div>
                                 <div id="ikg-day-modal" class="ikg-popup-modal">
                                     <div class="dm-title" id="dm-title-date">
@@ -5332,7 +5950,7 @@
                                     <div class="ikg-stat-row"><span>Actual Hours</span><span class="ikg-stat-val" id="side-val-actual">0h</span></div>
                                     <div class="ikg-stat-row"><span>Target Hours</span><span class="ikg-stat-val" id="side-val-target" style="color:var(--text-muted);">0h</span></div>
                                     <div class="ikg-stat-row" style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
-                                        <span>Net Balance</span><span class="ikg-stat-val" id="side-val-net">--</span>
+                                        <span style="display:inline-flex; align-items:center; gap:6px;">Net Balance <button type="button" id="ikg-net-explain" class="ikg-net-explain ikg-fast-tt no-dot" data-title="How is this calculated?">🧮</button></span><span class="ikg-stat-val" id="side-val-net">--</span>
                                     </div>
                                 </div>
                             </div>
@@ -5356,6 +5974,7 @@
                                                 <button class="ikg-filter-btn stats-filter" data-range="7D">7 Working Days</button>
                                                 <button class="ikg-filter-btn stats-filter active" data-range="30D">30D</button>
                                                 <select id="ikg-stats-month" class="ikg-filter-btn stats-filter ikg-month-select" data-range="MONTH"></select>
+                                                <button class="ikg-filter-btn stats-filter" data-range="1Y">1Y</button>
                                                 <button class="ikg-filter-btn stats-filter" data-range="ALL">All Time</button>
                                                 <button class="ikg-filter-btn stats-filter" data-range="CUSTOM">Custom</button>
                                             </div>
@@ -5370,13 +5989,19 @@
                                 </div> <div class="ikg-canvas-container"><canvas id="ikg-main-chart"></canvas></div>
 
                                 <div id="ikg-heatmap-wrapper">
-                                    <div id="ikg-heatmap-months"></div>
-                                    <div class="hm-layout">
-                                        <div class="hm-y-axis">
-                                            <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                                    <div class="hm-scroller" id="ikg-heatmap-scroller">
+                                        <div class="hm-inner">
+                                            <div class="hm-y-axis">
+                                                <div></div><div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                                            </div>
+                                            <div class="hm-body">
+                                                <div id="ikg-heatmap-months"></div>
+                                                <div id="ikg-heatmap-grid"></div>
+                                            </div>
                                         </div>
-                                        <div id="ikg-heatmap-grid"></div>
                                     </div>
+                                    <div class="hm-empty" id="ikg-heatmap-empty" hidden></div>
+                                    <div class="hm-legend" id="ikg-heatmap-legend"></div>
                                 </div>
 
                             </div>
@@ -5457,6 +6082,18 @@
                                 </div>
 
                                 <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; gap: 16px;">
+                                    <div class="ikg-card-title">Sign-in autopilot</div>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="set-autopilot-attendance" style="width:16px; height:16px; accent-color: var(--primary);">
+                                        <span>Attendance auto sign-in<br><small style="color:var(--text-muted); font-weight:400;">Clicks "Sign in with Google" and picks your @ikigai.team account when the session expires.</small></span>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="set-autopilot-deel" style="width:16px; height:16px; accent-color: var(--primary);">
+                                        <span>Deel auto sign-in<br><small style="color:var(--text-muted); font-weight:400;">Opens a background Deel tab to sign in for PTO sync. Off: log in to Deel yourself; PTO syncs once you do.</small></span>
+                                    </label>
+                                </div>
+
+                                <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column; gap: 16px;">
                                     <div class="ikg-card-title">General & Display</div>
                                     <label class="checkbox-label">
                                         <input type="checkbox" id="set-use-flex" style="width:16px; height:16px; accent-color: var(--primary);">
@@ -5532,7 +6169,8 @@
 
                                     <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
                                         <select id="set-sound" class="set-select" style="padding: 6px 8px; font-size: 12px; height: 32px;">
-                                            <option value="pro_fkj">🎹 FKJ - Just Piano (Def)</option>
+                                            <option value="pro_wendy">🎤 Wendy Wander - 我想和你一起 (Def)</option>
+                                            <option value="pro_fkj">🎹 FKJ - Just Piano</option>
                                             <option value="pro_misch">🎸 Tom Misch</option>
                                             <option value="chime">🔔 Joyful Chime</option>
                                             <option value="gentle">🌅 Gentle Wake</option>
@@ -5721,17 +6359,23 @@
           document.getElementById("audit-clear-end").style.display = "block";
         }
 
-        setTimeout(() => backdrop.classList.add("open"), 10);
+        setTimeout(() => {
+          backdrop.classList.add("open");
+          openAlarmSoundPrompt();
+        }, 10);
 
         fab.addEventListener("click", () => {
           IkgLog.debug("Modal opened.");
           backdrop.classList.add("open");
+          openAlarmSoundPrompt();
           renderCalendar();
           syncSpecialDays().then((changed) => changed && renderCalendar());
         });
         document.getElementById("ikg-close").addEventListener("click", () => {
           IkgLog.debug("Modal closed.");
           backdrop.classList.remove("open");
+          const preview = document.getElementById("snd-preview");
+          if (preview?.getAttribute("aria-pressed") === "true") preview.click();
         });
 
         backdrop.addEventListener(
@@ -5917,10 +6561,16 @@
             renderAudit(JSON.parse(localStorage.getItem(CACHE_KEY) || "{}"));
           });
 
+        let analyticsResizeTimer = null;
         window.addEventListener("resize", () => {
-          if (activeTab === "stats" && currentStatsRange !== "ALL") {
-            renderAnalytics(JSON.parse(localStorage.getItem(CACHE_KEY) || "{}"));
-          }
+          clearTimeout(analyticsResizeTimer);
+          analyticsResizeTimer = setTimeout(() => {
+            if (activeTab === "stats") renderAnalytics(JSON.parse(localStorage.getItem(CACHE_KEY) || "{}"));
+          }, 150);
+        });
+
+        document.getElementById("ikg-heatmap-empty")?.addEventListener("click", (e) => {
+          if (e.target.closest("[data-hm-show-all]")) document.querySelector('.stats-filter[data-range="ALL"]')?.click();
         });
 
         const smartMonthNavigate = () => {
@@ -5933,10 +6583,11 @@
             0,
           ).getDate();
           const todayStr = toYMD(new Date());
+          const oldestSyncableStr = toYMD(new Date(Date.now() - ATTENDANCE_API_WINDOW_DAYS * 86400000));
 
           for (let i = 1; i <= daysInViewMonth; i++) {
             const dateStr = `${viewPrefix}-${String(i).padStart(2, "0")}`;
-            if (dateStr <= todayStr && localCache[dateStr] === undefined) {
+            if (dateStr <= todayStr && dateStr >= oldestSyncableStr && localCache[dateStr] === undefined) {
               IkgLog.info(
                 `Uncached day detected (${dateStr}). Auto-triggering background sync.`,
               );
@@ -6080,6 +6731,41 @@
             if (gridTooltip) gridTooltip.style.opacity = "0";
           });
         }
+
+        const netModal = document.getElementById("ikg-net-modal");
+        const netOverlay = document.getElementById("ikg-net-overlay");
+        const closeNetLedger = () => {
+          netModal?.classList.remove("open");
+          netOverlay?.classList.remove("open");
+        };
+        document.getElementById("ikg-net-explain")?.addEventListener("click", () => {
+          renderNetLedger();
+          netModal?.classList.add("open");
+          netOverlay?.classList.add("open");
+        });
+        document.getElementById("nl-close")?.addEventListener("click", closeNetLedger);
+        netOverlay?.addEventListener("click", closeNetLedger);
+        netModal?.addEventListener("click", (e) => {
+          const point = e.target.closest("[data-tape-date]");
+          if (point) {
+            const row = netModal.querySelector(`.nl-row[data-date="${point.getAttribute("data-tape-date")}"]`);
+            row?.scrollIntoView({ block: "center", behavior: "smooth" });
+            row?.classList.add("is-flash");
+            setTimeout(() => row?.classList.remove("is-flash"), 1200);
+            return;
+          }
+          if (e.target.closest("#nl-copy-csv")) {
+            navigator.clipboard?.writeText(document.getElementById("nl-body")?.dataset.csv || "")
+              .then(() => updateHeaderStatus("📋 Ledger copied as CSV", "var(--primary)"))
+              .catch(() => updateHeaderStatus("❌ Clipboard blocked", "var(--danger)"));
+            return;
+          }
+          const row = e.target.closest(".nl-row[data-date]");
+          if (row) {
+            closeNetLedger();
+            document.querySelector(`#ikg-cal-grid .ikg-day[data-date="${row.getAttribute("data-date")}"]`)?.click();
+          }
+        });
 
         const dmOverlay = document.querySelector(".day-modal-overlay");
         // ==========================================
@@ -6276,6 +6962,16 @@
             renderCalendar();
           });
         }
+
+        [["set-autopilot-attendance", "attendance"], ["set-autopilot-deel", "deel"]].forEach(([id, key]) => {
+          const box = document.getElementById(id);
+          if (!box) return;
+          box.checked = autopilotPrefs()[key];
+          box.addEventListener("change", (e) => {
+            GM_setValue(AUTOPILOT_KEY, { ...autopilotPrefs(), [key]: e.target.checked });
+            IkgLog.info(`Autopilot ${key} sign-in ${e.target.checked ? "on" : "off"}`);
+          });
+        });
 
         dmOverlay.addEventListener("click", () => {
           dmOverlay.classList.remove("open");
@@ -6524,7 +7220,7 @@
           });
         }
 
-        const MAX_AWS_TTL_DATE = new Date(todayReal.getTime() - 90 * 86400000);
+        const MAX_AWS_TTL_DATE = new Date(todayReal.getTime() - ATTENDANCE_API_WINDOW_DAYS * 86400000);
         const MAX_AWS_TTL_STR = toYMD(MAX_AWS_TTL_DATE);
 
         // =========================================================================
@@ -6582,41 +7278,30 @@
         // =========================================================================
         // 🎯 TASK 3: Targeted WFH Sync (Fixed 12h/24h Time Parser for Sept 23)
         // =========================================================================
-        let gasFoundCount = 0;
         const WFH_ROUTINE_LIMIT = 7;
-        const runWfhSync = async () => {
-          syncStatus.wfh = "🔄";
-          updateSyncProgressUI();
+        const WFH_PARALLEL_DATES = 4;
+        const persistCache = () => localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
 
-          const gasData = await ensureGasToken();
-          if (!gasData || !gasData.token) {
-            syncStatus.wfh = "⚠️";
-            updateSyncProgressUI();
-            return;
-          }
+        const monthKey = (y, m) => `${y}-${String(m).padStart(2, "0")}`;
+        const prevMonthDate = new Date(todayReal.getFullYear(), todayReal.getMonth() - 1, 1);
+        const monthsToScan = [...new Set([
+          monthKey(todayReal.getFullYear(), todayReal.getMonth() + 1),
+          monthKey(prevMonthDate.getFullYear(), prevMonthDate.getMonth() + 1),
+          monthKey(currentViewYear, currentViewMonth),
+        ])];
+        const getWednesday = (d) => {
+          const date = new Date(d);
+          const day = date.getDay();
+          const diff = date.getDate() - day + (day === 0 ? -4 : 3);
+          return new Date(date.setDate(diff));
+        };
+        const currentWed = getWednesday(todayReal);
+        const lastWed = new Date(currentWed);
+        lastWed.setDate(lastWed.getDate() - 7);
+        const alwaysCheck = new Set([toYMD(currentWed), toYMD(lastWed), todayStr]);
 
-          localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
-
+        const pickWfhDates = () => {
           const wfhSnapshot = IKG_DataStore.buildSnapshot();
-          const monthKey = (y, m) => `${y}-${String(m).padStart(2, "0")}`;
-          const prevMonthDate = new Date(todayReal.getFullYear(), todayReal.getMonth() - 1, 1);
-          const monthsToScan = [...new Set([
-            monthKey(todayReal.getFullYear(), todayReal.getMonth() + 1),
-            monthKey(prevMonthDate.getFullYear(), prevMonthDate.getMonth() + 1),
-            monthKey(currentViewYear, currentViewMonth),
-          ])];
-
-          const getWednesday = (d) => {
-            const date = new Date(d);
-            const day = date.getDay();
-            const diff = date.getDate() - day + (day === 0 ? -4 : 3);
-            return new Date(date.setDate(diff));
-          };
-          const currentWed = getWednesday(todayReal);
-          const lastWed = new Date(currentWed);
-          lastWed.setDate(lastWed.getDate() - 7);
-          const alwaysCheck = new Set([toYMD(currentWed), toYMD(lastWed), todayStr]);
-
           const candidates = monthsToScan.flatMap((month) => {
             const [y, m] = month.split("-").map(Number);
             return Array.from({ length: new Date(y, m, 0).getDate() }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`)
@@ -6639,97 +7324,138 @@
               })
               .filter(Boolean);
           });
+          return IkgWorkRules.pickWfhSyncDates(candidates, { nowMs: Date.now(), limit: WFH_ROUTINE_LIMIT });
+        };
 
-          const { urgent, routine } = IkgWorkRules.pickWfhSyncDates(candidates, { nowMs: Date.now(), limit: WFH_ROUTINE_LIMIT });
-          const uniqueDates = [...urgent, ...routine];
+        const mergeGasDate = (dStr, gasRecords, requests) => {
+          const existing = localCache[dStr] || {};
+          const { punches, unknownRequests } = IkgWorkRules.classifyGasPunches(gasRecords, requests, dStr);
+          if (unknownRequests.length) IkgLog.warn(`[GAS] ${dStr} has correction requests of unknown type`, unknownRequests);
 
-          if (uniqueDates.length === 0) {
-            syncStatus.wfh = "✅";
-            updateSyncProgressUI();
-            return;
+          const hasOfficeFields = existing.officeIn !== undefined || existing.officeOut !== undefined;
+          const office = hasOfficeFields
+            ? { officeIn: existing.officeIn ?? null, officeOut: existing.officeOut ?? null }
+            : legacyOfficePunches(dStr, existing, punches);
+          const next = withResolvedPunches(dStr, {
+            ...existing, ...office, gasPunches: punches, gasSynced: true, gasSchemaVer: GAS_SCHEMA_VER, gasCheckedAt: Date.now(),
+          });
+          localCache[dStr] = next;
+
+          const describe = (rec) =>
+            `IN ${rec.startTime ? formatTime(rec.startTime) : "--"} | OUT ${rec.endTime ? formatTime(rec.endTime) : "--"}`;
+          const sourceLog = `in:${next.punchSources.in?.source ?? "-"} out:${next.punchSources.out?.source ?? "-"} wfh:${next.isWFH} fixes:${next.corrections.length}`;
+          const isChanged = describe(existing) !== describe(next) || !!existing.isWFH !== next.isWFH || (existing.corrections?.length ?? 0) !== next.corrections.length;
+
+          if (isChanged && !isForceRescan) {
+            if (!window.ikgUpdatedDates) window.ikgUpdatedDates = new Set();
+            window.ikgUpdatedDates.add(dStr);
+            IkgLog.info(`✨ GAS RECORD CHANGED [${dStr}]: ${describe(next)} (${next.workHours}h) | ${sourceLog}`);
+          } else {
+            IkgLog.debug(`🏠 GAS Merged [${dStr}]: ${describe(next)} (${next.workHours}h) | ${sourceLog}`);
           }
+        };
 
-          IkgLog.info(`⚡ Targeted WFH Sync: ${urgent.length} missing-attendance date(s) first, then ${routine.length} routine:`, { urgent, routine });
+        const nextMonthOf = (month) => {
+          const [y, m] = month.split("-").map(Number);
+          return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+        };
 
-          let completedCount = 0;
+        let gasData = null;
+        let gasRefreshed = false;
+        let wfhDone = 0;
+        let wfhTotal = 0;
+        const wfhAttempted = new Set();
 
+        const fetchWfhBatch = async (dates, batchGasData) => {
           const requestsByMonth = new Map();
-          const nextMonthOf = (month) => {
-            const [y, m] = month.split("-").map(Number);
-            return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
-          };
           const requestsFor = async (dateStr) => {
             const months = [dateStr.slice(0, 7), nextMonthOf(dateStr.slice(0, 7))];
             const lists = await Promise.all(
               months.map((month) => {
-                if (!requestsByMonth.has(month)) requestsByMonth.set(month, fetchGasRequests(month, gasData));
+                if (!requestsByMonth.has(month)) requestsByMonth.set(month, fetchGasRequests(month, batchGasData));
                 return requestsByMonth.get(month);
               }),
             );
             return lists.some((list) => list === null) ? null : lists.flat();
           };
+          const outcomes = await IkgWorkRules.mapPool(dates, WFH_PARALLEL_DATES, async (dStr) => {
+            const [gasRecords, requests] = await Promise.all([fetchGasRecords(dStr, batchGasData), requestsFor(dStr)]);
+            if (gasRecords === null || requests === null) return false;
+            mergeGasDate(dStr, gasRecords, requests);
+            wfhDone++;
+            syncStatus.wfh = `(${wfhDone}/${wfhTotal})`;
+            updateSyncProgressUI();
+            return true;
+          });
+          outcomes.filter((o) => !o.ok).forEach((o) => IkgLog.error("Error merging WFH date:", o.error));
+          return dates.filter((_, i) => !(outcomes[i].ok && outcomes[i].value));
+        };
 
-          for (const dStr of uniqueDates) {
-            try {
-              const [gasRecords, requests] = await Promise.all([fetchGasRecords(dStr, gasData), requestsFor(dStr)]);
-              if (gasRecords === null || requests === null) {
-                IkgLog.warn(`[GAS] ${dStr} skipped: ${gasRecords === null ? "records" : "correction requests"} unavailable, will retry next sync`);
-                continue;
-              }
-
-              const existing = localCache[dStr] || {};
-              const { punches, unknownRequests } = IkgWorkRules.classifyGasPunches(gasRecords, requests, dStr);
-              if (unknownRequests.length) IkgLog.warn(`[GAS] ${dStr} has correction requests of unknown type`, unknownRequests);
-
-              const hasOfficeFields = existing.officeIn !== undefined || existing.officeOut !== undefined;
-              const office = hasOfficeFields
-                ? { officeIn: existing.officeIn ?? null, officeOut: existing.officeOut ?? null }
-                : legacyOfficePunches(dStr, existing, punches);
-              const next = withResolvedPunches(dStr, {
-                ...existing, ...office, gasPunches: punches, gasSynced: true, gasSchemaVer: GAS_SCHEMA_VER, gasCheckedAt: Date.now(),
-              });
-              localCache[dStr] = next;
-
-              const describe = (rec) =>
-                `IN ${rec.startTime ? formatTime(rec.startTime) : "--"} | OUT ${rec.endTime ? formatTime(rec.endTime) : "--"}`;
-              const sourceLog = `in:${next.punchSources.in?.source ?? "-"} out:${next.punchSources.out?.source ?? "-"} wfh:${next.isWFH} fixes:${next.corrections.length}`;
-              const isChanged = describe(existing) !== describe(next) || !!existing.isWFH !== next.isWFH || (existing.corrections?.length ?? 0) !== next.corrections.length;
-
-              if (isChanged && !isForceRescan) {
-                if (!window.ikgUpdatedDates) window.ikgUpdatedDates = new Set();
-                window.ikgUpdatedDates.add(dStr);
-                gasFoundCount++;
-                IkgLog.info(`✨ GAS RECORD CHANGED [${dStr}]: ${describe(next)} (${next.workHours}h) | ${sourceLog}`);
-              } else {
-                IkgLog.debug(`🏠 GAS Merged [${dStr}]: ${describe(next)} (${next.workHours}h) | ${sourceLog}`);
-              }
-            } catch (e) {
-              IkgLog.error(`Error fetching WFH for ${dStr}:`, e);
-            } finally {
-              completedCount++;
-              syncStatus.wfh = `(${completedCount}/${uniqueDates.length})`;
-              updateSyncProgressUI();
-              if (completedCount === urgent.length && routine.length) {
-                localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
-                triggerUIRefresh();
-              }
+        const fetchWfhDates = async (dates) => {
+          const fresh = dates.filter((d) => !wfhAttempted.has(d));
+          if (!fresh.length || !gasData) return;
+          fresh.forEach((d) => wfhAttempted.add(d));
+          wfhTotal += fresh.length;
+          let failed = await fetchWfhBatch(fresh, gasData);
+          if (failed.length && !gasRefreshed) {
+            gasRefreshed = true;
+            const ageMs = gasTokenAgeMs(gasData);
+            IkgLog.warn(`[GAS] ${failed.length} date(s) failed with the cached WFH token${ageMs === null ? "" : ` (age ${Math.round(ageMs / 60000)} min)`}; refreshing it once`);
+            const refreshed = await ensureGasToken({ force: true });
+            if (refreshed?.token) {
+              gasData = refreshed;
+              failed = await fetchWfhBatch(failed, gasData);
             }
           }
+          failed.forEach((d) => IkgLog.warn(`[GAS] ${d} skipped, will retry next sync`));
+          persistCache();
+          triggerUIRefresh();
+        };
 
-          localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
+        const runWfhSync = async (gasTokenPromise, otherSourcesDone) => {
+          syncStatus.wfh = "🔄";
+          updateSyncProgressUI();
+
+          gasData = await gasTokenPromise;
+          if (!gasData || !gasData.token) {
+            syncStatus.wfh = "⚠️";
+            updateSyncProgressUI();
+            return;
+          }
+
+          const optimistic = pickWfhDates();
+          IkgLog.info(`⚡ WFH pass 1 (cached data): ${optimistic.urgent.length} missing-attendance date(s) first, then ${optimistic.routine.length} routine:`, optimistic);
+          await fetchWfhDates(optimistic.urgent);
+          await fetchWfhDates(optimistic.routine);
+
+          await otherSourcesDone.catch(() => null);
+          const confirmed = pickWfhDates();
+          const extra = [...confirmed.urgent, ...confirmed.routine].filter((d) => !wfhAttempted.has(d));
+          if (extra.length) IkgLog.info(`⚡ WFH pass 2 (fresh AWS + Deel): ${extra.length} more date(s):`, extra);
+          await fetchWfhDates(extra);
+
           syncStatus.wfh = "✅";
           updateSyncProgressUI();
-          triggerUIRefresh();
         };
 
         updateSyncProgressUI();
 
-        // 🎯 STEP 1: AWS & Deel PTO run in parallel, rendering UI as each finishes
+        const syncStartedAt = Date.now();
+        const sourceMs = {};
+        const timed = (name, task) => {
+          const startedAt = Date.now();
+          return Promise.resolve().then(task).finally(() => { sourceMs[name] = Date.now() - startedAt; });
+        };
         const runSpecialDaysSync = () => syncSpecialDays({ force: true }).then((changed) => changed && triggerUIRefresh());
-        await Promise.all([runAttendanceSync(), runDeelSync(), runSpecialDaysSync()]);
-
-        // 🎯 STEP 2: WFH runs with full cache & PTO awareness
-        await runWfhSync();
+        const gasTokenPromise = timed("wfhToken", () => ensureGasToken());
+        const otherSourcesDone = Promise.all([
+          timed("aws", runAttendanceSync),
+          timed("deel", runDeelSync),
+          timed("specialDays", runSpecialDaysSync),
+        ]);
+        await Promise.all([otherSourcesDone, timed("wfh", () => runWfhSync(gasTokenPromise, otherSourcesDone))]);
+        const syncSecs = ((Date.now() - syncStartedAt) / 1000).toFixed(1);
+        IkgLog.info(`⏱️ Sync finished in ${syncSecs}s`, sourceMs);
 
         localStorage.setItem(LAST_SYNC_KEY, nowMs.toString());
 
@@ -6745,11 +7471,11 @@
           ActiveGlowTracker.start(() => {
             if (window.ikgUpdatedDates) window.ikgUpdatedDates.clear();
             triggerUIRefresh();
-            updateHeaderStatus("✅ Synced", "var(--success)");
+            updateHeaderStatus(`✅ Synced in ${syncSecs}s`, "var(--success)");
             IkgLog.info("✨ Active 8-second viewing duration completed. Glow cleared.");
           });
         } else {
-          updateHeaderStatus("✅ Synced", "var(--success)");
+          updateHeaderStatus(`✅ Synced in ${syncSecs}s`, "var(--success)");
         }
 
       } catch (err) {
