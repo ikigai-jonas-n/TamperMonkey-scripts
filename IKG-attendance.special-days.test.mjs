@@ -219,6 +219,18 @@ describe("punctualityFlags", () => {
   test("the LATE detail names the on-time deadline", () => assert.match(flags({ inHour: 10.75 }).late.detail, /on time until 10:30/));
 });
 
+describe("leaveWorkedHrs", () => {
+  const eveningLeave = R.computeDaySchedule({ shift: DAY, ptoWindows: [{ start: 17, end: 18 }], ptoHrs: 1 });
+  const worked = (schedule, inHour, outHour, shift = DAY) => R.leaveWorkedHrs({ schedule, shift, inHour, outHour });
+  test("working until 18:00 through a 17:00–18:00 leave flags the full hour", () => assert.equal(worked(eveningLeave, 9, 18), 1));
+  test("leaving when the leave starts flags nothing", () => assert.equal(worked(eveningLeave, 9, 17), 0));
+  test("time after the shift end is not inside the leave", () => assert.equal(worked(eveningLeave, 9, 19), 1));
+  test("lunch inside a leave is never flagged", () => {
+    assert.equal(worked(R.computeDaySchedule({ shift: LATE, ptoWindows: [{ start: 10, end: 14 }], ptoHrs: 2.75 }), 10, 19, LATE), 2.75);
+  });
+  test("a day without a leave window flags nothing", () => assert.equal(worked(R.computeDaySchedule({ shift: DAY }), 9, 18), 0));
+});
+
 describe("uncountedPunchHrs", () => {
   const morningLeave = R.computeDaySchedule({ shift: LATE, ptoWindows: [{ start: 10, end: 11.75 }], ptoHrs: 1.75 });
   const afternoonLeave = R.computeDaySchedule({ shift: LATE, ptoWindows: [{ start: 13, end: 19 }], ptoHrs: 6 });

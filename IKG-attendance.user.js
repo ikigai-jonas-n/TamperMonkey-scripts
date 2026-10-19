@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.141] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.142] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.141
+    // @version      7.142
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1805,6 +1805,12 @@
           return round(intersectLength(blocked, { start: inHour, end: outHour }));
         };
 
+        const leaveWorkedHrs = ({ schedule, shift, inHour = null, outHour = null }) => {
+          if (schedule?.mode !== "window" || !shift || inHour == null || outHour == null || outHour <= inHour) return 0;
+          const leave = workIntervalsOf(shift).flatMap((w) => schedule.windows.map((l) => ({ start: Math.max(w.start, l.start), end: Math.min(w.end, l.end) }))).filter((i) => i.end > i.start);
+          return round(intersectLength(leave, { start: inHour, end: outHour }));
+        };
+
         const isLeftEarly = (schedule, outHour) =>
           outHour != null && earlyOutDeadline(schedule) != null && outHour <= earlyOutDeadline(schedule) + 1e-9;
         const punctualityFlags = ({ schedule, inHour = null, outHour = null, eventChecks = null, isToday = false }) => {
@@ -2148,7 +2154,7 @@
         return Object.freeze({
           GROSS_SHIFT_HRS, FULL_PTO_HRS, GRADE_THRESHOLDS, SHIFT_LABELS,
           HEATMAP_CELL_MIN, HEATMAP_CELL_MAX, HEATMAP_GAP_PX, MAX_HISTORY_WEEKS, HEATMAP_WIDTH_MIN, HEATMAP_WIDTH_DEFAULT, HEATMAP_WIDTH_MAX,
-          parseSpecialDays, eventWindowsFor, eventOverlapHrs, eventReleaseLabel, explainShortfall, judgeEventDay, punctualityFlags, uncountedPunchHrs, ptoKindOf, ptoIconsOf,
+          parseSpecialDays, eventWindowsFor, eventOverlapHrs, eventReleaseLabel, explainShortfall, judgeEventDay, punctualityFlags, uncountedPunchHrs, leaveWorkedHrs, ptoKindOf, ptoIconsOf,
           summarizeMonth, pickWfhSyncDates, countedReason, isCountedReason, explainMonth, explainDayTarget,
           heatmapLayout, ptoShareOf, weekColumns, bucketByPeriod, mapPool, withDeadline, gasRequestMonths, alarmTriggerAction, planAlarmSoundMigration,
           shiftFromLabel, resolveShift, resolveShiftFromHistory, parsePtoWindows, disambiguateWindows,
@@ -3203,6 +3209,7 @@
     const outHour = effEnd ? decimalHourOf(effEnd) : null;
     const uncountedHrs = isFullPTO || isWfhExcluded ? 0 : IkgWorkRules.uncountedPunchHrs({ schedule, shift, inHour, outHour });
     if (uncountedHrs > 0) actualHrs = safeFloat(Math.max(0, actualHrs - uncountedHrs));
+    const leaveWorkedHrs = isFullPTO || isWfhExcluded ? 0 : IkgWorkRules.leaveWorkedHrs({ schedule, shift, inHour, outHour });
     const workedInEventHrs = Math.min(schedule.eventCredit, IkgWorkRules.eventOverlapHrs(eventWindows, inHour, outHour));
     const baselineHrs = targetHrs + ptoCredit;
     const effectiveHrs = isFullPTO ? IkgWorkRules.GROSS_SHIFT_HRS : safeFloat(Math.max(0, actualHrs - workedInEventHrs) + ptoCredit);
@@ -3259,6 +3266,7 @@
       punctuality,
       toneGrade: punctuality.late || punctuality.early ? PUNCTUALITY_TONE : grade,
       uncountedHrs,
+      leaveWorkedHrs,
       punchSources: {
         in: isSpoofed && override?.manualIn ? null : record?.punchSources?.in ?? null,
         out: isSpoofed && override?.manualOut ? null : record?.punchSources?.out ?? null,
@@ -3418,6 +3426,7 @@
           evalDay.isWFH && !evalDay.isWfhExcluded ? "🏠" : "",
           evalDay.events?.length ? "🎉" : "",
           evalDay.pendingPTO ? "⏳" : "",
+          evalDay.leaveWorkedHrs > 0 ? LEAVE_WORKED_ICON : "",
         ].filter(Boolean).join("");
         const base = { marks, ptoShare: evalDay.isPartialPTO ? IkgWorkRules.ptoShareOf(evalDay) : 0, pending: !!evalDay.pendingPTO, muted: false };
         if (evalDay.isIgnored) return { ...base, fill: "var(--border)", muted: true, text: "⚠️" };
@@ -3454,6 +3463,12 @@
       const shortfallTip = ({ detail, action }) => escapeAttr([detail, action ? `→ ${action}` : ""].filter(Boolean).join("\n"));
       const PUNCTUALITY_CODES = new Set(["late-in", "left-early"]);
       const punctualityList = ({ punctuality }) => [punctuality?.late, punctuality?.early].filter(Boolean);
+      const LEAVE_WORKED_ICON = "👀";
+      const leaveWorkedTip = (evalDay) =>
+        `${IkgWorkRules.formatAmount(evalDay.leaveWorkedHrs)}h worked inside your leave ${evalDay.ptoWindowLabel} is still counted, on top of the leave credit.\nHR counts it today; that may change, so check before relying on it.`;
+      const leaveWorkedBadgeHtml = (evalDay) => evalDay.leaveWorkedHrs > 0
+        ? `<span class="ikg-attn-badge ikg-fast-tt no-dot" data-title="${escapeAttr(leaveWorkedTip(evalDay))}">${LEAVE_WORKED_ICON} ${IkgWorkRules.formatAmount(evalDay.leaveWorkedHrs)}h</span>`
+        : "";
       const shortfallBadgeHtml = ({ shortfall, punctuality }) => {
         const flags = punctualityList({ punctuality }).map((f) => `<span class="ikg-reason-badge ikg-fast-tt no-dot" data-title="${escapeAttr(f.detail)}">${f.badge}</span>`);
         const showShortfall = shortfall?.badge && !(PUNCTUALITY_CODES.has(shortfall.code) && flags.length);
@@ -4102,6 +4117,7 @@
         .ikg-pill--event { background: rgba(59, 130, 246, 0.1); color: var(--primary-hover); border: 1px solid var(--primary); padding: 1px 4px; }
         .ikg-pill--wfh-off { background: transparent; color: var(--text-muted); border: 1px solid var(--border); padding: 1px 4px; }
         .ikg-event-cell { background: rgba(59, 130, 246, 0.1) !important; color: var(--primary-hover) !important; border-color: var(--primary) !important; display: block; }
+        .ikg-attn-badge { display: inline-block; font-size: 9px; line-height: 12px; font-weight: 800; color: var(--warn); background: var(--warn-bg); border: 1px solid var(--warn); padding: 1px 4px; border-radius: 4px; white-space: nowrap; flex-shrink: 0; cursor: help; }
         .ikg-reason-badge { display: inline-block; font-size: 9px; line-height: 12px; font-weight: 800; letter-spacing: 0.4px; color: var(--danger); background: var(--danger-bg); border: 1px solid rgba(239, 68, 68, 0.55); padding: 1px 4px; border-radius: 4px; white-space: nowrap; flex-shrink: 0; cursor: help; }
         .ikg-reason-cell { margin-top: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-size: 10.5px; color: var(--text-muted); line-height: 1.3; }
         .ikg-wfh-off-line { font-size: 10px; color: var(--text-muted); font-weight: 500; text-align: right; margin-top: 2px; }
@@ -4118,6 +4134,7 @@
         .dm-day-notes { display: none; flex-direction: column; gap: 6px; margin-bottom: 12px; }
         .dm-note { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.4; color: var(--text-main); background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
         .dm-note div div { color: var(--text-muted); font-size: 11px; }
+        .dm-note--warn { border-color: var(--warn); background: var(--warn-bg); }
         .dm-note--bad { border-color: rgba(239, 68, 68, 0.5); background: var(--danger-bg); }
         .dm-note--event { border-color: rgba(59, 130, 246, 0.5); background: rgba(59, 130, 246, 0.08); }
         .dm-note--pto { border-color: rgba(139, 92, 246, 0.5); background: var(--pto-bg); }
@@ -4990,6 +5007,9 @@
           evalDay.uncountedHrs > 0 && evalDay.plannedWindow
             ? note("⏸️", `${formatDurFromDec(evalDay.uncountedHrs, false)} of meal break isn't counted`, `Your leave sets work to ${IkgWorkRules.formatWindow(evalDay.plannedWindow)}; punches during the meal break next to it don't add hours or flex.`)
             : "",
+          evalDay.leaveWorkedHrs > 0
+            ? note(LEAVE_WORKED_ICON, `${IkgWorkRules.formatAmount(evalDay.leaveWorkedHrs)}h worked inside your leave still counts`, `You punched during your leave ${evalDay.ptoWindowLabel}. It adds to hours and flex on top of the leave credit. HR counts it today; that may change, so check before relying on it.`, "warn")
+            : "",
           ...punctualityList(evalDay)
             .filter((f) => !(evalDay.shortfall && PUNCTUALITY_CODES.has(evalDay.shortfall.code) && evalDay.shortfall.badge === f.badge))
             .map((f) => note("⏰", `${f.badge} · ${f.detail}`, "", "bad")),
@@ -5222,7 +5242,7 @@
                     <div class="ikg-total-hrs" style="color:${toneColor(evalDay.toneGrade)}; width:100%; margin-bottom:4px; min-height:22px; display:flex; align-items:center; justify-content:space-between; gap:4px;">
                         <span class="ikg-fast-tt no-dot" data-title="${flexTooltip}">${shownHrs > 0 ? shownHrs.toFixed(2) + "h" : isToday ? "--.--h" : "0.00h"}</span>
                         <div style="display:flex; align-items:center; gap:3px; flex-wrap:nowrap; overflow:hidden; margin-left:auto;">
-                            ${pendingIcon} ${graceBadge} ${overrideBadge} ${ignoredBadge} ${shortfallBadgeHtml(evalDay)}
+                            ${pendingIcon} ${graceBadge} ${overrideBadge} ${ignoredBadge} ${shortfallBadgeHtml(evalDay)} ${leaveWorkedBadgeHtml(evalDay)}
                         </div>
                     </div>
                     <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">

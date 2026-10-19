@@ -15,7 +15,7 @@
 
 ## Time model
 - Shifts (9h gross): `09:00~18:00`, `09:30~18:30`, `10:00~19:00` → meal 11:45–13:00; `13:00~22:00` → meal 17:45–19:00. Shift = settings `manualShift`, else most frequent check-in bucket of that month, else of the nearest earlier month with check-ins (6 back), else 09:00.
-- Partial PTO with a parsed window: span = first-to-last remaining work minute of (shift − meal − PTO windows). Only the shift's meal break (lunch 11:45–13:00 for day shifts, dinner 17:45–19:00 for the night shift) outside that work window is not worked hours (`uncountedPunchHrs`, `evaluateDay().uncountedHrs`): leave 10–11:45 → clocking in 12:00 counts from 13:00. Time punched inside the leave itself counts. Without a window: legacy `9 − ptoHrs`.
+- Partial PTO with a parsed window: span = first-to-last remaining work minute of (shift − meal − PTO windows). Only the shift's meal break (lunch 11:45–13:00 for day shifts, dinner 17:45–19:00 for the night shift) outside that work window is not worked hours (`uncountedPunchHrs`, `evaluateDay().uncountedHrs`): leave 10–11:45 → clocking in 12:00 counts from 13:00. Time punched inside the leave itself counts, on top of the leave credit (HR counts it today; may change): `IkgWorkRules.leaveWorkedHrs` → `evaluateDay().leaveWorkedHrs`, shown as 👀 (`LEAVE_WORKED_ICON`) badge, grid mark and amber day-modal note. Without a window: legacy `9 − ptoHrs`.
 - Edge cases are the test titles in `IKG-attendance.work-rules.test.mjs` / `IKG-attendance.gas-punches.test.mjs` — add a row there before changing a rule.
 
 ## Punches: office vs WFH vs forgot-punch corrections
