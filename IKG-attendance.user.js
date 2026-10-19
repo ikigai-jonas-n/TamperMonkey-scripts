@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.143] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.144] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.143
+    // @version      7.144
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -26,10 +26,16 @@
     // @connect      date.nager.at
     // @connect      script.google.com
     // @run-at       document-start
+    // @noframes
     // ==/UserScript==
     
     (function () {
       "use strict";
+
+      const SSO_TRIGGER_WINDOW_MS = 60000;
+      const isUntriggeredGoogleAccounts = () =>
+        location.hostname === "accounts.google.com" && Date.now() - GM_getValue("IKG_SSO_TRIGGERED", 0) > SSO_TRIGGER_WINDOW_MS;
+      if (isUntriggeredGoogleAccounts()) return;
 
       // ==========================================
       // 0. STRUCTURED TELEMETRY ENGINE
@@ -171,7 +177,7 @@
         const lastSSOClick = GM_getValue("IKG_SSO_TRIGGERED", 0);
 
         // 🛡️ SECURITY: Only run if the Attendance portal triggered this within the last 60 seconds
-        if (Date.now() - lastSSOClick > 60000) {
+        if (Date.now() - lastSSOClick > SSO_TRIGGER_WINDOW_MS) {
           return; // Exit silently. Let the user use their normal Google accounts elsewhere.
         }
 

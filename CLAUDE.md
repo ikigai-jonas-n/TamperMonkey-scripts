@@ -53,6 +53,7 @@
 - GAS token: reused until a call fails (or it is >12h old by the `:ms` suffix); then one forced refresh per sync and one retry per failed date. `ensureGasToken` is single-flight.
 
 ## Login autopilot (Google / Deel)
+- Top frame only (`@noframes`): Google sites embed `accounts.google.com` iframes. On `accounts.google.com` the script returns before init unless the attendance page set `IKG_SSO_TRIGGERED` within `SSO_TRIGGER_WINDOW_MS` (60s).
 - Loop breaker = `IkgLoginGuard` between `// @@login-guard:start` / `:end` near the top (pure; tested by `IKG-attendance.login-guard.test.mjs`). `allowAutoLogin` caps auto-clicks at 2 per 5 min: Deel button via `IKG_DEEL_LOGIN_CLICKS`, Google account pick via `IKG_SSO_CLICKS`. Tripped → log `⛔ … paused`, user logs in manually.
 - Deel tab clicks the login button at most once per tab (`sessionStorage IKG_DEEL_AUTOCLICKED`), only after it stays visible 1.5s, never on an SSO callback URL (`isSsoCallbackUrl`).
 - Deel token sources, in order: storage `token`, `x-auth-token` header of Deel's own XHR/fetch (via `unsafeWindow`), cookies `token`/`auth-token`, any other storage JWT. `pickDeelToken` skips expired JWTs. The `Deel autopilot status` log lists source names only, never values.
