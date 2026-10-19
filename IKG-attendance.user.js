@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.138] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.139] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.138
+    // @version      7.139
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -466,8 +466,8 @@
         {
           id: "pro_wendy",
           name: "Wendy Wander - 我想和你一起",
-          url: "https://gist.githubusercontent.com/ikigai-jonas-n/7b0a0efcec645ab87ab73c0b3b038d0e/raw/50b42e7f0eabb3bdc4725547329c48d8ecb1d1d9/Wendy%20Wander%20-%20%E6%88%91%E6%83%B3%E5%92%8C%E4%BD%A0%E4%B8%80%E8%B5%B7%20(alarm).m4a",
-          ver: "1.0",
+          url: "https://gist.githubusercontent.com/ikigai-jonas-n/7b0a0efcec645ab87ab73c0b3b038d0e/raw/ef0237cabd34d453bda26a3a25957f43c652b253/Wendy%20Wander%20-%20%E6%88%91%E6%83%B3%E5%92%8C%E4%BD%A0%E4%B8%80%E8%B5%B7%20(alarm).m4a",
+          ver: "1.1",
         },
         {
           id: "pro_fkj",
