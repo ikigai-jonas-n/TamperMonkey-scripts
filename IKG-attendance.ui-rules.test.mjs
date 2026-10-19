@@ -11,22 +11,35 @@ const DAY = R.shiftFromLabel("09:00 ~ 18:00");
 const r6 = (n) => Math.round(n * 1e6) / 1e6;
 
 describe("heatmapLayout", () => {
-  test("3 weeks in 1200px fit without scrolling, cells capped at the max size", () => {
-    const l = R.heatmapLayout({ weeks: 3, availablePx: 1200 });
-    assert.deepEqual([l.scrolls, l.cellPx], [false, R.HEATMAP_CELL_MAX]);
+  test("few weeks stretch to fill the width, but never wider than the cell height", () => {
+    assert.deepEqual(R.heatmapLayout({ weeks: 3, availablePx: 1200, minWidthPx: 24, maxWidthPx: 70 }), { cellPx: 70, scrolls: false });
   });
-  test("weeks that fit only below the max stretch to fill the width", () => {
-    const l = R.heatmapLayout({ weeks: 25, availablePx: 1200 });
+  test("weeks that fit at the chosen width stretch to fill the pane", () => {
+    const l = R.heatmapLayout({ weeks: 25, availablePx: 1200, minWidthPx: 24, maxWidthPx: 96 });
     assert.equal(l.scrolls, false);
-    assert.ok(l.cellPx >= R.HEATMAP_CELL_MIN && l.cellPx < R.HEATMAP_CELL_MAX);
+    assert.ok(l.cellPx > 24 && l.cellPx < 96);
   });
-  test("60 weeks in 1200px use the minimum cell size and scroll", () => {
-    assert.deepEqual(R.heatmapLayout({ weeks: 60, availablePx: 1200 }), { cellPx: R.HEATMAP_CELL_MIN, scrolls: true });
+  test("too many weeks keep the chosen width and scroll", () => {
+    assert.deepEqual(R.heatmapLayout({ weeks: 60, availablePx: 1200, minWidthPx: 24, maxWidthPx: 70 }), { cellPx: 24, scrolls: true });
+  });
+  test("the default width packs 60 weeks into 1700px without scrolling", () => {
+    assert.equal(R.heatmapLayout({ weeks: 60, availablePx: 1700, maxWidthPx: 70 }).scrolls, false);
+  });
+  test("a chosen width outside the slider range is clamped", () => {
+    assert.equal(R.heatmapLayout({ weeks: 200, availablePx: 100, minWidthPx: 2 }).cellPx, R.HEATMAP_WIDTH_MIN);
+    assert.equal(R.heatmapLayout({ weeks: 200, availablePx: 100, minWidthPx: 500 }).cellPx, R.HEATMAP_WIDTH_MAX);
   });
   test("0 weeks or a hidden pane never divides by zero", () => {
     assert.equal(R.heatmapLayout({ weeks: 0, availablePx: 1200 }).scrolls, false);
-    assert.equal(R.heatmapLayout({ weeks: 10, availablePx: 0 }).cellPx, R.HEATMAP_CELL_MIN);
+    assert.equal(R.heatmapLayout({ weeks: 10, availablePx: 0 }).cellPx, R.HEATMAP_WIDTH_DEFAULT);
   });
+});
+
+describe("ptoShareOf", () => {
+  test("1h of leave on a 9h day still shows a quarter of the cell", () => assert.equal(R.ptoShareOf({ ptoCredit: 1, effectiveHrs: 9 }), 0.25));
+  test("a mostly-leave day shows at most three quarters", () => assert.equal(R.ptoShareOf({ ptoCredit: 8, effectiveHrs: 9 }), 0.75));
+  test("half leave shows half", () => assert.equal(R.ptoShareOf({ ptoCredit: 4.5, effectiveHrs: 9 }), 0.5));
+  test("no leave or no hours shows none", () => assert.deepEqual([R.ptoShareOf({ ptoCredit: 0, effectiveHrs: 9 }), R.ptoShareOf({ ptoCredit: 3, effectiveHrs: 0 })], [0, 0]));
 });
 
 describe("weekColumns", () => {
@@ -44,13 +57,17 @@ describe("weekColumns", () => {
   });
 });
 
-describe("bucketByWeek", () => {
+describe("bucketByPeriod", () => {
   const row = (dateStr, effectiveHrs, baselineHrs = 9) => ({ dateStr, effectiveHrs, baselineHrs, actualHrs: effectiveHrs });
   test("days group into Monday-start weeks across a month boundary", () => {
-    const weeks = R.bucketByWeek([row("2026-09-30", 9.5), row("2026-10-02", 8), row("2026-10-05", 9)]);
-    assert.deepEqual(weeks.map((w) => [w.weekStart, w.effectiveHrs, w.baselineHrs, w.days]), [["2026-09-28", 17.5, 18, 2], ["2026-10-05", 9, 9, 1]]);
+    const weeks = R.bucketByPeriod([row("2026-09-30", 9.5), row("2026-10-02", 8), row("2026-10-05", 9)], "week");
+    assert.deepEqual(weeks.map((w) => [w.periodStart, w.effectiveHrs, w.baselineHrs, w.days]), [["2026-09-28", 17.5, 18, 2], ["2026-10-05", 9, 9, 1]]);
   });
-  test("an empty list gives no weeks", () => assert.deepEqual(R.bucketByWeek([]), []));
+  test("days group into calendar months across a year boundary", () => {
+    const months = R.bucketByPeriod([row("2026-12-31", 9), row("2027-01-04", 8), row("2027-01-29", 10)], "month");
+    assert.deepEqual(months.map((m) => [m.periodStart, m.effectiveHrs, m.days]), [["2026-12-01", 9, 1], ["2027-01-01", 18, 2]]);
+  });
+  test("an empty list gives no periods", () => assert.deepEqual(R.bucketByPeriod([], "month"), []));
 });
 
 describe("mapPool", () => {
@@ -201,4 +218,30 @@ describe("planAlarmSoundMigration", () => {
   test("someone already on the new default is never prompted", () => assert.equal(plan(null, "pro_wendy").next.decided, true));
   test("a brand-new install without a saved sound counts as the default", () => assert.equal(plan(null, "").next.decided, true));
   test("unreadable stored state is treated as a first run", () => assert.equal(plan("{oops").apply, true));
+});
+
+describe("gasRequestMonths", () => {
+  test("a date in the current month fetches only its month, since next month has not started", () => {
+    assert.deepEqual(R.gasRequestMonths("2026-10-14", "2026-10-19"), ["2026-10"]);
+  });
+  test("a date in a past month also fetches the next month, where a late fix may be filed", () => {
+    assert.deepEqual(R.gasRequestMonths("2026-10-31", "2026-11-03"), ["2026-10", "2026-11"]);
+  });
+  test("December fetches January once January has started", () => {
+    assert.deepEqual(R.gasRequestMonths("2026-12-31", "2027-01-02"), ["2026-12", "2027-01"]);
+  });
+  test("a future date fetches nothing", () => assert.deepEqual(R.gasRequestMonths("2026-10-20", "2026-10-19"), []));
+  test("an invalid date fetches nothing", () => assert.deepEqual(R.gasRequestMonths("nope", "2026-10-19"), []));
+});
+
+describe("withDeadline", () => {
+  test("an on-time promise resolves with its value", async () => assert.equal(await R.withDeadline(Promise.resolve(7), 50, () => "late"), 7));
+  test("a promise that never settles resolves with the fallback after the deadline", async () => {
+    assert.equal(await R.withDeadline(new Promise(() => {}), 20, () => "late"), "late");
+  });
+  test("a rejected promise resolves instead of throwing", async () => assert.equal(await R.withDeadline(Promise.reject(new Error("x")), 50, () => "late"), undefined));
+  test("a value that arrives after the deadline is ignored", async () => {
+    const slow = new Promise((r) => setTimeout(() => r("slow"), 40));
+    assert.equal(await R.withDeadline(slow, 10, () => "late"), "late");
+  });
 });
