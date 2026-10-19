@@ -214,7 +214,7 @@ describe("punctualityFlags", () => {
   test("an early-release event day can only be LATE", () => assert.deepEqual(badges(flags({ inHour: 11, outHour: 15, eventChecks: "in" })), ["LATE", null]));
   test("a late-start event day can only be EARLY", () => assert.deepEqual(badges(flags({ inHour: 11, outHour: 15, eventChecks: "out" })), [null, "EARLY"]));
   test("an event day that checks nothing has no flags", () => assert.deepEqual(badges(flags({ inHour: 11, outHour: 15, eventChecks: "none" })), [null, null]));
-  test("today is never EARLY while the shift is still running", () => assert.deepEqual(badges(flags({ inHour: 11, outHour: 15, isToday: true })), ["LATE", null]));
+  test("today or a LAG day is never EARLY while the clock-out may still sync, but can be LATE", () => assert.deepEqual(badges(flags({ inHour: 11, outHour: 15, isClockOutPending: true })), ["LATE", null]));
   test("a full leave day has no flags", () => assert.deepEqual(badges(R.punctualityFlags({ schedule: R.computeDaySchedule({ shift: LATE, isFullPTO: true }), inHour: 11, outHour: 15 })), [null, null]));
   test("the LATE detail names the on-time deadline", () => assert.match(flags({ inHour: 10.75 }).late.detail, /on time until 10:30/));
 });

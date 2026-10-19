@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.142] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.143] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.142
+    // @version      7.143
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1813,12 +1813,12 @@
 
         const isLeftEarly = (schedule, outHour) =>
           outHour != null && earlyOutDeadline(schedule) != null && outHour <= earlyOutDeadline(schedule) + 1e-9;
-        const punctualityFlags = ({ schedule, inHour = null, outHour = null, eventChecks = null, isToday = false }) => {
+        const punctualityFlags = ({ schedule, inHour = null, outHour = null, eventChecks = null, isClockOutPending = false }) => {
           if (!schedule || schedule.mode === "event-full" || schedule.mode === "full" || eventChecks === "none") return Object.freeze({ late: null, early: null });
           const late = eventChecks !== "out" && isLateIn(schedule, inHour)
             ? Object.freeze({ badge: "LATE", detail: `Clocked in ${hhmm(inHour)} · on time until ${hhmm(lateInDeadline(schedule))}` })
             : null;
-          const early = !isToday && eventChecks !== "in" && isLeftEarly(schedule, outHour)
+          const early = !isClockOutPending && eventChecks !== "in" && isLeftEarly(schedule, outHour)
             ? Object.freeze({ badge: "EARLY", detail: `Clocked out ${hhmm(outHour)} · ${durLabel(schedule.earliestCheckout - outHour)} before ${hhmm(schedule.earliestCheckout)}` })
             : null;
           return Object.freeze({ late, early });
@@ -1971,6 +1971,10 @@
           return Object.freeze({ lines, totals: Object.freeze({ ...summarizeMonth(sorted), excluded: Object.freeze(excluded) }) });
         };
 
+        const EVENT_DAY_NOT_COUNTED = "Hours on event days are shown but not counted in Net Balance";
+        const eventCheckText = (checks, schedule) => checks === "in" ? `only your clock-in is checked (by ${hhmm(lateInDeadline(schedule))}, start + ${durLabel(PUNCTUALITY_GRACE_HRS)} grace)`
+          : checks === "out" ? `only your clock-out is checked (from ${hhmm(schedule.earliestCheckout)})`
+          : "no punch time is checked";
         const arrow = (from, to) => `${hhmm(from)} → ${hhmm(to)}`;
         const explainDayTarget = ({ shift, schedule, ptoHrs = 0, isFullPTO = false, events = [], isEventDay = false, ptoType = "" }) => {
           const result = (steps) => Object.freeze({ steps: Object.freeze(steps), requiredHrs: schedule.span, creditHrs: schedule.ptoCredit });
@@ -1981,13 +1985,7 @@
 
           if (isFullPTO || schedule.mode === "full") return result([`${leave} covers the whole day → nothing required`, `+ ${durLabel(GROSS_SHIFT_HRS)} credit`]);
           if (schedule.mode === "event-full") return result([`🎉 ${names} covers the whole shift → nothing required`, `+ ${durLabel(GROSS_SHIFT_HRS)} event credit`]);
-          if (isEventDay) {
-            const checks = eventChecksOf(events, shift);
-            const check = checks === "in" ? `only your clock-in is checked (by ${hhmm(lateInDeadline(schedule))}, start + ${durLabel(PUNCTUALITY_GRACE_HRS)} grace)`
-              : checks === "out" ? `only your clock-out is checked (from ${hhmm(schedule.earliestCheckout)})`
-              : "no punch time is checked";
-            return result([`🎉 ${names}: ${check}`, "Hours on event days are shown but not counted in Net Balance"]);
-          }
+          if (isEventDay) return result([`🎉 ${names}: ${eventCheckText(eventChecksOf(events, shift), schedule)}`, EVENT_DAY_NOT_COUNTED]);
           if (schedule.mode === "legacy") {
             return result([
               shiftLine,
@@ -2154,7 +2152,7 @@
         return Object.freeze({
           GROSS_SHIFT_HRS, FULL_PTO_HRS, GRADE_THRESHOLDS, SHIFT_LABELS,
           HEATMAP_CELL_MIN, HEATMAP_CELL_MAX, HEATMAP_GAP_PX, MAX_HISTORY_WEEKS, HEATMAP_WIDTH_MIN, HEATMAP_WIDTH_DEFAULT, HEATMAP_WIDTH_MAX,
-          parseSpecialDays, eventWindowsFor, eventOverlapHrs, eventReleaseLabel, explainShortfall, judgeEventDay, punctualityFlags, uncountedPunchHrs, leaveWorkedHrs, ptoKindOf, ptoIconsOf,
+          parseSpecialDays, eventWindowsFor, eventOverlapHrs, eventReleaseLabel, explainShortfall, judgeEventDay, punctualityFlags, uncountedPunchHrs, leaveWorkedHrs, eventCheckText, EVENT_DAY_NOT_COUNTED, ptoKindOf, ptoIconsOf,
           summarizeMonth, pickWfhSyncDates, countedReason, isCountedReason, explainMonth, explainDayTarget,
           heatmapLayout, ptoShareOf, weekColumns, bucketByPeriod, mapPool, withDeadline, gasRequestMonths, alarmTriggerAction, planAlarmSoundMigration,
           shiftFromLabel, resolveShift, resolveShiftFromHistory, parsePtoWindows, disambiguateWindows,
@@ -3236,7 +3234,7 @@
 
     const hasPunctualityRules = !isRestDay && !isFullPTO && !isIgnored && !isWfhExcluded && !isFuture;
     const punctuality = hasPunctualityRules
-      ? IkgWorkRules.punctualityFlags({ schedule, inHour, outHour, eventChecks: eventJudgement?.checks ?? null, isToday })
+      ? IkgWorkRules.punctualityFlags({ schedule, inHour, outHour, eventChecks: eventJudgement?.checks ?? null, isClockOutPending: isToday || isYesterdayGrace })
       : NO_PUNCTUALITY_FLAGS;
 
     let dayStatus = grade.label;
@@ -3251,7 +3249,7 @@
       actualHrs, effStart, effEnd, effectiveHrs, targetHrs, ptoCredit, baselineHrs, flexHrs, 
       isWorkingDay, isPublicHoliday, holidayName, status: dayStatus, grade,
       isGoalMet: isEventDay && !isToday ? eventVerdict === "pass" : IkgWorkRules.isGoalMet(effectiveHrs),
-      isEventDay, eventVerdict, isWeekend, isRestDay, isToday, dateStr,
+      isEventDay, eventVerdict, eventChecks: eventJudgement?.checks ?? null, isWeekend, isRestDay, isToday, dateStr,
       shift, schedule,
       ptoWindowLabel: schedule.windows.map(IkgWorkRules.formatWindow).join(", "),
       ptoDescription: note?.rawDescription || "",
@@ -3448,8 +3446,10 @@
       };
       const eventTooltip = (evalDay) => {
         const lines = evalDay.events.map((e) => `🎉 ${[e.name, e.time, eventRuleText(e)].filter(Boolean).join(" · ")}`);
-        const effect = evalDay.eventCredit > 0 ? `Credited ${IkgWorkRules.formatAmount(evalDay.eventCredit)}h as work` : evalDay.grade?.label === "event" ? "Attendance only, not counted in Net Balance" : evalDay.isWorkingDay ? "No change to your shift" : "";
-        return [...lines, effect].filter(Boolean).join("\n");
+        const effect = evalDay.isEventDay
+          ? [`Attendance only: ${IkgWorkRules.eventCheckText(evalDay.eventChecks, evalDay.schedule)}`, IkgWorkRules.EVENT_DAY_NOT_COUNTED]
+          : [evalDay.eventCredit > 0 ? `Credited ${IkgWorkRules.formatAmount(evalDay.eventCredit)}h as work` : evalDay.isWorkingDay ? "No change to your shift" : ""];
+        return [...lines, ...effect].filter(Boolean).join("\n");
       };
       const eventPillLabel = (events) => {
         if (events.some((e) => e.allDay)) return "🎉 all day";
@@ -3480,7 +3480,7 @@
       const plannedCellHtml = (evalDay) => {
         const work = IkgWorkRules.formatWindow(evalDay.plannedWindow).replace("–", " → ");
         const tip = [
-          `Planned work ${work} · ${evalDay.targetHrs}h`,
+          evalDay.isEventDay ? `Event day ${work} · attendance only, no hours required` : `Planned work ${work} · ${evalDay.targetHrs}h`,
           evalDay.isPartialPTO ? `PTO ${evalDay.ptoWindowLabel || `${evalDay.ptoHrs}h`}${ptoCreditNote(evalDay)}` : "",
           evalDay.events.length ? eventTooltip(evalDay) : "",
           `Shift ${evalDay.shift.label}`,
@@ -3488,7 +3488,7 @@
         return `
           <div class="ikg-cell-data ikg-planned ikg-fast-tt no-dot" data-title="${escapeAttr(tip.join("\n"))}">
             <div class="ikg-planned-label">PLANNED</div>
-            <div class="ikg-planned-times">${work}<span> · ${evalDay.targetHrs.toFixed(1)}h</span></div>
+            <div class="ikg-planned-times">${work}${evalDay.isEventDay ? "" : `<span> · ${evalDay.targetHrs.toFixed(1)}h</span>`}</div>
           </div>`;
       };
 
@@ -5048,7 +5048,7 @@
           : "";
         card.innerHTML = `
           <div class="ikg-card-title" style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>🎉 Special days</span><span style="text-transform:none; letter-spacing:0; font-weight:500;">${status}</span></div>
-          <div style="font-size:12px; color:var(--text-muted); line-height:1.5;">Company events shared by the team. "Clock out from 17:30" means leaving at 17:30 meets that day's target; the rest of your shift counts as work.</div>
+          <div style="font-size:12px; color:var(--text-muted); line-height:1.5;">Company events shared by the team. "Clock out from 17:30": you may leave for the event, only your clock-in is checked. "Clock in from 11:00": only your clock-out is checked. Those days are attendance-only and not counted in Net Balance. An all-day event counts the whole shift as work.</div>
           <div class="ikg-sd-list">${[...recent.map((e) => row(e, true)), ...upcoming.map((e) => row(e, false))].join("") || `<div class="ikg-pto-empty">No special days announced.</div>`}</div>
           ${rejected}`;
       }
