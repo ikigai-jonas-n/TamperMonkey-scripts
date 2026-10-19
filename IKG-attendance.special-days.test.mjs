@@ -129,7 +129,9 @@ describe("judgeEventDay", () => {
   test("release and late start on one day need no punch check", () => {
     assert.equal(judge(eventsOf(event({ clockInFrom: "11:00", clockOutFrom: "17:30" })), { inHour: 12, outHour: null }).verdict, "pass");
   });
-  test("a release at or after the shift end is not an event day", () => assert.equal(judge(eventsOf(event({ clockOutFrom: "19:00" }))).isEventDay, false));
+  test("a release at the shift end still graces the clock-out", () => assert.equal(judge(eventsOf(event({ clockOutFrom: "19:00" })), { outHour: 18.1 }).verdict, "pass"));
+  test("a release at the shift end still checks the clock-in", () => assert.equal(judge(eventsOf(event({ clockOutFrom: "19:00" })), { inHour: 11 }).verdict, "late-in"));
+  test("a late start at the shift start still graces the clock-in", () => assert.equal(judge(eventsOf(event({ clockInFrom: "10:00" })), { inHour: 12, outHour: 19 }).verdict, "pass"));
   test("an all-day event stays a credited day, not an attendance check", () => assert.equal(judge(eventsOf(event({ allDay: true }))).isEventDay, false));
   test("after a morning PTO window the clock-in is judged against the end of the leave", () => {
     const j = judge(release, { inHour: 13, scheduleExtra: { ptoWindows: [{ start: 10, end: 12 }], ptoHrs: 2 } });
@@ -232,6 +234,14 @@ describe("uncountedPunchHrs", () => {
   test("clocking out at 12:30 before afternoon leave counts nothing after 11:45", () => assert.equal(uncounted(afternoonLeave, 10, 12.5), 0.75));
   test("clocking out at 11:00 before afternoon leave is EARLY", () => assert.equal(R.punctualityFlags({ schedule: afternoonLeave, inHour: 10, outHour: 11 }).early.badge, "EARLY"));
   test("arriving early on a normal day still counts", () => assert.equal(uncounted(R.computeDaySchedule({ shift: LATE }), 9.5, 19), 0));
+  test("working into an end-of-day leave still counts", () => {
+    assert.equal(R.uncountedPunchHrs({ schedule: R.computeDaySchedule({ shift: DAY, ptoWindows: [{ start: 17, end: 18 }], ptoHrs: 1 }), shift: DAY, inHour: 9.5, outHour: 17.5 }), 0);
+  });
+  test("clocking in during a morning leave before lunch still counts", () => assert.equal(uncounted(morningLeave, 10.5, 19), 1.25));
+  test("a night shift blocks only dinner after an afternoon leave", () => {
+    const nightLeave = R.computeDaySchedule({ shift: NIGHT, ptoWindows: [{ start: 13, end: 17.75 }], ptoHrs: 4.75 });
+    assert.equal(R.uncountedPunchHrs({ schedule: nightLeave, shift: NIGHT, inHour: 16, outHour: 22 }), 1.25);
+  });
   test("a lunch in the middle of the work window keeps counting", () => {
     assert.equal(uncounted(R.computeDaySchedule({ shift: LATE, ptoWindows: [{ start: 17, end: 19 }], ptoHrs: 2 }), 10, 17), 0);
   });

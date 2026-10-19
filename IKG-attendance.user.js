@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.140] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.141] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.140
+    // @version      7.141
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1792,8 +1792,8 @@
 
         const eventChecksOf = (events, shift) => {
           const timed = (events || []).filter((e) => !e.allDay);
-          const releases = timed.some((e) => e.clockOutFrom !== null && e.clockOutFrom < shift.end);
-          const lateStart = timed.some((e) => e.clockInFrom !== null && e.clockInFrom > shift.start);
+          const releases = timed.some((e) => e.clockOutFrom !== null);
+          const lateStart = timed.some((e) => e.clockInFrom !== null);
           if (releases && lateStart) return "none";
           if (releases) return "in";
           return lateStart ? "out" : null;
@@ -1801,7 +1801,7 @@
 
         const uncountedPunchHrs = ({ schedule, shift, inHour = null, outHour = null }) => {
           if (schedule?.mode !== "window" || !shift || inHour == null || outHour == null || outHour <= inHour) return 0;
-          const blocked = subtractIntervals([{ start: shift.start, end: shift.end }], [{ start: schedule.earliestCheckin, end: schedule.earliestCheckout }]);
+          const blocked = subtractIntervals([{ start: shift.mealStart, end: shift.mealEnd }], [{ start: schedule.earliestCheckin, end: schedule.earliestCheckout }]);
           return round(intersectLength(blocked, { start: inHour, end: outHour }));
         };
 
@@ -3439,7 +3439,7 @@
       };
       const eventTooltip = (evalDay) => {
         const lines = evalDay.events.map((e) => `🎉 ${[e.name, e.time, eventRuleText(e)].filter(Boolean).join(" · ")}`);
-        const effect = evalDay.eventCredit > 0 ? `Credited ${IkgWorkRules.formatAmount(evalDay.eventCredit)}h as work` : evalDay.isWorkingDay ? "No change to your shift" : "";
+        const effect = evalDay.eventCredit > 0 ? `Credited ${IkgWorkRules.formatAmount(evalDay.eventCredit)}h as work` : evalDay.grade?.label === "event" ? "Attendance only, not counted in Net Balance" : evalDay.isWorkingDay ? "No change to your shift" : "";
         return [...lines, effect].filter(Boolean).join("\n");
       };
       const eventPillLabel = (events) => {
@@ -4988,7 +4988,7 @@
         const notes = [
           evalDay.shortfall ? note("⚠️", evalDay.shortfall.badge ? `${evalDay.shortfall.badge} · ${evalDay.shortfall.detail}` : evalDay.shortfall.detail, evalDay.shortfall.action ? `→ ${evalDay.shortfall.action}` : "", "bad") : "",
           evalDay.uncountedHrs > 0 && evalDay.plannedWindow
-            ? note("⏸️", `${formatDurFromDec(evalDay.uncountedHrs, false)} outside your work window isn't counted`, `Your leave sets work to ${IkgWorkRules.formatWindow(evalDay.plannedWindow)}; punches during the leave or the lunch next to it don't add hours or flex.`)
+            ? note("⏸️", `${formatDurFromDec(evalDay.uncountedHrs, false)} of meal break isn't counted`, `Your leave sets work to ${IkgWorkRules.formatWindow(evalDay.plannedWindow)}; punches during the meal break next to it don't add hours or flex.`)
             : "",
           ...punctualityList(evalDay)
             .filter((f) => !(evalDay.shortfall && PUNCTUALITY_CODES.has(evalDay.shortfall.code) && evalDay.shortfall.badge === f.badge))

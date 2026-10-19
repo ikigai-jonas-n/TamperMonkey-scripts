@@ -42,7 +42,7 @@ Need the newest version right now? Open **Tampermonkey Dashboard → Utilities �
 
 ## 📦 Scripts
 
-### 1. [7.140] IKG Attendance Pro (Autopilot & Alarms)
+### 1. [7.141] IKG Attendance Pro (Autopilot & Alarms)
 
 A complete overhaul of the [Attendance System](https://attendance.iki-utl.cc/): a monthly dashboard that knows your shift, leave and company events.
 
@@ -56,7 +56,7 @@ A complete overhaul of the [Attendance System](https://attendance.iki-utl.cc/): 
 **First run:** the script opens Deel and Google tabs on its own to sign in. Let them finish; they close themselves.
 
 
-👉 **[Install [7.140] IKG Attendance Pro (Autopilot & Alarms)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js)**
+👉 **[Install [7.141] IKG Attendance Pro (Autopilot & Alarms)](https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js)**
 
 ---
 
