@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.144] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.145] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.144
+    // @version      7.145
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -2194,31 +2194,43 @@
         return PRO_TRACKS.find((t) => t.id === soundType)?.name || soundType;
       };
 
+      const SOUND_PROMPT_DELAY_MS = 1200;
+      const SOUND_TOAST_EXIT_MS = 250;
+      let soundPromptSnoozed = false;
+      let soundPromptTimer = null;
       const openAlarmSoundPrompt = () => {
+        const toast = document.getElementById("ikg-sound-toast");
+        if (!toast || soundPromptSnoozed || readAlarmSoundMigration().decided || toast.classList.contains("open") || soundPromptTimer) return;
+        soundPromptTimer = setTimeout(() => {
+          soundPromptTimer = null;
+          showAlarmSoundToast(toast);
+        }, SOUND_PROMPT_DELAY_MS);
+      };
+      const showAlarmSoundToast = (toast) => {
         const state = readAlarmSoundMigration();
-        const modal = document.getElementById("ikg-sound-modal");
-        const overlay = document.getElementById("ikg-sound-overlay");
-        if (state.decided || !modal || modal.classList.contains("open")) return;
+        if (state.decided) return;
         const preview = document.getElementById("snd-preview");
         const keep = document.getElementById("snd-keep");
         const setPreviewing = (on) => {
           preview.textContent = on ? "⏹ Stop" : "▶ Preview";
           preview.setAttribute("aria-pressed", String(on));
+          toast.classList.toggle("is-playing", on);
         };
-        const decide = (soundType) => {
+        const hide = () => {
           AudioEngine.stop();
           setPreviewing(false);
+          toast.classList.remove("open");
+          setTimeout(() => { if (!toast.classList.contains("open")) toast.hidden = true; }, SOUND_TOAST_EXIT_MS);
+        };
+        const decide = (soundType) => {
           localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...getSettings(), soundType }));
           localStorage.setItem(ALARM_SOUND_MIGRATION_KEY, JSON.stringify({ ...state, decided: true }));
-          modal.classList.remove("open");
-          overlay?.classList.remove("open");
+          hide();
           renderSettings();
           IkgLog.info(`🎵 Alarm sound set to "${soundType}"`);
         };
-        document.getElementById("snd-body").textContent =
-          `Your alarm now plays this song. Press Preview to hear it before your shift ends. Keep it, or go back to ${soundLabel(state.previous)}.`;
-        keep.textContent = `Keep my old sound (${soundLabel(state.previous)})`;
-        keep.style.display = state.previous === DEFAULT_SOUND ? "none" : "";
+        keep.textContent = `Keep ${soundLabel(state.previous)} instead`;
+        keep.hidden = state.previous === DEFAULT_SOUND;
         setPreviewing(false);
         preview.onclick = () => {
           const on = preview.getAttribute("aria-pressed") !== "true";
@@ -2228,8 +2240,14 @@
         };
         document.getElementById("snd-accept").onclick = () => decide(DEFAULT_SOUND);
         keep.onclick = () => decide(state.previous);
-        modal.classList.add("open");
-        overlay?.classList.add("open");
+        document.getElementById("snd-later").onclick = () => {
+          soundPromptSnoozed = true;
+          hide();
+        };
+        toast.onkeydown = (e) => { if (e.key === "Escape") document.getElementById("snd-later").click(); };
+        toast.hidden = false;
+        void toast.offsetWidth;
+        toast.classList.add("open");
       };
 
       const populateMonthSelect = (selectId, localCache, currentVal) => {
@@ -3822,12 +3840,36 @@
             #nl-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
             #nl-body > * { flex-shrink: 0; }
             #nl-body > .nl-tape { flex: 0 1 auto; min-height: 140px; }
-            #ikg-sound-modal { width: min(380px, 92%); z-index: 102; }
-            #ikg-sound-overlay { z-index: 101; }
-            .snd-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-            .snd-actions > button { margin: 0; padding: 12px; font-size: 13px; }
-            .snd-keep { all: unset; display: block; margin: 12px auto 0; font-size: 12px; color: var(--text-muted); cursor: pointer; text-decoration: underline; }
-            .snd-keep:hover, .snd-keep:focus-visible { color: var(--text-main); }
+            .snd-toast { position: absolute; right: 20px; bottom: 20px; z-index: 90; width: min(320px, calc(100% - 40px)); box-sizing: border-box; padding: 14px 14px 10px; border-radius: 16px; background: linear-gradient(160deg, var(--bg-elevated), var(--bg-base)); border: 1px solid var(--border); box-shadow: 0 18px 40px rgba(0,0,0,0.45), 0 0 0 1px var(--primary-glow); opacity: 0; transform: translateY(16px) scale(0.98); transition: opacity 0.2s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); pointer-events: none; }
+            .snd-toast.open { opacity: 1; transform: none; pointer-events: auto; }
+            .snd-head { display: flex; align-items: center; gap: 12px; }
+            .snd-disc { flex: 0 0 44px; height: 44px; border-radius: 50%; background: radial-gradient(circle, var(--bg-base) 0 5px, transparent 6px), conic-gradient(#3B82F6, #8B5CF6, #EC4899, #F59E0B, #3B82F6); box-shadow: inset 0 0 0 3px rgba(255,255,255,0.08); }
+            .snd-meta { flex: 1; min-width: 0; line-height: 1.25; }
+            .snd-kicker { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--primary); }
+            .snd-name { font-size: 15px; font-weight: 700; color: var(--text-main); }
+            .snd-sub { font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .snd-eq { display: flex; align-items: flex-end; gap: 2px; height: 16px; opacity: 0.35; }
+            .snd-eq i { width: 3px; height: 4px; border-radius: 2px; background: var(--primary); transform-origin: bottom; }
+            .snd-x { all: unset; align-self: flex-start; width: 22px; height: 22px; line-height: 22px; text-align: center; border-radius: 6px; font-size: 16px; color: var(--text-muted); cursor: pointer; }
+            .snd-x:hover, .snd-x:focus-visible { color: var(--text-main); background: var(--border); }
+            .snd-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+            .snd-btn { all: unset; box-sizing: border-box; text-align: center; padding: 8px 10px; border-radius: 10px; font-size: 13px; font-weight: 700; color: var(--text-main); border: 1px solid var(--border); cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+            .snd-btn:hover { border-color: var(--primary); background: var(--primary-glow); }
+            .snd-btn:focus-visible, .snd-keep:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+            .snd-btn--primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+            .snd-btn--primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+            .snd-keep { all: unset; display: block; margin: 8px auto 0; font-size: 11px; color: var(--text-muted); cursor: pointer; }
+            .snd-keep:hover { color: var(--text-main); text-decoration: underline; }
+            .snd-keep[hidden] { display: none; }
+            .snd-toast.is-playing .snd-disc { animation: sndSpin 3s linear infinite; }
+            .snd-toast.is-playing .snd-eq { opacity: 1; }
+            .snd-toast.is-playing .snd-eq i { animation: sndEq 0.9s ease-in-out infinite; }
+            .snd-toast.is-playing .snd-eq i:nth-child(2) { animation-delay: -0.3s; }
+            .snd-toast.is-playing .snd-eq i:nth-child(3) { animation-delay: -0.6s; }
+            .snd-toast.is-playing .snd-eq i:nth-child(4) { animation-delay: -0.15s; }
+            @keyframes sndSpin { to { transform: rotate(360deg); } }
+            @keyframes sndEq { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(4); } }
+            @media (prefers-reduced-motion: reduce) { .snd-toast, .snd-toast.is-playing .snd-disc, .snd-toast.is-playing .snd-eq i { animation: none !important; transition: none !important; } }
             .ikg-net-row { margin: 12px -8px 0 !important; padding: 12px 8px 8px; border-top: 1px solid var(--border); border-radius: 0 0 8px 8px; cursor: pointer; transition: background 0.15s; outline: none; }
             .ikg-net-row:hover, .ikg-net-row:focus-visible { background: var(--primary-glow); }
             .ikg-net-row:focus-visible { box-shadow: inset 0 0 0 2px var(--primary); }
@@ -6177,6 +6219,23 @@
         backdrop.id = "ikg-modal-backdrop";
         backdrop.innerHTML = `
                 <div id="ikg-modal">
+                                <div id="ikg-sound-toast" class="snd-toast" role="status" aria-labelledby="snd-title" hidden>
+                                    <div class="snd-head">
+                                        <div class="snd-disc" aria-hidden="true"></div>
+                                        <div class="snd-meta">
+                                            <div id="snd-title" class="snd-kicker">New alarm sound</div>
+                                            <div class="snd-name">Wendy Wander</div>
+                                            <div class="snd-sub">我想和你一起 · 2:30</div>
+                                        </div>
+                                        <div class="snd-eq" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+                                        <button id="snd-later" class="snd-x" type="button" aria-label="Decide later">&times;</button>
+                                    </div>
+                                    <div class="snd-actions">
+                                        <button id="snd-preview" class="snd-btn" type="button" aria-pressed="false">▶ Preview</button>
+                                        <button id="snd-accept" class="snd-btn snd-btn--primary" type="button">Use it</button>
+                                    </div>
+                                    <button id="snd-keep" class="snd-keep" type="button">Keep my old sound</button>
+                                </div>
                     <header id="ikg-modal-header">
                         <div class="ikg-title-area" style="display: flex !important; align-items: center !important; gap: 8px !important; white-space: nowrap !important;">
                             <img src="favicon.png" style="width: 28px; height: 28px; background: var(--primary); border-radius: 6px; flex-shrink: 0; object-fit: contain;" alt="IKG Logo">
@@ -6227,17 +6286,6 @@
                                     <div id="nl-body"></div>
                                 </div>
 
-                                <div class="modal-overlay" id="ikg-sound-overlay"></div>
-                                <div id="ikg-sound-modal" class="ikg-popup-modal" role="dialog" aria-labelledby="snd-title">
-                                    <div class="dm-title"><span id="snd-title">🎵 New default alarm</span></div>
-                                    <p style="margin:0 0 6px; font-size:15px; font-weight:700; color:var(--text-main);">Wendy Wander – 我想和你一起</p>
-                                    <p id="snd-body" style="margin:0 0 16px; font-size:13px; color:var(--text-muted); line-height:1.5;"></p>
-                                    <div class="snd-actions">
-                                        <button id="snd-preview" class="ikg-btn-outline" type="button" aria-pressed="false">▶ Preview</button>
-                                        <button id="snd-accept" class="dm-btn" type="button">Accept</button>
-                                    </div>
-                                    <button id="snd-keep" class="snd-keep" type="button">Keep my old sound</button>
-                                </div>
 
                                 <div class="day-modal-overlay"></div>
                                 <div id="ikg-day-modal" class="ikg-popup-modal">
