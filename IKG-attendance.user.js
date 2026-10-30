@@ -28,7 +28,7 @@
     // @run-at       document-start
     // @noframes
     // ==/UserScript==
-    
+
     (function () {
       "use strict";
 
@@ -382,7 +382,7 @@
                         if (url && url.includes('callback') && url.includes('token=')) {
                             const urlObj = new URL(url.startsWith('http') ? url : window.location.origin + url);
                             const gasToken = urlObj.searchParams.get('token');
-                            const callbackUrl = url.split('?')[0]; 
+                            const callbackUrl = url.split('?')[0];
                             if (gasToken) {
                                 window.postMessage({ type: 'IKG_GAS_FOUND', token: gasToken, callbackUrl: callbackUrl }, '*');
                             }
@@ -398,7 +398,7 @@
                         try {
                             const urlObj = new URL(url.startsWith('http') ? url : window.location.origin + url);
                             const gasToken = urlObj.searchParams.get('token');
-                            const callbackUrl = url.split('?')[0]; 
+                            const callbackUrl = url.split('?')[0];
                             if (gasToken) {
                                 window.postMessage({ type: 'IKG_GAS_FOUND', token: gasToken, callbackUrl: callbackUrl }, '*');
                             }
@@ -2270,7 +2270,7 @@
             .map((m) => `<option value="${m}">${monthNames[parseInt(m.slice(5), 10) - 1]} ${yyyy}</option>`)
             .join("")}</optgroup>`).join("");
         }
-        if (currentVal && sortedMonths.includes(currentVal)) { selectEl.value = currentVal; return currentVal; } 
+        if (currentVal && sortedMonths.includes(currentVal)) { selectEl.value = currentVal; return currentVal; }
         else if (sortedMonths.length > 0) { selectEl.value = sortedMonths[0]; return sortedMonths[0]; }
         return "";
       };
@@ -2357,7 +2357,7 @@
                 IkgLog.info("✅ Token caught from Deel tab! Closing background tab...");
                 GM_removeValueChangeListener(listenerId);
                 GM_setValue("IKG_DEEL_HUNT_FAILED_AT", 0);
-                try { deelTab.close(); } catch (e) {} 
+                try { deelTab.close(); } catch (e) {}
                 resolve(new_value);
               }
             }
@@ -2615,9 +2615,9 @@
                 window.fetch = async function(...args) {
                     try {
                         let url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : '');
-                        let options = args[1] || {}; 
+                        let options = args[1] || {};
                         let headersObj = (args[0] && args[0].headers) ? args[0].headers : options.headers;
-                        
+
                         if (url && url.includes('9a2igbhvdb.execute-api.us-west-2.amazonaws.com/attendance')) {
                             let token = null;
                             if (headersObj) {
@@ -2664,7 +2664,7 @@
         if (attempts < MAX_RELOAD_ATTEMPTS) {
           attempts++;
           sessionStorage.setItem("IKG_RELOAD_ATTEMPTS", attempts.toString());
-          
+
           // Exponential backoff: 1s, 2s, 4s, 8s, 16s... (capped at 30s)
           const delayMs = Math.min(30000, Math.pow(2, attempts - 1) * 1000);
           IkgLog.warn(`⚠️ HTTP 401 Auth Error! Auto-reloading in ${(delayMs / 1000).toFixed(1)}s (Attempt ${attempts}/${MAX_RELOAD_ATTEMPTS})...`);
@@ -2695,27 +2695,27 @@
 
       // Reset reload attempts counter whenever a valid token is intercepted
       window.addEventListener("IKG_Token_Found", function (e) {
-        if (!authToken) { 
-          authToken = e.detail; 
-          autopilotEnabled = false; 
+        if (!authToken) {
+          authToken = e.detail;
+          autopilotEnabled = false;
           GM_setValue(ATT_LOGIN_CLICKS_KEY, []);
           sessionStorage.removeItem("IKG_RELOAD_ATTEMPTS"); // Clear backoff count on valid token
-          IkgLog.info("AWS Token Intercepted."); 
+          IkgLog.info("AWS Token Intercepted.");
         }
       });
 
       window.addEventListener("IKG_GAS_Token_Found", function(e) {
-        if (gasAuthToken !== e.detail) { 
-          gasAuthToken = e.detail; 
-          IkgLog.info("✅ Google Apps Script (WFH) Token Intercepted!"); 
+        if (gasAuthToken !== e.detail) {
+          gasAuthToken = e.detail;
+          IkgLog.info("✅ Google Apps Script (WFH) Token Intercepted!");
         }
       });
 
       window.addEventListener("IKG_Session_Death", function () {
-        if (authToken) { 
-          IkgLog.warn("API returned 401. Fast session death detected!"); 
-          authToken = null; 
-          autopilotEnabled = true; 
+        if (authToken) {
+          IkgLog.warn("API returned 401. Fast session death detected!");
+          authToken = null;
+          autopilotEnabled = true;
           handle401Recovery();
         }
       });
@@ -2757,7 +2757,7 @@
           if (res.status === 200) {
             // 🎯 UPDATED REGEX: Matches both old ACHNx... and new AEDo... token formats
             const match = res.responseText.match(/((?:ACHNx|AEDo|A[a-zA-Z0-9_\-]{5,})[a-zA-Z0-9_\-]+(?:%3A|:)[0-9]+)/);
-            
+
             let rawToken = null;
             if (match && match[1]) {
               rawToken = decodeURIComponent(match[1]);
@@ -2915,7 +2915,7 @@
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") {
           IkgLog.debug("Tab regained focus. Validating sessions...");
-          
+
           // If dates were updated while in background, refresh UI instantly upon returning
           if (window.ikgUpdatedDates && window.ikgUpdatedDates.size > 0) {
             renderCalendar();
@@ -2945,32 +2945,32 @@
       const ensureHolidaysSecured = (year) => {
         const key = `IKG_HOLIDAYS_${year}`;
         const cached = localStorage.getItem(key);
-        
-        const isCacheHealthy = (str) => { 
-          if (!str) return false; 
-          try { 
-            const obj = JSON.parse(str); 
-            const sampleKey = Object.keys(obj)[0]; 
-            return sampleKey && sampleKey.includes('-') && Object.keys(obj).length > 0; 
-          } catch(e) { return false; } 
+
+        const isCacheHealthy = (str) => {
+          if (!str) return false;
+          try {
+            const obj = JSON.parse(str);
+            const sampleKey = Object.keys(obj)[0];
+            return sampleKey && sampleKey.includes('-') && Object.keys(obj).length > 0;
+          } catch(e) { return false; }
         };
-        
+
         if (isCacheHealthy(cached)) return Promise.resolve();
 
         return new Promise((resolve, reject) => {
           updateHeaderStatus(`Securing ${year} Holidays...`, 'var(--warn)');
           gmRequest("holidays", String(year), {
-            method: "GET", 
-            url: `https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/${year}.json`, 
+            method: "GET",
+            url: `https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/${year}.json`,
             timeout: 10000,
             onload: (res) => {
               if (res.status === 200) {
                 try {
-                  const list = JSON.parse(res.responseText); 
+                  const list = JSON.parse(res.responseText);
                   const map = {};
                   list.forEach(d => {
                     if (!d.date) return;
-                    const rawD = String(d.date); 
+                    const rawD = String(d.date);
                     let isoDate = rawD;
                     if (rawD.length === 8 && !rawD.includes('-')) {
                       isoDate = `${rawD.slice(0,4)}-${rawD.slice(4,6)}-${rawD.slice(6,8)}`;
@@ -2980,13 +2980,13 @@
                     }
                   });
                   map[`${year}-05-01`] = "勞動節";
-                  localStorage.setItem(key, JSON.stringify(map)); 
-                  updateHeaderStatus('✅ Synced', 'var(--success)'); 
+                  localStorage.setItem(key, JSON.stringify(map));
+                  updateHeaderStatus('✅ Synced', 'var(--success)');
                   resolve();
                 } catch(e) { reject("Malformed JSON from CDN"); }
               } else { reject(`HTTP ${res.status}`); }
             },
-            ontimeout: () => reject("CDN Timeout"), 
+            ontimeout: () => reject("CDN Timeout"),
             onerror: () => reject("Network Failure")
           });
         });
@@ -3064,11 +3064,11 @@
         const y = d.getFullYear();
         // Read holiday JSON once per snapshot build
         const currentHolidays = JSON.parse(localStorage.getItem(`IKG_HOLIDAYS_${y}`) || "{}");
-        
-        return { 
-          cache: JSON.parse(localStorage.getItem(CACHE_KEY) || "{}"), 
-          pto: JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}"), 
-          overrides: JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}"), 
+
+        return {
+          cache: JSON.parse(localStorage.getItem(CACHE_KEY) || "{}"),
+          pto: JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}"),
+          overrides: JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}"),
           settings: getSettings(),
           holidays: currentHolidays,
           holidaysByYear: new Map([[String(y), currentHolidays]]),
@@ -3109,12 +3109,12 @@
         return snapshot.shiftByMonth.get(month);
       },
       getDayContext: function(dateStr, snapshot) {
-        return { 
-          dateStr, 
-          record: snapshot.cache[dateStr], 
-          note: snapshot.pto[dateStr], 
-          override: snapshot.overrides[dateStr], 
-          settings: snapshot.settings, 
+        return {
+          dateStr,
+          record: snapshot.cache[dateStr],
+          note: snapshot.pto[dateStr],
+          override: snapshot.overrides[dateStr],
+          settings: snapshot.settings,
           holidays: IKG_DataStore.holidaysFor(dateStr, snapshot),
           shift: IKG_DataStore.shiftFor(dateStr, snapshot),
           events: snapshot.eventsByDate.get(dateStr) || [],
@@ -3164,14 +3164,14 @@
 
     let effStart = record?.startTime ? new Date(record.startTime).getTime() : null;
     let effEnd = record?.endTime ? new Date(record.endTime).getTime() : null;
-    
-    let rawActualHrs = (effStart && effEnd) 
-      ? safeFloat((effEnd - effStart) / 3600000) 
+
+    let rawActualHrs = (effStart && effEnd)
+      ? safeFloat((effEnd - effStart) / 3600000)
       : ((record && record.workHours) ? parseFloat(record.workHours) : 0);
 
     const isWfhExcluded = isWFH && settings.includeWfhInHours === false;
     let actualHrs = isWfhExcluded ? 0 : rawActualHrs;
-    
+
     // Strict Spoofed Check: Only true when explicit manual times exist
     let isSpoofed = false;
     if (settings.useManualOverrides !== false && override && (override.manualIn || override.manualOut)) {
@@ -3179,17 +3179,17 @@
       let effStartD = override.manualIn ? new Date(y, parseInt(m, 10)-1, d, ...override.manualIn.split(':')) : (effStart ? new Date(effStart) : null);
       let effEndD = override.manualOut ? new Date(y, parseInt(m, 10)-1, d, ...override.manualOut.split(':')) : (effEnd ? new Date(effEnd) : null);
 
-      if (effStartD && effEndD) { 
-        actualHrs = Math.max(0, (effEndD - effStartD) / 3600000); 
-        effStart = effStartD.getTime(); 
-        effEnd = effEndD.getTime(); 
-        isSpoofed = true; 
+      if (effStartD && effEndD) {
+        actualHrs = Math.max(0, (effEndD - effStartD) / 3600000);
+        effStart = effStartD.getTime();
+        effEnd = effEndD.getTime();
+        isSpoofed = true;
       }
-      else if (effStartD) { 
-        actualHrs = 0; 
-        effStart = effStartD.getTime(); 
-        effEnd = null; 
-        isSpoofed = true; 
+      else if (effStartD) {
+        actualHrs = 0;
+        effStart = effStartD.getTime();
+        effEnd = null;
+        isSpoofed = true;
       }
     }
 
@@ -3208,7 +3208,7 @@
 
     const yesterdayD = new Date(todayD);
     yesterdayD.setDate(yesterdayD.getDate() - 1);
-    
+
     const isYesterdayGrace = (dateStr === toYMD(yesterdayD)) && (nowReal.getHours() < 18);
 
     const eventWindows = isRestDay ? [] : IkgWorkRules.eventWindowsFor(events, shift);
@@ -3220,14 +3220,14 @@
     let isWorkingDay = false;
     const hasNoPunches = !effStart && !effEnd && actualHrs === 0;
 
-    if (isWfhExcluded || (hasNoPunches && ptoHrs === 0)) { 
-      isWorkingDay = false; 
-    } else if (!isRestDay || ptoHrs > 0) { 
+    if (isWfhExcluded || (hasNoPunches && ptoHrs === 0)) {
+      isWorkingDay = false;
+    } else if (!isRestDay || ptoHrs > 0) {
       targetHrs = schedule.span;
       ptoCredit = schedule.ptoCredit;
-      if (dObj <= todayD) isWorkingDay = true; 
-    } else if (isRestDay && actualHrs > 0) { 
-      isWorkingDay = true; 
+      if (dObj <= todayD) isWorkingDay = true;
+    } else if (isRestDay && actualHrs > 0) {
+      isWorkingDay = true;
     }
 
     const inHour = effStart ? decimalHourOf(effStart) : null;
@@ -3242,7 +3242,7 @@
     const isEventDay = !!eventJudgement?.isEventDay;
     const eventVerdict = isEventDay ? eventJudgement.verdict : null;
     const flexHrs = (isWorkingDay && !isToday && !isYesterdayGrace && !isIgnored && !isEventDay)
-      ? safeFloat(effectiveHrs - baselineHrs) 
+      ? safeFloat(effectiveHrs - baselineHrs)
       : 0;
 
     const grade = isWfhExcluded ? { label: "wfh-excluded" }
@@ -3271,9 +3271,9 @@
       dayStatus = 'weekend-empty';
     }
 
-    return { 
-      isFullPTO, isPartialPTO, ptoHrs, ptoType, isIgnored, isWFH, 
-      actualHrs, effStart, effEnd, effectiveHrs, targetHrs, ptoCredit, baselineHrs, flexHrs, 
+    return {
+      isFullPTO, isPartialPTO, ptoHrs, ptoType, isIgnored, isWFH,
+      actualHrs, effStart, effEnd, effectiveHrs, targetHrs, ptoCredit, baselineHrs, flexHrs,
       isWorkingDay, isPublicHoliday, holidayName, status: dayStatus, grade,
       isGoalMet: isEventDay && !isToday ? eventVerdict === "pass" : IkgWorkRules.isGoalMet(effectiveHrs),
       isEventDay, eventVerdict, eventChecks: eventJudgement?.checks ?? null, isWeekend, isRestDay, isToday, dateStr,
@@ -3298,7 +3298,7 @@
       },
       corrections: record?.corrections || [],
       isCorrected: (record?.corrections || []).length > 0,
-      isSpoofed, isYesterdayGrace 
+      isSpoofed, isYesterdayGrace
     };
   };
 
@@ -3580,8 +3580,8 @@
           if (item.val > 0) {
             ctx.save();
             // 🎯 GHOST RENDERING: Drop opacity to 30% if marked as ignored
-            if (item.isIgnored) ctx.globalAlpha = 0.3; 
-            
+            if (item.isIgnored) ctx.globalAlpha = 0.3;
+
             ctx.fillStyle = item.color;
             ctx.beginPath();
             if (ctx.roundRect)
@@ -3763,13 +3763,13 @@
             #ikg-modal-backdrop.open #ikg-modal { transform: scale(1); }
             #ikg-modal-header { padding: 0 24px; height: 72px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-surface); gap: 16px; }
             .ikg-title-area { flex-shrink: 0;
-              display: flex; 
-              align-items: center; 
-              gap: 8px; 
-              font-size: 18px; 
-              font-weight: 700; 
-              letter-spacing: -0.02em; 
-              white-space: nowrap; 
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              font-size: 18px;
+              font-weight: 700;
+              letter-spacing: -0.02em;
+              white-space: nowrap;
           }
             .ikg-tab-group { display: flex; gap: 3px; height: 100%; align-items: center; margin-left: 14px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
             .ikg-tab-group::-webkit-scrollbar { display: none; }
@@ -3848,7 +3848,8 @@
 
             .ikg-popup-modal { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.95); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 16px; padding: 24px; box-shadow: 0 24px 48px rgba(0,0,0,0.9); z-index: 100; display: none; opacity: 0; transition: all 0.2s ease; }
             .ikg-popup-modal.open { display: block; opacity: 1; transform: translate(-50%, -50%) scale(1); }
-            #ikg-day-modal { width: 320px; }
+            #ikg-day-modal { width: 330px; max-width: 92vw; border-radius: 16px; padding: 16px 18px; background: var(--bg-surface); border: 1px solid var(--border); box-shadow: 0 20px 48px rgba(0, 0, 0, 0.6); display: none; flex-direction: column; gap: 10px; }
+            #ikg-day-modal.open { display: flex; }
             #ikg-net-modal { width: min(820px, 92%); max-height: 86%; overflow: hidden; flex-direction: column; box-sizing: border-box; }
             #ikg-net-modal.open { display: flex; }
             #nl-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
@@ -4075,41 +4076,41 @@
 
             /* 🎯 TOOLTIP BASE & BOUNDARY BREAKOUT FIX */
           .ikg-day { overflow: visible !important; }
-          
+
           .ikg-fast-tt { position: relative; cursor: help; border-bottom: 1px dotted rgba(148, 163, 184, 0.5); display: inline-block; }
           .ikg-fast-tt.no-dot { border-bottom: none; }
-          .ikg-fast-tt::after { 
-              content: attr(data-title); 
-              position: absolute; 
-              bottom: 125%; 
-              left: 50%; 
-              transform: translateX(-50%) translateY(4px); 
-              width: max-content; 
-              max-width: 260px; 
-              background: var(--bg-elevated); 
-              color: var(--text-main); 
-              font-family: var(--font-family); 
-              font-size: 11px; 
-              font-weight: 500; 
-              padding: 6px 10px; 
-              border-radius: 6px; 
-              border: 1px solid var(--border); 
-              box-shadow: 0 12px 28px rgba(0,0,0,0.95); 
-              opacity: 0; 
-              visibility: hidden; 
+          .ikg-fast-tt::after {
+              content: attr(data-title);
+              position: absolute;
+              bottom: 125%;
+              left: 50%;
+              transform: translateX(-50%) translateY(4px);
+              width: max-content;
+              max-width: 260px;
+              background: var(--bg-elevated);
+              color: var(--text-main);
+              font-family: var(--font-family);
+              font-size: 11px;
+              font-weight: 500;
+              padding: 6px 10px;
+              border-radius: 6px;
+              border: 1px solid var(--border);
+              box-shadow: 0 12px 28px rgba(0,0,0,0.95);
+              opacity: 0;
+              visibility: hidden;
               transition: opacity 0.05s linear 0s, transform 0.05s linear 0s;
               will-change: opacity, transform;
-              z-index: 100001; 
-              pointer-events: none; 
-              white-space: pre-line; 
-              line-height: 1.4; 
-              text-align: center; 
-              margin-bottom: 6px; 
+              z-index: 100001;
+              pointer-events: none;
+              white-space: pre-line;
+              line-height: 1.4;
+              text-align: center;
+              margin-bottom: 6px;
           }
-          .ikg-fast-tt:hover::after { 
-              opacity: 1; 
-              visibility: visible; 
-              transform: translateX(-50%) translateY(0); 
+          .ikg-fast-tt:hover::after {
+              opacity: 1;
+              visibility: visible;
+              transform: translateX(-50%) translateY(0);
           }
 
           /* 🎯 TOP ROW FIX: Offset tooltips horizontally right to prevent blocking IN/OUT times */
@@ -4193,13 +4194,57 @@
         .ikg-legend-body { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; align-items: center; }
         .ikg-legend-body > span { display: inline-flex; align-items: center; gap: 5px; }
         .ikg-legend-swatch { display: inline-block; width: 16px; height: 10px; border-radius: 3px; }
-        .dm-day-notes { display: none; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-        .dm-note { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.4; color: var(--text-main); background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
-        .dm-note div div { color: var(--text-muted); font-size: 11px; }
-        .dm-note--warn { border-color: var(--warn); background: var(--warn-bg); }
-        .dm-note--bad { border-color: rgba(239, 68, 68, 0.5); background: var(--danger-bg); }
-        .dm-note--event { border-color: rgba(59, 130, 246, 0.5); background: rgba(59, 130, 246, 0.08); }
-        .dm-note--pto { border-color: rgba(139, 92, 246, 0.5); background: var(--pto-bg); }
+        .dm-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2px; }
+        .dm-header-left { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+        .dm-date-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+        .dm-date-title { font-size: 16px; font-weight: 700; color: var(--text-main); font-variant-numeric: tabular-nums; letter-spacing: -0.2px; }
+        .dm-day-name { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+        .dm-override-badge { font-size: 9.5px; padding: 2px 6px; border-radius: 4px; font-weight: 700; background: rgba(245, 158, 11, 0.15); color: var(--warn); border: 1px solid rgba(245, 158, 11, 0.35); display: none; }
+        .dm-pill-group { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+        .dm-close-btn { background: transparent; border: none; color: var(--text-muted); font-size: 18px; line-height: 1; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s ease; padding: 0; flex-shrink: 0; margin-top: -2px; margin-right: -4px; }
+        .dm-close-btn:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-main); }
+
+        .dm-day-notes { display: none; flex-direction: column; gap: 6px; margin-bottom: 2px; }
+        .dm-note { display: flex; gap: 8px; align-items: flex-start; font-size: 11.5px; line-height: 1.35; color: var(--text-main); background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; }
+        .dm-note div div { color: var(--text-muted); font-size: 10.5px; margin-top: 1px; }
+        .dm-note--warn { border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.08); }
+        .dm-note--bad { border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08); }
+        .dm-note--event { border-color: rgba(59, 130, 246, 0.35); background: rgba(59, 130, 246, 0.08); }
+        .dm-note--pto { border-color: rgba(139, 92, 246, 0.35); background: rgba(139, 92, 246, 0.08); }
+        
+        .dm-overview-card { background: var(--bg-base); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+        .dm-punch-row { display: flex; align-items: center; justify-content: space-between; }
+        .dm-punch-pod { display: flex; flex-direction: column; gap: 2px; }
+        .dm-punch-label { font-size: 9px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; }
+        .dm-punch-val { font-size: 16px; font-weight: 700; color: var(--text-main); font-variant-numeric: tabular-nums; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; letter-spacing: -0.2px; }
+        .dm-punch-sep { color: var(--border); font-size: 14px; font-weight: 300; margin: 0 4px; user-select: none; }
+        .dm-metrics-row { display: flex; justify-content: space-between; align-items: center; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.06); font-size: 12px; }
+        .dm-metrics-label { color: var(--text-muted); font-size: 11.5px; }
+        .dm-metrics-label b { color: var(--text-main); font-weight: 600; }
+        .dm-metrics-flex { font-size: 12px; font-weight: 700; }
+        .dm-metrics-flex.good { color: var(--success); }
+        .dm-metrics-flex.bad { color: var(--danger); }
+        .dm-punctuality-row { font-size: 11px; display: flex; align-items: center; gap: 5px; }
+
+        .dm-ignore-card { display: flex; align-items: center; justify-content: space-between; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; cursor: pointer; user-select: none; transition: all 0.15s ease; }
+        .dm-ignore-card:hover { background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.15); }
+        .dm-ignore-card.is-ignored { background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.4); }
+        .dm-ignore-card input { width: 16px; height: 16px; accent-color: var(--danger); cursor: pointer; margin: 0; }
+        .dm-ignore-content { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+        .dm-ignore-title { font-size: 11.5px; font-weight: 600; color: var(--text-main); }
+        .dm-ignore-card.is-ignored .dm-ignore-title { color: var(--danger); }
+        .dm-ignore-sub { font-size: 10.5px; color: var(--text-muted); }
+
+        .dm-override-details { margin-top: 2px; border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 8px; }
+        .dm-override-details summary { font-size: 11px; color: var(--text-muted); cursor: pointer; font-weight: 500; user-select: none; transition: color 0.15s; }
+        .dm-override-details summary:hover { color: var(--text-main); }
+        .dm-override-body { margin-top: 8px; background: var(--bg-base); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); }
+        .dm-override-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .dm-override-grid label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 4px; display: block; }
+        .dm-override-grid input { padding: 5px 7px; font-size: 12px; width: 100%; box-sizing: border-box; }
+        .dm-calc-preview { font-size: 10.5px; color: var(--primary); margin-top: 6px; text-align: right; font-weight: 600; min-height: 14px; font-family: monospace; }
+        .dm-btn-remove { width: 100%; margin-top: 6px; background: transparent; border: 1px solid var(--danger); color: var(--danger); padding: 5px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; transition: 0.15s; }
+        .dm-btn-remove:hover { background: var(--danger-bg); }
         .ikg-sd-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
         .ikg-sd-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 12px; font-size: 12.5px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-surface); }
         .ikg-sd-row.is-past { opacity: 0.55; }
@@ -4396,7 +4441,7 @@
 
             const checkboxDisabled = realMonthBalance <= 0 ? "disabled" : "";
             const checkboxOpacity = realMonthBalance <= 0 ? "0.5" : "1";
-            
+
             const spoofBadge = todaysEval.isSpoofed ? `<span class="ikg-fast-tt" data-title="Using Manual Override time" style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:1px 4px; border-radius:3px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">✏️ OVR</span>` : '';
 
             container.innerHTML = `
@@ -5071,11 +5116,21 @@
           ...punctualityList(evalDay)
             .filter((f) => !(evalDay.shortfall && PUNCTUALITY_CODES.has(evalDay.shortfall.code) && evalDay.shortfall.badge === f.badge))
             .map((f) => note("⏰", `${f.badge} · ${f.detail}`, "", "bad")),
-          evalDay.events.length ? note("🎉", evalDay.eventLabel, eventTooltip(evalDay).replace(/🎉 /g, "").split("\n").join(" · "), "event") : "",
+          evalDay.events.length
+            ? note(
+                "🎉",
+                evalDay.eventLabel,
+                [
+                  ...evalDay.events.map((e) => [e.time, e.allDay ? "All day" : e.clockOutAfter ? `Clock out from ${e.clockOutAfter}` : ""].filter(Boolean).join(" · ")),
+                  evalDay.isEventDay ? "Attendance only (uncounted in net flex)" : ""
+                ].filter(Boolean).join(" · "),
+                "event"
+              )
+            : "",
           evalDay.isFullPTO || evalDay.isPartialPTO ? note(IkgWorkRules.ptoIconsOf(evalDay.ptoType), `${evalDay.ptoType}${evalDay.isPartialPTO ? ` · ${evalDay.ptoHrs}h` : ""}`, [evalDay.ptoWindowLabel, evalDay.ptoDescription].filter(Boolean).join(" · "), "pto") : "",
           evalDay.pendingPTO ? note("⏳", `${evalDay.pendingPTO.type} · ${evalDay.pendingPTO.hours}h awaiting approval`, "Not counted until approved", "pto") : "",
           evalDay.isWfhExcluded ? note("🏠", "WFH · not counted", "Settings → Calculate WFH hours is off") : "",
-          (evalDay.isPartialPTO || evalDay.events.length) && !evalDay.isFullPTO
+          evalDay.isPartialPTO && !evalDay.isFullPTO && !evalDay.events.length
             ? note("🎯", "How this day's target is set", IkgWorkRules.explainDayTarget(evalDay).steps.join(" · "))
             : "",
         ].filter(Boolean);
@@ -5124,8 +5179,54 @@
         set("ikg-flex-insight", "");
       };
 
+      function sanitizeOverrides() {
+        try {
+          const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}");
+          const localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
+          let changed = false;
+
+          const toTimeInputStr = (ms) => {
+            if (!ms) return "";
+            const d = new Date(ms);
+            const pad = (n) => String(n).padStart(2, "0");
+            return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+          };
+
+          for (const [dateStr, ov] of Object.entries(overrides)) {
+            if (!ov) continue;
+            const rec = localCache[dateStr];
+            const nativeIn = rec?.startTime ? toTimeInputStr(rec.startTime) : "";
+            const nativeOut = rec?.endTime ? toTimeInputStr(rec.endTime) : "";
+
+            const manInMatches = !ov.manualIn || ov.manualIn === nativeIn;
+            const manOutMatches = !ov.manualOut || ov.manualOut === nativeOut;
+
+            if (manInMatches && manOutMatches && !ov.isIgnored) {
+              delete overrides[dateStr];
+              changed = true;
+            } else {
+              if (manInMatches && ov.manualIn) {
+                ov.manualIn = null;
+                changed = true;
+              }
+              if (manOutMatches && ov.manualOut) {
+                ov.manualOut = null;
+                changed = true;
+              }
+            }
+          }
+
+          if (changed) {
+            localStorage.setItem(OVERRIDES_KEY, JSON.stringify(overrides));
+          }
+        } catch (e) {
+          IkgLog.error("Error sanitizing overrides", e);
+        }
+      }
+
       // --- RENDER CALENDAR ENGINE (WITH 3-DAY GRACE PERIOD & PTO WARNINGS) ---
       async function renderCalendar() {
+        sanitizeOverrides();
         if (!holidayFailedYears.has(currentViewYear)) {
           try {
             await ensureHolidaysSecured(currentViewYear);
@@ -5236,7 +5337,7 @@
           } else if (evalDay.status === 'holiday') {
               cellContent = `<div class="pto-pill" style="background:rgba(59,130,246,0.1); color:var(--primary); border-color:var(--primary);">🎊 ${evalDay.holidayName}</div>`;
           } else if (evalDay.status === 'weekend-empty') {
-              cellContent = ``; 
+              cellContent = ``;
           } else if (evalDay.status === 'omitted') {
               if (evalDay.ptoType) {
                   cellContent = `<div class="pto-pill${ptoPillTip.cls}"${ptoPillTip.attr} style="background:rgba(245, 158, 11, 0.1); color:var(--warn); border-color:var(--warn);">🌴 ${evalDay.ptoType}</div>`;
@@ -5251,15 +5352,15 @@
               partialPill += partialPtoPillHtml(evalDay);
               cellContent = plannedCellHtml(evalDay);
           } else if (evalDay.effStart || evalDay.effEnd || evalDay.isSpoofed || evalDay.actualHrs > 0) {
-            let pendingIcon = ""; 
+            let pendingIcon = "";
             let timesClass = "";
 
             const inTimeDisplay = evalDay.effStart ? formatTime(evalDay.effStart) : (record?.startTime ? formatTime(record.startTime) : "--:--");
             let outTimeDisplay = evalDay.effEnd ? formatTime(evalDay.effEnd) : (record?.endTime ? formatTime(record.endTime) : "--:--");
 
             if (evalDay.status === "pending") {
-                timesClass = "pending"; 
-                pendingIcon = ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>'; 
+                timesClass = "pending";
+                pendingIcon = ' <span style="font-size:12px; margin-bottom:2px;" title="Waiting for checkout data...">⌛</span>';
                 outTimeDisplay = "Pending";
             }
 
@@ -5274,11 +5375,11 @@
 
             // 🎯 BADGE SEPARATION & UNIFORM CELL WIDTH ALIGNMENT
             const overrideBadge = (evalDay.isSpoofed && !evalDay.isIgnored)
-              ? `<span class="ikg-fast-tt no-dot" data-title="Manual Override Active (Custom Times)" style="font-size:9px; background:rgba(245,158,11,0.2); border:1px solid rgba(245,158,11,0.4); color:var(--warn); padding:1px 4px; border-radius:4px; font-weight:800; white-space:nowrap; flex-shrink:0; cursor:help;">✏️ OVR</span>` 
+              ? `<span class="ikg-fast-tt no-dot" data-title="Manual Override Active (Custom Times)" style="font-size:9px; background:rgba(245,158,11,0.2); border:1px solid rgba(245,158,11,0.4); color:var(--warn); padding:1px 4px; border-radius:4px; font-weight:800; white-space:nowrap; flex-shrink:0; cursor:help;">✏️ OVR</span>`
               : '';
 
-            const ignoredBadge = evalDay.isIgnored 
-              ? `<span class="ikg-fast-tt no-dot" data-title="Omitted from System Totals" style="font-size:9px; background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.4); color:var(--danger); padding:1px 4px; border-radius:4px; font-weight:800; white-space:nowrap; flex-shrink:0; cursor:help;">⚠️ IGNORED</span>` 
+            const ignoredBadge = evalDay.isIgnored
+              ? `<span class="ikg-fast-tt no-dot" data-title="Omitted from System Totals" style="font-size:9px; background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.4); color:var(--danger); padding:1px 4px; border-radius:4px; font-weight:800; white-space:nowrap; flex-shrink:0; cursor:help;">⚠️ IGNORED</span>`
               : '';
 
             let graceBadge = "";
@@ -5372,7 +5473,7 @@
                 sideDaysEl.parentElement.style.gap = "12px";
             }
           }
-          
+
           const sideActualEl = document.getElementById("side-val-actual");
           if (sideActualEl) {
             sideActualEl.innerHTML = `
@@ -5657,7 +5758,7 @@
         } else if (currentAuditRange === "30D") {
           const cutoff = new Date(todayObj.getTime() - 29 * 86400000);
           filteredDates = allDates.filter((d) => new Date(d) >= cutoff);
-        } else if (currentAuditRange === "MONTH") { filteredDates = allDates.filter((d) => d.startsWith(currentAuditMonth)); } 
+        } else if (currentAuditRange === "MONTH") { filteredDates = allDates.filter((d) => d.startsWith(currentAuditMonth)); }
         else if (currentAuditRange === "CUSTOM") {
           const rStart = auditCalInstance ? auditCalInstance.rangeStart : null;
           const rEnd = auditCalInstance ? auditCalInstance.rangeEnd : null;
@@ -5685,7 +5786,7 @@
           if (evalDay.effStart || evalDay.actualHrs > 0 || evalDay.isIgnored || evalDay.ptoHrs > 0) {
             const isToday = dateStr === todayStr;
             const exactHrs = evalDay.actualHrs;
-            
+
             // Flex calculation using 8.5h base target
             const exactFlexHrs = (isToday || evalDay.isYesterdayGrace || evalDay.isIgnored) ? 0 : evalDay.flexHrs;
             const flexStr = exactFlexHrs === 0 ? "-" : formatDurFromDec(exactFlexHrs, true);
@@ -5878,7 +5979,7 @@
         const targetY = currentStatsMonth ? parseInt(currentStatsMonth.split('-')[0], 10) : new Date().getFullYear();
         try { await ensureHolidaysSecured(targetY); } catch(e) { return; }
         currentStatsMonth = populateMonthSelect('ikg-stats-month', localCache, currentStatsMonth);
-        
+
         const dayNotes = JSON.parse(localStorage.getItem(DAY_NOTES_KEY) || "{}");
         const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}");
 
@@ -5931,7 +6032,7 @@
         let inMsArr = [];
         let outMsArr = [];
         let shiftHrsArr = [];
-        
+
         // 🎯 NEW: Added Day trackers for WFH and Office
         let filterTotalDays = 0, filterTotalHours = 0, filterTargetHours = 0, filterFullPTODays = 0, filterPartialPTODays = 0;
         let filterWFHHours = 0, filterOfficeHours = 0, filterPTOHours = 0;
@@ -6053,7 +6154,7 @@
             allDaysEl.parentElement.style.alignItems = "flex-start"; // Align to top
             allDaysEl.parentElement.style.gap = "12px"; // Prevent text collision
         }
-        
+
         const allActualEl = document.getElementById("all-val-hours");
         allActualEl.innerHTML = `
             <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
@@ -6189,8 +6290,8 @@
         const injectVerBadge = () => {
           if (document.getElementById("ikg-ver-badge")) return true;
 
-          const titleContainer = 
-            document.querySelector(".ikg-title-area") || 
+          const titleContainer =
+            document.querySelector(".ikg-title-area") ||
             document.querySelector("#ikg-modal-header > div:first-child");
 
           if (titleContainer) {
@@ -6303,43 +6404,51 @@
 
                                 <div class="day-modal-overlay"></div>
                                 <div id="ikg-day-modal" class="ikg-popup-modal">
-                                    <div class="dm-title" id="dm-title-date">
-                                        <div style="display:flex; align-items:center; gap:8px;">
-                                            <span id="dm-date-label">Date</span>
-                                            <span id="dm-override-badge" style="font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; display:none;"></span>
+                                    <div class="dm-header">
+                                        <div class="dm-header-left">
+                                            <div class="dm-date-row">
+                                                <span id="dm-date-label" class="dm-date-title">Date</span>
+                                                <span id="dm-day-name" class="dm-day-name"></span>
+                                                <span id="dm-override-badge" class="dm-override-badge"></span>
+                                            </div>
+                                            <div id="dm-pill-group" class="dm-pill-group"></div>
                                         </div>
-                                        <span id="dm-close-btn" style="cursor:pointer; color:var(--text-muted); font-size:24px; line-height:1;">&times;</span>
+                                        <button id="dm-close-btn" class="dm-close-btn" type="button" aria-label="Close">&times;</button>
                                     </div>
                                     <div id="dm-day-notes" class="dm-day-notes"></div>
-                                    <div style="background:var(--bg-base); padding:16px; border-radius:12px; border:1px solid var(--border);">
-                                        <div style="font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:12px; display:flex; align-items:center; gap:6px;">
-                                            ⏱️ Manual Shift Override
-                                            <span id="dm-save-status" style="margin-left:auto; font-size:10px; color:var(--success); font-weight:700; opacity:0; transition:opacity 0.3s;">Saved ✓</span>
+                                    <div id="dm-day-overview" class="dm-overview-card"></div>
+
+                                    <label id="dm-ignore-wrap" class="dm-ignore-card">
+                                        <div class="dm-ignore-content">
+                                            <span class="dm-ignore-title">Exclude from Net Balance</span>
+                                            <span class="dm-ignore-sub">Omit this day from monthly stats</span>
                                         </div>
-                                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
-                                            <div>
-                                                <label style="font-size:10px; color:var(--text-muted); text-transform:uppercase; font-weight:600; margin-bottom:6px; display:block;">Clock In</label>
-                                                <input type="time" step="1" id="dm-manual-in" class="set-input" style="padding:10px; font-size:15px; width:100%; box-sizing:border-box; cursor:pointer;">
+                                        <input type="checkbox" id="dm-ignore-toggle">
+                                    </label>
+
+                                    <details id="dm-override-details" class="dm-override-details">
+                                        <summary>Manual time override</summary>
+                                        <div class="dm-override-body">
+                                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                                                <span style="font-size:10px; font-weight:600; color:var(--text-muted); text-transform:uppercase;">Shift Times</span>
+                                                <span id="dm-save-status" style="font-size:10px; color:var(--success); font-weight:700; opacity:0; transition:opacity 0.3s;">Saved ✓</span>
                                             </div>
-                                            <div>
-                                                <label style="font-size:10px; color:var(--text-muted); text-transform:uppercase; font-weight:600; margin-bottom:6px; display:block;">Clock Out</label>
-                                                <input type="time" step="1" id="dm-manual-out" class="set-input" style="padding:10px; font-size:15px; width:100%; box-sizing:border-box; cursor:pointer;">
+                                            <div class="dm-override-grid">
+                                                <div>
+                                                    <label>Clock In</label>
+                                                    <input type="time" step="1" id="dm-manual-in" class="set-input">
+                                                </div>
+                                                <div>
+                                                    <label>Clock Out</label>
+                                                    <input type="time" step="1" id="dm-manual-out" class="set-input">
+                                                </div>
                                             </div>
-                                        </div>
-
-                                        <div id="dm-calc-preview" style="font-size:11px; color:var(--text-muted); margin-top:8px; text-align:right; font-weight:600; min-height:16px;"></div>
-
-                                        <label style="display:flex; align-items:center; gap:8px; margin-top:12px; padding-top:12px; border-top:1px dashed var(--border); cursor:pointer; user-select:none;">
-                                            <input type="checkbox" id="dm-ignore-toggle" style="width:16px; height:16px; accent-color:var(--danger);">
-                                            <span style="font-size:11px; font-weight:600; color:var(--danger);">⚠️ Ignore from Flex/Stats (Pending HR)</span>
-                                        </label>
-
-                                        <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px;">
-                                            <button id="dm-btn-remove-override" style="width:100%; background:transparent; border:1px solid var(--danger); color:var(--danger); padding:8px 12px; border-radius:8px; font-size:12px; font-weight:700; cursor:pointer; transition:0.2s; display:none;" onmouseover="this.style.background='var(--danger-bg)'" onmouseout="this.style.background='transparent'">
+                                            <div id="dm-calc-preview" class="dm-calc-preview"></div>
+                                            <button id="dm-btn-remove-override" class="dm-btn-remove" type="button">
                                                 🗑️ Remove Manual Override
                                             </button>
                                         </div>
-                                    </div>
+                                    </details>
                                 </div>
                             </div>
 
@@ -6725,12 +6834,22 @@
                                                 <span style="font-family: monospace; font-weight: 800; font-size: 18px; color: var(--text-main); background: var(--bg-elevated); padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border);">${SCRIPT_VER}</span>
                                                 <span style="font-size: 10px; font-weight: 700; color: #fff; background: var(--success); padding: 3px 8px; border-radius: 12px; letter-spacing: 0.5px;">LATEST</span>
                                             </div>
-                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Punctuality Refinement, Flex Buffer Burn, and Calendar UI Streamlining</h3>
+                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Day Modal Redesign, Smart Override Cleaning, and Punctuality Refinements</h3>
                                         </div>
                                         <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">Current Release</div>
                                     </div>
 
                                     <div style="display: flex; flex-direction: column; gap: 16px; font-size: 13px; line-height: 1.6; color: var(--text-main);">
+                                        <div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--success); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">🗓️ Day Modal Redesign &amp; Smart Override Cleaning</div>
+                                            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Minimal Unified Popover:</b> Replaced nested dark boxes with a clean, borderless surface, integrated circular close button, and prominent Clock In / Clock Out punch pods with tabular numerals.</li>
+                                                <li><b>Concise Event Banners:</b> Simplified company event cards into clean 1–2 line accent strips, completely removing duplicate rule text.</li>
+                                                <li><b>Smart Dirty-Checking &amp; Auto-Clean:</b> Toggling "Exclude from Net Balance" on and off will never leave behind an unwanted <code>OVR</code> badge. Values matching original punches are never treated as overrides, and legacy pseudo-overrides are purged automatically.</li>
+                                                <li><b>De-emphasized Legacy Override:</b> Manual punch editing is tucked into a clean collapsed drawer at the bottom, auto-expanded only when an active override exists.</li>
+                                            </ul>
+                                        </div>
+
                                         <div>
                                             <div style="font-size: 12px; font-weight: 700; color: var(--primary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">⏱️ Punctuality &amp; Working Rules</div>
                                             <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
@@ -6751,9 +6870,10 @@
                                         <div>
                                             <div style="font-size: 12px; font-weight: 700; color: var(--warn); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">🎨 Calendar UI / UX Modernization</div>
                                             <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Permanent Sync Pill Protection:</b> Ensured zero horizontal truncation of the sync status pill across all viewport sizes.</li>
+                                                <li><b>Instant "Today" Recognition:</b> Prominent accent frame, surface tint, and a dedicated <code>TODAY</code> pill in the active date cell.</li>
                                                 <li><b>Hero Goal-Out Stat:</b> Prominent checkout target display answering "when can I clock out?" at a glance with large high-contrast typography.</li>
-                                                <li><b>Unified Actions Toolbar:</b> Clean integration of Browser Alarm, Google Calendar, and macOS <code>.ics</code> download.</li>
-                                                <li><b>Calendar Grid Polish:</b> Monospace punch-time alignment, cleaner badge rhythm, and enhanced readability with 100% of existing data preserved.</li>
+                                                <li><b>Calendar Grid Polish:</b> High-contrast solid pills, dark punch container, and 100% data fidelity preserved.</li>
                                             </ul>
                                         </div>
                                     </div>
@@ -7282,27 +7402,24 @@
           const removeBtn = document.getElementById("dm-btn-remove-override");
           const calcPreviewEl = document.getElementById("dm-calc-preview");
 
-          const hasActiveOverride = !!(existingOv && (existingOv.manualIn || existingOv.manualOut || existingOv.isIgnored));
+          const hasActiveOverride = !!(existingOv && (existingOv.manualIn || existingOv.manualOut));
 
-          if (hasActiveOverride) {
-            badgeEl.innerText = "⚠️ OVERRIDDEN";
-            badgeEl.style.background = "rgba(245,158,11,0.2)";
-            badgeEl.style.color = "var(--warn)";
-            badgeEl.style.border = "1px solid rgba(245,158,11,0.4)";
-            badgeEl.style.display = "inline-block";
-            removeBtn.style.display = "block";
-          } else {
-            badgeEl.innerText = "🤖 SYSTEM NATIVE";
-            badgeEl.style.background = "var(--bg-elevated)";
-            badgeEl.style.color = "var(--text-muted)";
-            badgeEl.style.border = "1px solid var(--border)";
-            badgeEl.style.display = "inline-block";
-            removeBtn.style.display = "none";
+          if (badgeEl) {
+            if (hasActiveOverride) {
+              badgeEl.innerText = "✏️ Overridden";
+              badgeEl.style.display = "inline-block";
+            } else {
+              badgeEl.innerText = "";
+              badgeEl.style.display = "none";
+            }
+          }
+          if (removeBtn) {
+            removeBtn.style.display = hasActiveOverride ? "block" : "none";
           }
 
           // Live Duration Preview Calculation
-          const manIn = document.getElementById("dm-manual-in").value;
-          const manOut = document.getElementById("dm-manual-out").value;
+          const manIn = document.getElementById("dm-manual-in").value.trim();
+          const manOut = document.getElementById("dm-manual-out").value.trim();
           if (manIn && manOut) {
             const [y, m, d] = activeModalDate.split('-');
             const inD = new Date(y, parseInt(m, 10)-1, d, ...manIn.split(':'));
@@ -7317,17 +7434,34 @@
 
         const handleAutoSave = () => {
           if (!activeModalDate) return;
-          const manIn = document.getElementById("dm-manual-in").value;
-          const manOut = document.getElementById("dm-manual-out").value;
+          const manIn = document.getElementById("dm-manual-in").value.trim();
+          const manOut = document.getElementById("dm-manual-out").value.trim();
           const isIgnored = document.getElementById("dm-ignore-toggle").checked;
+
+          const localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
+          const record = localCache[activeModalDate];
+
+          const toTimeInputStr = (ms) => {
+            if (!ms) return "";
+            const d = new Date(ms);
+            const pad = (n) => String(n).padStart(2, "0");
+            return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+          };
+
+          const nativeIn = record?.startTime ? toTimeInputStr(record.startTime) : "";
+          const nativeOut = record?.endTime ? toTimeInputStr(record.endTime) : "";
+
+          // Smart dirty detection: only an override if non-empty AND different from original punch
+          const effectiveManualIn = (manIn && manIn !== nativeIn) ? manIn : null;
+          const effectiveManualOut = (manOut && manOut !== nativeOut) ? manOut : null;
 
           let overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}");
 
-          // 🔑 CLEAN UP: Only write override entry if manual times or ignore is active
-          if (manIn || manOut || isIgnored) {
+          // Only write override entry if manual times differ or ignore is active
+          if (effectiveManualIn || effectiveManualOut || isIgnored) {
             overrides[activeModalDate] = {
-              manualIn: manIn || null,
-              manualOut: manOut || null,
+              manualIn: effectiveManualIn,
+              manualOut: effectiveManualOut,
               isIgnored: isIgnored,
             };
           } else {
@@ -7344,12 +7478,152 @@
             }, 1200);
           }
 
+          const ignoreWrap = document.getElementById("dm-ignore-wrap");
+          if (ignoreWrap) ignoreWrap.classList.toggle("is-ignored", isIgnored);
+
           updateModalPreviewAndBadge();
 
           const cache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
           renderCalendar();
           if (activeTab === "stats") renderAnalytics(cache);
           if (activeTab === "audit") renderAudit(cache);
+        };
+
+        const renderDayModalContent = (dateStr) => {
+          if (!dateStr) return;
+          const snapshot = IKG_DataStore.buildSnapshot();
+          const evalDay = evaluateDay(IKG_DataStore.getDayContext(dateStr, snapshot));
+          const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}");
+          const isIgnored = !!overrides[dateStr]?.isIgnored;
+          const isSpoofed = !!(overrides[dateStr]?.manualIn || overrides[dateStr]?.manualOut);
+
+          // 1. Title Date + Day of week
+          const [y, m, d] = dateStr.split('-');
+          const dObj = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+          const fullDayName = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][dObj.getDay()];
+          const titleDateSpan = document.getElementById("dm-date-label");
+          if (titleDateSpan) titleDateSpan.innerText = dateStr;
+          const dayNameSpan = document.getElementById("dm-day-name");
+          if (dayNameSpan) dayNameSpan.innerText = fullDayName;
+
+          // 2. Status Pills Group
+          const pillGroupEl = document.getElementById("dm-pill-group");
+          if (pillGroupEl) {
+            let pills = [];
+            if (evalDay.isPublicHoliday) {
+              pills.push(`<span class="ikg-pill" style="background:var(--primary);">🎊 ${escapeAttr(evalDay.holidayName)}</span>`);
+            } else if (evalDay.isWeekend) {
+              pills.push(`<span class="ikg-pill" style="background:var(--bg-elevated); color:var(--text-muted); border:1px solid var(--border);">Weekend</span>`);
+            }
+            if (evalDay.isFullPTO) {
+              pills.push(`<span class="ikg-pill ikg-pill--pto">🏝️ ${escapeAttr(evalDay.ptoType)}</span>`);
+            } else if (evalDay.isPartialPTO) {
+              pills.push(`<span class="ikg-pill ikg-pill--pto">🏝️ ${escapeAttr(evalDay.ptoType)} (${evalDay.ptoHrs}h)</span>`);
+            }
+            if (evalDay.isWFH) {
+              pills.push(`<span class="ikg-pill ikg-pill--wfh">🏠 WFH</span>`);
+            } else if (evalDay.effStart || evalDay.actualHrs > 0) {
+              pills.push(`<span class="ikg-pill" style="background:var(--primary);">🏢 Office</span>`);
+            }
+            if (evalDay.isCorrected) {
+              pills.push(`<span class="ikg-pill ikg-pill--fixed">✏️ HR Fixed</span>`);
+            }
+            pillGroupEl.innerHTML = pills.join("");
+          }
+
+          // 3. Day Overview Card
+          const overviewEl = document.getElementById("dm-day-overview");
+          if (overviewEl) {
+            let inVal = evalDay.effStart ? formatTime(evalDay.effStart) : "--:--:--";
+            let outVal = evalDay.effEnd ? formatTime(evalDay.effEnd) : (evalDay.effStart ? `<span style="color:var(--warn); font-size:13px;">Missing</span>` : "--:--:--");
+
+            let punchSection = "";
+            if (evalDay.isFullPTO) {
+              punchSection = `
+                <div style="text-align:center; padding:4px 0; color:var(--pto); font-weight:600; font-size:13px;">
+                  🏖️ ${escapeAttr(evalDay.ptoType || "Leave")} · No punch required
+                </div>
+              `;
+            } else if (evalDay.isPublicHoliday && !evalDay.effStart) {
+              punchSection = `
+                <div style="text-align:center; padding:4px 0; color:var(--primary); font-weight:600; font-size:13px;">
+                  🎊 ${escapeAttr(evalDay.holidayName || "Public Holiday")} · Rest Day
+                </div>
+              `;
+            } else if (!evalDay.effStart && !evalDay.effEnd) {
+              punchSection = `
+                <div style="text-align:center; padding:4px 0; color:var(--text-muted); font-size:12px;">
+                  No punch records on this date
+                </div>
+              `;
+            } else {
+              punchSection = `
+                <div class="dm-punch-row">
+                  <div class="dm-punch-pod">
+                    <span class="dm-punch-label">Clock In</span>
+                    <span class="dm-punch-val">${inVal}</span>
+                  </div>
+                  <div class="dm-punch-sep">──</div>
+                  <div class="dm-punch-pod" style="text-align:right;">
+                    <span class="dm-punch-label">Clock Out</span>
+                    <span class="dm-punch-val">${outVal}</span>
+                  </div>
+                </div>
+              `;
+            }
+
+            let metricsLeft = "";
+            let metricsRight = "";
+
+            if (evalDay.isEventDay) {
+              metricsLeft = `<span class="dm-metrics-label"><b>${evalDay.actualHrs.toFixed(2)}h</b> worked</span>`;
+              metricsRight = `<span style="color:var(--text-muted); font-size:11px;">Event Day · Uncounted</span>`;
+            } else if (evalDay.isFullPTO) {
+              metricsLeft = `<span class="dm-metrics-label"><b>${evalDay.effectiveHrs.toFixed(2)}h</b> credit</span>`;
+              metricsRight = `<span style="color:var(--pto); font-size:11px; font-weight:600;">Paid Leave</span>`;
+            } else if (evalDay.isWorkingDay) {
+              metricsLeft = `<span class="dm-metrics-label"><b>${evalDay.actualHrs.toFixed(2)}h</b> worked &nbsp;·&nbsp; <b>${evalDay.targetHrs.toFixed(2)}h</b> target</span>`;
+              const flexBadge = evalDay.flexHrs >= 0
+                ? `<span class="dm-metrics-flex good">+${evalDay.flexHrs.toFixed(2)}h flex</span>`
+                : `<span class="dm-metrics-flex bad">${evalDay.flexHrs.toFixed(2)}h flex</span>`;
+              metricsRight = flexBadge;
+            } else if (evalDay.actualHrs > 0) {
+              metricsLeft = `<span class="dm-metrics-label"><b>${evalDay.actualHrs.toFixed(2)}h</b> worked</span>`;
+              metricsRight = `<span style="color:var(--primary); font-size:11px; font-weight:600;">Overtime</span>`;
+            } else {
+              metricsLeft = `<span class="dm-metrics-label">0.00h</span>`;
+              metricsRight = `<span style="color:var(--text-muted); font-size:11px;">Rest Day</span>`;
+            }
+
+            let statusRow = "";
+            if (evalDay.punctuality?.late) {
+              statusRow = `<div class="dm-punctuality-row" style="color:var(--danger); margin-top:2px;"><span>⏰</span><span>Late in: ${escapeAttr(evalDay.punctuality.late.detail)}</span></div>`;
+            } else if (evalDay.punctuality?.early) {
+              statusRow = `<div class="dm-punctuality-row" style="color:var(--danger); margin-top:2px;"><span>⏰</span><span>Early out: ${escapeAttr(evalDay.punctuality.early.detail)}</span></div>`;
+            } else if (evalDay.effStart && !evalDay.isEventDay && evalDay.isWorkingDay && !evalDay.isToday) {
+              statusRow = `<div class="dm-punctuality-row" style="color:var(--success); margin-top:2px;"><span>✅</span><span>On Time</span></div>`;
+            }
+
+            overviewEl.innerHTML = `
+              ${punchSection}
+              <div class="dm-metrics-row">
+                ${metricsLeft}
+                ${metricsRight}
+              </div>
+              ${statusRow}
+            `;
+          }
+
+          // 4. Ignore Card State
+          const ignoreWrap = document.getElementById("dm-ignore-wrap");
+          if (ignoreWrap) ignoreWrap.classList.toggle("is-ignored", isIgnored);
+
+          // 5. Override Accordion: auto-open if manual override is active
+          const overrideDetails = document.getElementById("dm-override-details");
+          if (overrideDetails) overrideDetails.open = isSpoofed;
+
+          renderDayModalNotes(dateStr);
+          updateModalPreviewAndBadge();
         };
 
         // Remove Override Button Listener
@@ -7364,7 +7638,7 @@
           document.getElementById("dm-ignore-toggle").checked = false;
 
           IkgLog.info(`🗑️ Removed manual override for ${activeModalDate}`);
-          updateModalPreviewAndBadge();
+          renderDayModalContent(activeModalDate);
 
           const cache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
           renderCalendar();
@@ -7386,8 +7660,7 @@
             const dayEl = e.target.closest(".ikg-day:not(.empty)");
             if (dayEl) {
               activeModalDate = dayEl.getAttribute("data-date");
-              const titleDateSpan = document.getElementById("dm-date-label");
-              if (titleDateSpan) titleDateSpan.innerText = activeModalDate;
+              sanitizeOverrides();
 
               const overrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY) || "{}");
               const localCache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
@@ -7400,20 +7673,22 @@
                 return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
               };
 
-              if (inputIn)
-                inputIn.value =
-                  overrides[activeModalDate]?.manualIn ||
-                  (record?.startTime ? toTimeInputStr(record.startTime) : "");
-              if (inputOut)
-                inputOut.value =
-                  overrides[activeModalDate]?.manualOut ||
-                  (record?.endTime ? toTimeInputStr(record.endTime) : "");
+              const nativeIn = record?.startTime ? toTimeInputStr(record.startTime) : "";
+              const nativeOut = record?.endTime ? toTimeInputStr(record.endTime) : "";
+
+              if (inputIn) {
+                inputIn.value = overrides[activeModalDate]?.manualIn || "";
+                inputIn.placeholder = nativeIn || "--:--:--";
+              }
+              if (inputOut) {
+                inputOut.value = overrides[activeModalDate]?.manualOut || "";
+                inputOut.placeholder = nativeOut || "--:--:--";
+              }
 
               if (ignoreToggle)
                 ignoreToggle.checked = !!overrides[activeModalDate]?.isIgnored;
 
-              updateModalPreviewAndBadge();
-              renderDayModalNotes(activeModalDate);
+              renderDayModalContent(activeModalDate);
 
               if (dmModal) dmModal.classList.add("open");
             }
@@ -7760,7 +8035,7 @@
           sessionStorage.removeItem("IKG_RELOAD_ATTEMPTS");
           // Persist preserved cache before re-rendering UI
           localStorage.setItem(CACHE_KEY, JSON.stringify(localCache));
-          
+
           syncStatus.aws = "✅";
           updateSyncProgressUI();
           triggerUIRefresh(); // 🎨 Immediate UI update without losing WFH/PTO
@@ -7975,7 +8250,7 @@
         const glowCount = window.ikgUpdatedDates ? window.ikgUpdatedDates.size : 0;
         if (glowCount > 0) {
           updateHeaderStatus(`✨ ${glowCount} Days Updated!`, "var(--primary)");
-          
+
           // Trigger initial render so the glow appears
           triggerUIRefresh();
 
