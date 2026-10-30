@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.145] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.146] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.145
+    // @version      7.146
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1785,10 +1785,14 @@
           return outs.length ? formatWindow({ start: Math.min(...outs), end: 0 }).split("–")[0] : "";
         };
 
+        const LATE_IN_LIMIT_SECS = 30 * 60 + 59; // 1859s: up to 30m 59s is on time
+        const EARLY_OUT_GRACE_SECS = 30 * 60;    // 1800s: 30m before checkout is on time (18:30:00 is not early)
         const PUNCTUALITY_GRACE_HRS = 0.5;
+        const toSec = (h) => Math.round(h * 3600);
         const lateInDeadline = (schedule) => (schedule?.earliestCheckin == null ? null : schedule.earliestCheckin + PUNCTUALITY_GRACE_HRS);
         const earlyOutDeadline = (schedule) => (schedule?.earliestCheckout == null ? null : schedule.earliestCheckout - PUNCTUALITY_GRACE_HRS);
-        const isLateIn = (schedule, inHour) => inHour != null && lateInDeadline(schedule) != null && inHour > lateInDeadline(schedule) + 1e-9;
+        const isLateIn = (schedule, inHour) => inHour != null && schedule?.earliestCheckin != null && toSec(inHour) > (toSec(schedule.earliestCheckin) + LATE_IN_LIMIT_SECS);
+        const isLeftEarly = (schedule, outHour) => outHour != null && schedule?.earliestCheckout != null && toSec(outHour) < (toSec(schedule.earliestCheckout) - EARLY_OUT_GRACE_SECS);
         const hhmm = (dec) => formatWindow({ start: dec, end: 0 }).split("–")[0];
         const durLabel = (hrs) => {
           const mins = Math.round(hrs * 60);
@@ -1817,8 +1821,6 @@
           return round(intersectLength(leave, { start: inHour, end: outHour }));
         };
 
-        const isLeftEarly = (schedule, outHour) =>
-          outHour != null && earlyOutDeadline(schedule) != null && outHour <= earlyOutDeadline(schedule) + 1e-9;
         const punctualityFlags = ({ schedule, inHour = null, outHour = null, eventChecks = null, isClockOutPending = false }) => {
           if (!schedule || schedule.mode === "event-full" || schedule.mode === "full" || eventChecks === "none") return Object.freeze({ late: null, early: null });
           const late = eventChecks !== "out" && isLateIn(schedule, inHour)
@@ -1978,7 +1980,7 @@
         };
 
         const EVENT_DAY_NOT_COUNTED = "Hours on event days are shown but not counted in Net Balance";
-        const eventCheckText = (checks, schedule) => checks === "in" ? `only your clock-in is checked (by ${hhmm(lateInDeadline(schedule))}, start + ${durLabel(PUNCTUALITY_GRACE_HRS)} grace)`
+        const eventCheckText = (checks, schedule) => checks === "in" ? `only your clock-in is checked (by ${hhmm(lateInDeadline(schedule))}, start + 30m 59s grace)`
           : checks === "out" ? `only your clock-out is checked (from ${hhmm(schedule.earliestCheckout)})`
           : "no punch time is checked";
         const arrow = (from, to) => `${hhmm(from)} → ${hhmm(to)}`;
@@ -2158,6 +2160,7 @@
         return Object.freeze({
           GROSS_SHIFT_HRS, FULL_PTO_HRS, GRADE_THRESHOLDS, SHIFT_LABELS,
           HEATMAP_CELL_MIN, HEATMAP_CELL_MAX, HEATMAP_GAP_PX, MAX_HISTORY_WEEKS, HEATMAP_WIDTH_MIN, HEATMAP_WIDTH_DEFAULT, HEATMAP_WIDTH_MAX,
+          LATE_IN_LIMIT_SECS, EARLY_OUT_GRACE_SECS, PUNCTUALITY_GRACE_HRS,
           parseSpecialDays, eventWindowsFor, eventOverlapHrs, eventReleaseLabel, explainShortfall, judgeEventDay, punctualityFlags, uncountedPunchHrs, leaveWorkedHrs, eventCheckText, EVENT_DAY_NOT_COUNTED, ptoKindOf, ptoIconsOf,
           summarizeMonth, pickWfhSyncDates, countedReason, isCountedReason, explainMonth, explainDayTarget,
           heatmapLayout, ptoShareOf, weekColumns, bucketByPeriod, mapPool, withDeadline, gasRequestMonths, alarmTriggerAction, planAlarmSoundMigration,
@@ -3758,7 +3761,7 @@
             #ikg-modal-backdrop.open { display: flex; opacity: 1; }
             #ikg-modal { width: 1300px; max-width: 95vw; height: 850px; max-height: 90vh; background: var(--bg-base); border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 32px 64px rgba(0,0,0,0.8); display: flex; flex-direction: column; overflow: hidden; color: var(--text-main); transform: scale(0.97); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
             #ikg-modal-backdrop.open #ikg-modal { transform: scale(1); }
-            #ikg-modal-header { padding: 0 32px; height: 72px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-surface); }
+            #ikg-modal-header { padding: 0 24px; height: 72px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-surface); gap: 16px; }
             .ikg-title-area { flex-shrink: 0;
               display: flex; 
               align-items: center; 
@@ -3768,13 +3771,13 @@
               letter-spacing: -0.02em; 
               white-space: nowrap; 
           }
-            .ikg-tab-group { display: flex; gap: 2px; height: 100%; align-items: center; margin-left: 28px; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+            .ikg-tab-group { display: flex; gap: 3px; height: 100%; align-items: center; margin-left: 14px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
             .ikg-tab-group::-webkit-scrollbar { display: none; }
-            .ikg-tab { height: 100%; display: flex; align-items: center; gap: 6px; padding: 0 14px; cursor: pointer; font-size: 14px; font-weight: 600; white-space: nowrap; flex-shrink: 0; box-sizing: border-box; color: var(--text-muted); border-bottom: 3px solid transparent; border-top: 3px solid transparent; transition: 0.2s; user-select: none; }
+            .ikg-tab { height: 100%; display: flex; align-items: center; gap: 5px; padding: 0 10px; cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; flex-shrink: 0; box-sizing: border-box; color: var(--text-muted); border-bottom: 3px solid transparent; border-top: 3px solid transparent; transition: 0.2s; user-select: none; }
             .ikg-tab:hover { color: var(--text-main); }
             .ikg-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
-            .ikg-header-actions { flex: 1 1 0; min-width: 160px; padding-left: 16px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; }
-            .ikg-header-status { font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 20px; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-muted); transition: 0.3s; user-select: none; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 100%; }
+            .ikg-header-actions { flex: 0 0 auto; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+            .ikg-header-status { font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 20px; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-muted); transition: 0.3s; user-select: none; display: inline-flex; align-items: center; white-space: nowrap; flex-shrink: 0; max-width: none; overflow: visible; }
             #ikg-close { cursor: pointer; font-size: 28px; color: var(--text-muted); line-height: 1; transition: color 0.2s; flex-shrink: 0; }
             #ikg-close:hover { color: var(--text-main); }
             #ikg-modal-body { display: flex; flex: 1; overflow: hidden; position: relative; }
@@ -3794,43 +3797,54 @@
             .ikg-day { background: var(--bg-surface); padding: 8px 10px; display: flex; flex-direction: column; transition: all 0.2s ease; position: relative; cursor: pointer; }
             .ikg-day.empty { background: var(--bg-base); cursor: default; }
             .ikg-day:hover:not(.empty) { background: var(--bg-elevated); z-index: 2; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-            .ikg-date-header { display: flex; justify-content: flex-end; align-items: center; margin-bottom: auto; min-height: 20px; }
+            .ikg-day.today {
+                background: linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.02) 100%) !important;
+                box-shadow: inset 0 0 0 1.5px var(--primary), 0 0 16px rgba(59, 130, 246, 0.25);
+                z-index: 3;
+                border-radius: 6px;
+            }
+            .ikg-date-header { display: flex; justify-content: flex-end; align-items: center; margin-bottom: auto; min-height: 20px; gap: 6px; }
             .ikg-date-num { font-size: 14px; font-weight: 600; color: var(--text-muted); }
-            .ikg-day.today .ikg-date-num { background: var(--primary); color: #fff; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+            .ikg-today-badge { background: var(--primary); color: #fff; font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 10px; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(59, 130, 246, 0.4); text-transform: uppercase; line-height: 1.2; }
+            .ikg-day.today .ikg-date-num { background: var(--primary); color: #fff; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 12px; font-weight: 700; }
             .skeleton { animation: pulse 1.5s infinite; background: linear-gradient(90deg, var(--bg-surface) 0%, var(--bg-elevated) 50%, var(--bg-surface) 100%); background-size: 200% 100%; border-radius: 6px; }
             @keyframes pulse { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
             .skel-hrs { height: 22px; width: 60px; margin-bottom: 8px; }
             .skel-box { height: 40px; width: 100%; }
             .ikg-cell-data { display: flex; flex-direction: column; gap: 4px; margin-top: auto; }
-            .ikg-total-hrs { font-size: 16px; font-weight: 700; letter-spacing: -0.03em; min-height: 20px; display:flex; align-items:center; gap:6px; }
+            .ikg-total-hrs { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; min-height: 20px; display:flex; align-items:center; gap:5px; }
             .ikg-total-hrs.good { color: var(--success); }
             .ikg-total-hrs.bad { color: var(--danger); }
             .ikg-total-hrs.pending { color: var(--warn); }
-            .ikg-times { display: flex; flex-direction: column; gap: 1px; font-size: 10px; color: var(--text-muted); font-weight: 500; background: rgba(0,0,0,0.2); padding: 5px 6px; border-radius: 6px; min-width: 0; }
+            .ikg-times { display: flex; flex-direction: column; gap: 2px; font-size: 10px; color: var(--text-muted); font-weight: 500; background: rgba(0, 0, 0, 0.28); padding: 5px 7px; border-radius: 6px; min-width: 0; }
             .ikg-times.pending { border: 1px dashed var(--warn); background: var(--warn-bg); }
-            .ikg-times div { display: flex; justify-content: space-between; align-items: center; }
-            .ikg-times span { color: var(--text-main); font-family: monospace; font-size: 10.5px; letter-spacing: -0.5px;}
+            .ikg-day.today .ikg-times { background: rgba(59, 130, 246, 0.12); border: 1px solid rgba(59, 130, 246, 0.3); }
+            .ikg-times div { display: flex; justify-content: space-between; align-items: center; line-height: 1.25; }
+            .ikg-times span { color: var(--text-main); font-family: monospace; font-size: 10.5px; font-variant-numeric: tabular-nums; letter-spacing: -0.3px;}
+            .ikg-times .ikg-time-label { color: var(--text-muted); font-size: 9px; font-weight: 700; letter-spacing: 0.5px; }
             .ikg-times span.ikg-punch-fixed { color: #F9A8D4; border-bottom: 1px dotted rgba(249, 168, 212, 0.6); }
             .ikg-times span.ikg-punch-pending { color: var(--warn); border-bottom: 1px dotted rgba(245, 158, 11, 0.6); }
             .ikg-pill-row { display: flex; align-items: center; gap: 3px; margin-right: auto; margin-left: 2px; min-width: 0; }
-            .ikg-pill { font-size: 9px; line-height: 12px; color: #fff; padding: 2px 5px; border-radius: 4px; font-weight: 700; letter-spacing: 0.5px; white-space: nowrap; cursor: help; }
-            .ikg-pill--wfh { background: var(--primary); box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3); }
-            .ikg-pill--pto { background: var(--pto); box-shadow: 0 2px 4px rgba(139, 92, 246, 0.3); }
-            .ikg-pill--fixed { background: #DB2777; box-shadow: 0 2px 4px rgba(219, 39, 119, 0.3); }
-            .pto-pill { background: var(--pto-bg); color: var(--pto); border: 1px solid var(--pto); padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-align: center; margin-top:auto;}
+            .ikg-pill { font-size: 9px; line-height: 12px; color: #fff; padding: 2px 6px; border-radius: 4px; font-weight: 700; letter-spacing: 0.5px; white-space: nowrap; cursor: help; }
+            .ikg-pill--wfh { background: var(--primary); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+            .ikg-pill--pto { background: var(--pto); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+            .ikg-pill--fixed { background: #DB2777; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+            .pto-pill { background: var(--pto-bg); color: var(--pto); border: 1px solid var(--pto); padding: 3px 6px; border-radius: 6px; font-size: 11px; font-weight: 600; text-align: center; margin-top:auto;}
 
-            .ikg-summary-pane { flex: 1; padding: 24px; overflow-y: auto; background: var(--bg-surface); display: flex; flex-direction: column; gap: 20px; justify-content: flex-start; }
-            .ikg-card { background: var(--bg-base); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; flex-shrink: 0; }
-            .ikg-card-title { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 16px; font-weight: 600; }
-            .ikg-stat-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 13px; font-weight: 500;}
+            .ikg-summary-pane { flex: 1; padding: 14px 16px; overflow-y: auto; scrollbar-width: thin; background: var(--bg-surface); display: flex; flex-direction: column; gap: 10px; justify-content: flex-start; }
+            .ikg-card { background: var(--bg-base); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; flex-shrink: 0; }
+            .ikg-card-title { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; font-weight: 700; }
+            .ikg-stat-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12.5px; font-weight: 500;}
             .ikg-stat-row:last-child { margin-bottom: 0; }
-            .ikg-stat-val { font-weight: 600; color: var(--text-main); font-size: 14px;}
+            .ikg-stat-val { font-weight: 600; color: var(--text-main); font-size: 13px;}
             .ikg-stat-val.good { color: var(--success); }
             .ikg-stat-val.bad { color: var(--danger); }
-            #ikg-active-shift { background: var(--primary-glow); border: 1px solid var(--primary); border-radius: 12px; padding: 20px; transition: all 0.3s ease; flex-shrink: 0; }
-            .ikg-active-header { color: var(--primary); font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; font-size: 15px;}
-            .ikg-btn-outline { background: transparent; border: 1px solid var(--primary); color: var(--primary); padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; text-decoration: none; text-align: center; display: block; margin-top: 10px; transition: 0.2s;}
-            .ikg-btn-outline:hover { background: var(--primary); color: #fff; }
+            #ikg-active-shift { background: var(--bg-base); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; transition: all 0.3s ease; flex-shrink: 0; box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
+            .ikg-active-header { color: var(--primary); font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; font-size: 13.5px;}
+            .ikg-btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-muted); padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; text-decoration: none; text-align: center; display: inline-flex; align-items: center; justify-content: center; gap: 4px; transition: 0.15s; }
+            .ikg-btn-outline:hover { background: var(--bg-elevated); color: var(--text-main); border-color: var(--primary); }
+            .ikg-toolbar-btn { background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-main); padding: 5px 9px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 5px; transition: 0.15s; box-sizing: border-box; }
+            .ikg-toolbar-btn:hover { border-color: var(--primary); color: #fff; background: var(--primary-glow); }
 
             .ikg-popup-modal { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.95); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 16px; padding: 24px; box-shadow: 0 24px 48px rgba(0,0,0,0.9); z-index: 100; display: none; opacity: 0; transition: all 0.2s ease; }
             .ikg-popup-modal.open { display: block; opacity: 1; transform: translate(-50%, -50%) scale(1); }
@@ -4330,7 +4344,7 @@
 
             if (lateMs > 0) {
               const lateHrs = lateMs / 3600000;
-              const maxBurnable = Math.min(0.5, lateHrs); // Cap at 30 mins
+              const maxBurnable = Math.min((31 * 60) / 3600, lateHrs); // Cap at 31 mins (covers 30m 59s late arrival)
               appliedFlexToday = Math.min(realMonthBalance, maxBurnable);
               todaysFlexGoal = safeFloat(todaysFlexGoal - appliedFlexToday);
             }
@@ -4349,88 +4363,84 @@
           const gcalEnd = new Date(targetMs + 15 * 60000).toISOString().replace(/[-:]|\.\d{3}/g, "");
 
           if (isCompleted) {
-            container.innerHTML = `<div id="ikg-active-shift" style="border-color: var(--success); background: var(--success-bg); padding: 16px; border-radius: 12px;"><div class="ikg-active-header" style="color: var(--success); margin-bottom: 4px;">🎉 Shift Completed</div><div style="font-size:12px; color: var(--text-main);">Goal reached! Time to disconnect.</div></div>`;
+            container.innerHTML = `<div id="ikg-active-shift" style="border-color: var(--success); background: var(--success-bg); padding: 12px 14px; border-radius: 12px;"><div class="ikg-active-header" style="color: var(--success); margin-bottom: 2px;"><span>🎉 Shift Completed</span></div><div style="font-size:11.5px; color: var(--text-main);">Goal reached! Time to disconnect.</div></div>`;
           } else {
             const alarmTime = formatTime(targetMs);
             let flexBadge = "";
-            let applyFlexHtml = "";
+            let applyFlexCompactLabel = "";
+            let flexTooltipTitle = "";
 
             if (realMonthBalance > 0) {
               if (applyFlex) {
                 if (appliedFlexToday > 0) {
                   const appliedStr = formatDurFromDec(appliedFlexToday, false);
-                  flexBadge = `<span class="ikg-fast-tt" data-title="Burned ${appliedStr} of your ${flexStr} total balance to offset late check-in." style="display:inline-block; white-space:nowrap; background:var(--warn); color:#000; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; cursor:help;">-${appliedStr} Flex Applied</span>`;
-                  applyFlexHtml = `Apply Flex (-${appliedStr} applied today)`;
+                  flexBadge = `<span class="ikg-fast-tt" data-title="Burned ${appliedStr} of your ${flexStr} total balance to offset late check-in." style="display:inline-block; white-space:nowrap; background:var(--warn); color:#000; padding:1px 5px; border-radius:4px; font-size:9.5px; font-weight:700; cursor:help;">-${appliedStr} Flex</span>`;
+                  applyFlexCompactLabel = `Flex (-${appliedStr})`;
+                  flexTooltipTitle = `Burned ${appliedStr} of your ${flexStr} balance to offset late check-in.`;
                 } else {
-                  applyFlexHtml = `Apply Flex (No late check-in to offset)`;
+                  applyFlexCompactLabel = `Flex (Active)`;
+                  flexTooltipTitle = `Flex applied, but no late arrival to offset today.`;
                 }
               } else {
-                applyFlexHtml = `Apply Monthly Flex (${flexStr} available)`;
+                applyFlexCompactLabel = `Apply Flex`;
+                flexTooltipTitle = `${flexStr} flex available to offset late arrival.`;
               }
             } else if (realMonthBalance < 0) {
-              flexBadge = `<span class="ikg-fast-tt" data-title="You have a deficit this month. Work past 9.0h to reduce it." style="display:inline-block; white-space:nowrap; background:var(--danger); color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; cursor:help;">${flexStr} Deficit</span>`;
-              applyFlexHtml = `No Flex Available (${flexStr})`;
+              flexBadge = `<span class="ikg-fast-tt" data-title="You have a deficit this month. Work past 9.0h to reduce it." style="display:inline-block; white-space:nowrap; background:var(--danger); color:#fff; padding:1px 5px; border-radius:4px; font-size:9.5px; font-weight:700; cursor:help;">${flexStr} Deficit</span>`;
+              applyFlexCompactLabel = `No Flex`;
+              flexTooltipTitle = `You have a ${flexStr} deficit this month.`;
             } else {
-              applyFlexHtml = `Apply Monthly Flex (Balance is 0)`;
-            }
-
-            let alarmSection = "";
-            if (isDismissed) {
-              alarmSection = `<div style="text-align:center; font-size:12px; color:var(--text-muted); font-weight:600; padding:8px 0; background: var(--bg-elevated); border-radius: 6px; border: 1px solid var(--border); margin-bottom: 12px;">✅ Alarm Dismissed for Today</div>`;
-            } else {
-              alarmSection = `
-                            <div id="alarm-ui-container" style="margin-bottom: 12px;">
-                                <button id="ikg-btn-alarm" data-endms="${targetMs}" class="ikg-btn-outline" style="margin-top:0; width:100%; padding: 8px; border-radius: 6px; font-size: 12px; font-weight: 600;">🔔 Set Browser Alarm</button>
-
-                                <div id="ikg-alarm-active-view" style="display:none; align-items:center; justify-content:space-between; background:var(--success-bg); border:1px solid rgba(16, 185, 129, 0.3); border-radius:6px; padding:6px 10px;">
-                                    <span id="ikg-alarm-status-text" style="font-size:12px; color:var(--success); font-weight:600;">✅ Scheduled!</span>
-                                    <button id="ikg-btn-cancel-alarm" style="background:transparent; color:var(--danger); border:1px solid var(--danger); padding:4px 8px; border-radius:4px; cursor:pointer; font-size:11px; font-weight:700; transition:0.2s;">🔕 Cancel</button>
-                                </div>
-                            </div>
-                        `;
+              applyFlexCompactLabel = `Flex (0h)`;
+              flexTooltipTitle = `No flex balance available.`;
             }
 
             const checkboxDisabled = realMonthBalance <= 0 ? "disabled" : "";
             const checkboxOpacity = realMonthBalance <= 0 ? "0.5" : "1";
             
-            const spoofBadge = todaysEval.isSpoofed ? `<span class="ikg-fast-tt" data-title="Using Manual Override time" style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:2px 5px; border-radius:4px; margin-left:8px; font-weight:700; vertical-align:middle; cursor:help;">⚠️ OVERRIDE</span>` : '';
+            const spoofBadge = todaysEval.isSpoofed ? `<span class="ikg-fast-tt" data-title="Using Manual Override time" style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:1px 4px; border-radius:3px; margin-left:6px; font-weight:700; vertical-align:middle; cursor:help;">✏️ OVR</span>` : '';
 
             container.innerHTML = `
-                        <div id="ikg-active-shift" style="background: var(--bg-base); border: 1px solid var(--border); border-radius: 12px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-
-                            <div class="ikg-active-header" style="margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
-                                <div style="color: var(--primary); font-weight: 700; display: flex; align-items: center; gap: 8px; font-size: 15px;">
-                                    ⏱️ Active Shift Today
+                        <div id="ikg-active-shift">
+                            <div class="ikg-active-header">
+                                <div style="color: var(--primary); font-weight: 700; display: flex; align-items: center; gap: 6px; font-size: 13.5px;">
+                                    ⏱️ Active Shift
                                 </div>
-                                <div class="ikg-fast-tt tt-right no-dot" data-title="${lockedShiftTitle}" style="background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); color: #c4b5fd; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-family: monospace; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                                <div class="ikg-fast-tt tt-right no-dot" data-title="${lockedShiftTitle}" style="background: rgba(139, 92, 246, 0.12); border: 1px solid rgba(139, 92, 246, 0.3); color: #c4b5fd; padding: 2px 7px; border-radius: 5px; font-size: 10.5px; font-family: monospace; font-weight: 600;">
                                     🔒 ${lockedShiftDisplay}
                                 </div>
                             </div>
 
-                            <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; font-size: 13px; margin-bottom: 12px; color: var(--text-main); align-items: center;">
-                                <div style="color: var(--text-muted); font-weight: 500;">In:</div>
-                                <div style="display: flex; align-items: center; min-width: 0;"><b style="font-family: monospace; font-size: 15px; letter-spacing: 0.5px;">${formatTime(startMs)}</b>${spoofBadge}</div>
-
-                                <div class="ikg-fast-tt no-dot" data-title="Note: Calendar shows system checkout time (lags 1 day). Trust the Goal Out above." style="color: var(--text-muted); font-weight: 500; display: flex; align-items: center; gap: 6px; width: fit-content; border-bottom: 1px dotted var(--text-muted);">
-                                    Goal Out <span style="display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; background:var(--border); color:var(--text-muted); border-radius:4px; font-size:10px; font-weight:bold; font-family:serif;">i</span>:
-                                </div>
-                                <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0;">
-                                    <b style="font-family: monospace; font-size: 15px; color: var(--primary); letter-spacing: 0.5px;">${alarmTime}</b>
-                                    <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">(${todaysFlexGoal.toFixed(2)}h)</span>
+                            <!-- Hero Target Checkout -->
+                            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px;">
+                                <div style="display: flex; align-items: baseline; gap: 6px;">
+                                    <span style="font-family: monospace; font-size: 22px; font-weight: 800; color: var(--primary); letter-spacing: -0.5px;">${alarmTime}</span>
                                     ${flexBadge}
                                 </div>
+                                <span style="font-size: 11px; color: var(--text-muted); font-weight: 600; font-family: monospace;">${todaysFlexGoal.toFixed(2)}h req</span>
+                            </div>
+                            <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px; display: flex; align-items: center; gap: 4px;">
+                                <span>In: <b style="font-family: monospace; color: var(--text-main); font-weight: 600;">${formatTime(startMs)}</b></span>${spoofBadge}
                             </div>
 
-                            <label id="ikg-flex-toggle-wrap" style="display:flex; align-items:center; gap: 8px; margin-bottom: 12px; background: var(--bg-elevated); padding: 8px 10px; border-radius: 6px; cursor:${realMonthBalance <= 0 ? "not-allowed" : "pointer"}; border: 1px solid var(--border); opacity:${checkboxOpacity}; transition: border-color 0.2s;" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border)'">
-                                <input type="checkbox" id="ikg-today-flex" ${applyFlex && realMonthBalance > 0 ? "checked" : ""} ${checkboxDisabled} style="width:14px; height:14px; cursor:${realMonthBalance <= 0 ? "not-allowed" : "pointer"}; accent-color: var(--primary);">
-                                <span style="font-size:12px; font-weight: 500; color:var(--text-main); user-select:none;">${applyFlexHtml}</span>
-                            </label>
+                            <!-- Single-Row Unified Controls Strip -->
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 8px;">
+                                <label id="ikg-flex-toggle-wrap" class="ikg-fast-tt no-dot" data-title="${escapeAttr(flexTooltipTitle)}" style="display: inline-flex; align-items: center; gap: 5px; cursor: ${realMonthBalance <= 0 ? "not-allowed" : "pointer"}; opacity: ${checkboxOpacity}; user-select: none; margin: 0;">
+                                    <input type="checkbox" id="ikg-today-flex" ${applyFlex && realMonthBalance > 0 ? "checked" : ""} ${checkboxDisabled} style="width: 13px; height: 13px; cursor: ${realMonthBalance <= 0 ? "not-allowed" : "pointer"}; accent-color: var(--primary); margin: 0;">
+                                    <span style="font-size: 11px; font-weight: 600; color: var(--text-main);">${applyFlexCompactLabel}</span>
+                                </label>
 
-                            ${alarmSection}
-
-                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; border-top:1px dashed var(--border); padding-top:12px;">
-                                <a href="https://calendar.google.com/calendar/render?action=TEMPLATE&text=Clock+Out+⏰&dates=${gcalStart}/${gcalEnd}&details=Time+to+go+home!" target="_blank" class="ikg-btn-outline" style="margin:0; font-size:11px; font-weight: 600; display:flex; align-items:center; justify-content:center; text-align: center; gap:6px; padding: 8px; border-radius: 6px; text-decoration: none; line-height: 1.2; box-sizing: border-box;">🗓️ Open in GCal</a>
-                                <a href="#" id="ikg-btn-mac-alarm" data-endms="${targetMs}" class="ikg-btn-outline" style="margin:0; font-size:11px; font-weight: 600; display:flex; align-items:center; justify-content:center; text-align: center; gap:6px; padding: 8px; border-radius: 6px; text-decoration: none; line-height: 1.2; box-sizing: border-box;">🍎 Download Mac OS .ics</a>
+                                <div style="display: flex; align-items: center; gap: 5px;">
+                                    <div id="alarm-ui-container" style="display: inline-flex;">
+                                        <button id="ikg-btn-alarm" data-endms="${targetMs}" class="ikg-toolbar-btn" title="Set browser alarm for ${alarmTime}">⏰ Alarm</button>
+                                        <div id="ikg-alarm-active-view" style="display: none; align-items: center; gap: 4px; background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.3); border-radius: 6px; padding: 3px 6px;">
+                                            <span id="ikg-alarm-status-text" style="font-size: 10.5px; color: var(--success); font-weight: 600;">🔔 Scheduled</span>
+                                            <button id="ikg-btn-cancel-alarm" style="background: none; border: none; color: var(--danger); cursor: pointer; font-size: 10px; font-weight: bold; padding: 0 2px;" title="Cancel alarm">✕</button>
+                                        </div>
+                                    </div>
+                                    ${isDismissed ? `<span style="font-size: 10.5px; color: var(--text-muted); font-weight: 600; padding: 3px 6px; background: var(--bg-elevated); border-radius: 5px; border: 1px solid var(--border);">🔕 Off</span>` : ""}
+                                    <a href="https://calendar.google.com/calendar/render?action=TEMPLATE&text=Clock+Out+⏰&dates=${gcalStart}/${gcalEnd}&details=Time+to+go+home!" target="_blank" class="ikg-toolbar-btn" title="Export to Google Calendar">📅 GCal</a>
+                                    <a href="#" id="ikg-btn-mac-alarm" data-endms="${targetMs}" class="ikg-toolbar-btn" title="Download macOS .ics file">🍏 .ics</a>
+                                </div>
                             </div>
                         </div>
                     `;
@@ -5274,8 +5284,6 @@
             let graceBadge = "";
             if (evalDay.status === "yesterday-grace") {
                 graceBadge = `<span class="ikg-fast-tt no-dot" data-title="System checkout syncs lag by 1 day. Hour thresholds remain unpenalized until 6:00 PM today." style="font-size:9px; background:rgba(148,163,184,0.15); border:1px solid rgba(148,163,184,0.3); color:var(--text-muted); padding:1px 4px; border-radius:4px; font-weight:700; white-space:nowrap; flex-shrink:0; cursor:help;">⏳ LAG</span>`;
-            } else if (evalDay.status === "today-active") {
-                graceBadge = `<span class="ikg-fast-tt no-dot" data-title="Shift actively in progress today." style="font-size:9px; background:rgba(245,158,11,0.15); border:1px solid rgba(245,158,11,0.3); color:var(--warn); padding:1px 4px; border-radius:4px; font-weight:700; white-space:nowrap; flex-shrink:0; cursor:help;">⏱️ TODAY</span>`;
             }
 
             const flexTooltip = evalDay.isWfhExcluded
@@ -5294,8 +5302,8 @@
                         </div>
                     </div>
                     <div class="ikg-times ${timesClass}" style="margin-top:auto; ${activeShiftStyles}">
-                        <div>IN ${punchTimeHtml("in", inTimeDisplay, evalDay.punchSources.in)}</div>
-                        <div>OUT ${punchTimeHtml("out", outTimeDisplay, evalDay.punchSources.out)}</div>
+                        <div><span class="ikg-time-label">IN</span> ${punchTimeHtml("in", inTimeDisplay, evalDay.punchSources.in)}</div>
+                        <div><span class="ikg-time-label">OUT</span> ${punchTimeHtml("out", outTimeDisplay, evalDay.punchSources.out)}</div>
                     </div>
                 </div>`;
         } else if (evalDay.shortfall) {
@@ -5311,8 +5319,9 @@
 
           htmlBuffer += `
           <div class="ikg-day ${isToday ? "today" : ""} ${glowClass}" data-date="${dateStr}">
-              <div class="ikg-date-header" style="align-items: center; justify-content: flex-end;">
+              <div class="ikg-date-header">
                   ${partialPill ? `<div class="ikg-pill-row">${partialPill}</div>` : ""}
+                  ${isToday ? `<span class="ikg-today-badge">TODAY</span>` : ""}
                   <div class="ikg-date-num">${i}</div>
               </div>
               ${cellContent}
@@ -5388,7 +5397,7 @@
             if (netBalance > 0) {
               balanceEl.innerHTML = `<span class="good">${formatDurFromDec(netBalance, true)}</span>`;
               const burnDays = Math.ceil(netBalance / 0.5);
-              insightEl.innerHTML = `<div style="font-size:11px; color:var(--warn); background:var(--warn-bg); border:1px solid rgba(245, 158, 11, 0.3); padding:8px 10px; border-radius:6px; margin-top:12px; display:flex; gap:8px; align-items:flex-start; line-height:1.4;"><span style="font-size:14px;">💡</span><span>Flex burns max <b>30m/day</b> to offset late arrivals.<br>Requires <b>~${burnDays} planned late-ins</b> to clear.</span></div>`;
+              insightEl.innerHTML = `<div style="font-size:10.5px; color:var(--text-muted); margin-top:8px; display:flex; gap:6px; align-items:center; line-height:1.2;"><span>💡</span><span>Flex burns <b>31m/day</b> · ~<b>${burnDays} late-ins</b> to clear</span></div>`;
             } else if (netBalance < 0) {
               balanceEl.innerHTML = `<span class="bad">${formatDurFromDec(netBalance, true)}</span>`;
               insightEl.innerHTML = "";
@@ -6187,8 +6196,12 @@
           if (titleContainer) {
             const badge = document.createElement("span");
             badge.id = "ikg-ver-badge";
-            badge.style.cssText = "font-size:11px; font-weight:700; color:var(--text-muted); background:var(--bg-base); border:1px solid var(--border); padding:2px 8px; border-radius:12px; margin-left:8px; font-family:monospace; line-height:1.2; display:inline-block !important; vertical-align:middle;";
+            badge.style.cssText = "font-size:11px; font-weight:700; color:var(--text-muted); background:var(--bg-base); border:1px solid var(--border); padding:2px 8px; border-radius:12px; margin-left:8px; font-family:monospace; line-height:1.2; display:inline-block !important; vertical-align:middle; cursor:pointer;";
+            badge.title = "View Changelog";
             badge.innerText = SCRIPT_VER;
+            badge.addEventListener("click", () => {
+              document.getElementById("tab-changelog")?.click();
+            });
             titleContainer.appendChild(badge);
             IkgLog.info(`✅ Bound Version Badge to Header: ${SCRIPT_VER}`);
             return true;
@@ -6240,7 +6253,7 @@
                         <div class="ikg-title-area" style="display: flex !important; align-items: center !important; gap: 8px !important; white-space: nowrap !important;">
                             <img src="favicon.png" style="width: 28px; height: 28px; background: var(--primary); border-radius: 6px; flex-shrink: 0; object-fit: contain;" alt="IKG Logo">
                             <span style="font-size:18px; font-weight:700; color:var(--text-main);">Attendance Pro</span>
-                            <span id="ikg-ver-badge" style="font-size:11px; font-weight:700; color:var(--text-muted); background:var(--bg-base); border:1px solid var(--border); padding:2px 8px; border-radius:12px; margin-left:4px; font-family:monospace; line-height:1.2; display:inline-block !important;">${SCRIPT_VER}</span>
+                            <span id="ikg-ver-badge" title="View Changelog" style="font-size:11px; font-weight:700; color:var(--text-muted); background:var(--bg-base); border:1px solid var(--border); padding:2px 8px; border-radius:12px; margin-left:4px; font-family:monospace; line-height:1.2; display:inline-block !important; cursor:pointer;">${SCRIPT_VER}</span>
                         </div>
                         <div class="ikg-tab-group">
                           <div class="ikg-tab active" id="tab-cal"><span>🗓️</span><span>Calendar</span></div>
@@ -6249,6 +6262,7 @@
                           <div class="ikg-tab" id="tab-audit"><span>🔍</span><span>Audit</span></div>
                           <div class="ikg-tab" id="tab-rules"><span>📜</span><span>Rules</span></div>
                           <div class="ikg-tab" id="tab-settings"><span>⚙️</span><span>Settings</span></div>
+                          <div class="ikg-tab" id="tab-changelog"><span>📋</span><span>Changelog</span></div>
                       </div>
                       <div class="ikg-header-actions">
                           <div id="ikg-header-status" class="ikg-header-status">🤖 Autopilot engaging...</div>
@@ -6275,7 +6289,7 @@
                                         <span><span class="ikg-pill ikg-pill--pto">🤒 +1h</span> leave: 🏝️ annual 🤒 sick 👤 personal 👪 family ⏱️ comp 🎂 birthday 🌴 other</span>
                                         <span><span class="ikg-pill ikg-pill--pending">⏳ 🏝️ 8h</span> dashed = awaiting approval</span>
                                         <span><span class="ikg-reason-badge">OUT?</span> why a day is short (hover for what to do)</span>
-                                        <span><span class="ikg-reason-badge">LATE</span> <span class="ikg-reason-badge">EARLY</span> in 30+ min after start · out 30+ min before end</span>
+                                        <span><span class="ikg-reason-badge">LATE</span> <span class="ikg-reason-badge">EARLY</span> in > 30m 59s after start · out &lt; 30m before end</span>
                                         <span><span class="ikg-legend-swatch" style="background:#EF4444"></span><span class="ikg-legend-swatch" style="background:#84CC16"></span><span class="ikg-legend-swatch" style="background:#10B981"></span> short · ok · surplus</span>
                                     </div>
                                 </details>
@@ -6664,12 +6678,12 @@
                                     </div>
 
                                     <div class="ikg-card" style="margin: 0; display: flex; flex-direction: column;">
-                                        <div class="ikg-card-title" style="color: var(--warn);">3. 🟠 Late Arrival (30m Grace)</div>
+                                        <div class="ikg-card-title" style="color: var(--warn);">3. 🟠 Late Arrival (30m 59s Grace)</div>
                                         <div style="font-size: 13px; color: var(--text-main); line-height: 1.6;">
-                                            Up to <code style="font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">29m 59s</code> late keeps your earlier shift.<br><br>
-                                            Locked to <code style="font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">09:00</code> but in at <code style="font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">09:29</code>?<br>
-                                            <b>A:</b> Use Flex and leave at <code style="font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">18:00</code>.<br>
-                                            <b>B:</b> Work full 9h and leave at <code style="font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">18:29</code>.
+                                            Up to <code style="font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">30m 59s</code> late keeps your earlier shift (e.g. arrive at <code style="font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">09:30:59</code> on a 09:00 shift and you are <b>not</b> marked LATE).<br><br>
+                                            Locked to <code style="font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">09:00</code> but in at <code style="font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">09:30:59</code>?<br>
+                                            <b>A:</b> Use Flex (burns 30m 59s) and leave at <code style="font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">18:00:00</code> (neither late nor early; leaves 1s from 31m buffer).<br>
+                                            <b>B:</b> Work full 9h and leave at <code style="font-family: monospace; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">18:30:59</code>.
                                         </div>
                                     </div>
                                 </div>
@@ -6692,6 +6706,58 @@
                                     </div>
                                 </div>
 
+                            </div>
+                        </div>
+
+                        <div id="view-changelog" class="ikg-view" style="padding: 32px 48px; overflow-y: auto; background: var(--bg-surface);">
+                            <div style="width: 100%; max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px;">
+                                <div class="set-header-wrap" style="border-bottom: 1px solid var(--border); padding-bottom: 16px;">
+                                    <div class="set-header" style="display:flex; align-items:center; gap:12px; margin-bottom:4px;">
+                                        <span>📋 Releases &amp; Changelog</span>
+                                    </div>
+                                    <div style="font-size:13px; color:var(--text-muted);">Release notes, punctuality rules, and feature updates for IKG Attendance Pro.</div>
+                                </div>
+
+                                <div class="ikg-card" style="border-left: 4px solid var(--primary); padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 14px;">
+                                        <div>
+                                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                                                <span style="font-family: monospace; font-weight: 800; font-size: 18px; color: var(--text-main); background: var(--bg-elevated); padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border);">${SCRIPT_VER}</span>
+                                                <span style="font-size: 10px; font-weight: 700; color: #fff; background: var(--success); padding: 3px 8px; border-radius: 12px; letter-spacing: 0.5px;">LATEST</span>
+                                            </div>
+                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Punctuality Refinement, Flex Buffer Burn, and Calendar UI Streamlining</h3>
+                                        </div>
+                                        <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">Current Release</div>
+                                    </div>
+
+                                    <div style="display: flex; flex-direction: column; gap: 16px; font-size: 13px; line-height: 1.6; color: var(--text-main);">
+                                        <div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--primary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">⏱️ Punctuality &amp; Working Rules</div>
+                                            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Late Arrival Grace (30m 59s):</b> Punching in up to <code>30m 59s</code> after shift start (e.g. <code>09:30:59</code> on a <code>09:00</code> shift) is strictly on time and will <b>not</b> trigger a <code>LATE</code> penalty badge. Punching in at <code>09:31:00</code> or later is strictly marked <code>LATE</code>.</li>
+                                                <li><b>Early Checkout Grace (30m 00s):</b> Punching out at <code>18:30:00</code> (on a <code>19:00</code> shift) is strictly on time and will <b>not</b> trigger an <code>EARLY</code> badge. Only clocking out strictly before <code>18:30:00</code> (e.g. <code>18:29:59</code>) is marked <code>EARLY</code>.</li>
+                                                <li><b>Flex Buffer Burn Expansion:</b> The flex burn cap is updated to <b>31 minutes</b>. If you arrive at <code>09:30:59</code> with ≥ 31 min flex balance and apply flex, it burns <code>30m 59s</code> to set Goal Out to <code>18:00:00</code> (neither late nor early), leaving exactly <b>1 second</b> in your flex buffer.</li>
+                                            </ul>
+                                        </div>
+
+                                        <div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--pto); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">📋 Changelog Navigation</div>
+                                            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Dedicated Tab:</b> Added permanent <code>📋 Changelog</code> tab in the header navigation bar to track feature updates and rule changes.</li>
+                                                <li><b>One-Click Badge Access:</b> Click the <code>${SCRIPT_VER}</code> badge in the top-left header to jump directly to this view anytime.</li>
+                                            </ul>
+                                        </div>
+
+                                        <div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--warn); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">🎨 Calendar UI / UX Modernization</div>
+                                            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Hero Goal-Out Stat:</b> Prominent checkout target display answering "when can I clock out?" at a glance with large high-contrast typography.</li>
+                                                <li><b>Unified Actions Toolbar:</b> Clean integration of Browser Alarm, Google Calendar, and macOS <code>.ics</code> download.</li>
+                                                <li><b>Calendar Grid Polish:</b> Monospace punch-time alignment, cleaner badge rhythm, and enhanced readability with 100% of existing data preserved.</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -6833,6 +6899,13 @@
           switchTab("tab-settings", "view-settings");
           activeTab = "settings";
           renderSettings();
+        });
+        document.getElementById("tab-changelog")?.addEventListener("click", () => {
+          switchTab("tab-changelog", "view-changelog");
+          activeTab = "changelog";
+        });
+        document.getElementById("ikg-ver-badge")?.addEventListener("click", () => {
+          document.getElementById("tab-changelog")?.click();
         });
 
         const saveStatsState = () => {

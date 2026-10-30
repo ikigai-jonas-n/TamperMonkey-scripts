@@ -164,9 +164,9 @@ describe("explainShortfall", () => {
   test("only a clock-in means a forgotten clock-out", () => assert.deepEqual([why({ outHour: null }).code, why({ outHour: null }).badge], ["missing-out", "OUT?"]));
   test("only a clock-out means a forgotten clock-in", () => assert.equal(why({ inHour: null }).code, "missing-in"));
   test("no punches at all asks about punches or leave", () => assert.equal(why({ inHour: null, outHour: null }).code, "no-punches"));
-  test("leaving 30 minutes or more before the earliest checkout is early", () => {
-    assert.equal(why({ outHour: 18.5 }).code, "left-early");
-    assert.notEqual(why({ outHour: 18.6, inHour: 10 }).code, "left-early");
+  test("leaving more than 30 minutes before the earliest checkout is early", () => {
+    assert.equal(why({ outHour: 18 + 29 / 60 + 59 / 3600 }).code, "left-early");
+    assert.notEqual(why({ outHour: 18.5, inHour: 10 }).code, "left-early");
   });
   test("leaving early on an event day names the event release", () => {
     const events = eventsOf(event({ clockOutFrom: "17:30" }));
@@ -202,10 +202,30 @@ describe("punctualityFlags", () => {
   const flags = (extra) => R.punctualityFlags({ schedule: plain, inHour: 10, outHour: 19, ...extra });
   const badges = (f) => [f.late?.badge ?? null, f.early?.badge ?? null];
   test("a normal day clocked in at 10:31 is LATE even with full hours", () => assert.deepEqual(badges(flags({ inHour: 10 + 31 / 60, outHour: 20 })), ["LATE", null]));
+  test("clocking in at 10:30:59 is not LATE", () => assert.deepEqual(badges(flags({ inHour: 10 + 30 / 60 + 59 / 3600 })), [null, null]));
+  test("clocking in at 10:31:00 is LATE", () => assert.deepEqual(badges(flags({ inHour: 10 + 31 / 60 })), ["LATE", null]));
   test("clocking in exactly at start + 30 minutes is not LATE", () => assert.deepEqual(badges(flags({ inHour: 10.5 })), [null, null]));
-  test("leaving exactly 30 minutes before shift end is EARLY", () => assert.deepEqual(badges(flags({ outHour: 18.5 })), [null, "EARLY"]));
+  test("leaving at exactly 30 minutes before shift end is not EARLY", () => assert.deepEqual(badges(flags({ outHour: 18.5 })), [null, null]));
+  test("leaving more than 30 minutes before shift end (e.g. 18:29:59) is EARLY", () => assert.deepEqual(badges(flags({ outHour: 18 + 29 / 60 + 59 / 3600 })), [null, "EARLY"]));
   test("leaving 29 minutes before shift end is inside the 30-minute grace", () => assert.deepEqual(badges(flags({ outHour: 18 + 31 / 60 })), [null, null]));
   test("leaving 16 minutes before shift end is not EARLY", () => assert.deepEqual(badges(flags({ outHour: 18 + 44 / 60 })), [null, null]));
+  test("09:00 shift: in at 09:30:59 is not LATE, out at 18:00:00 is not EARLY", () => {
+    const s09 = R.computeDaySchedule({ shift: R.shiftFromLabel("09:00 ~ 18:00") });
+    assert.deepEqual(badges(R.punctualityFlags({ schedule: s09, inHour: 9 + 30 / 60 + 59 / 3600, outHour: 18 })), [null, null]);
+    assert.deepEqual(badges(R.punctualityFlags({ schedule: s09, inHour: 9 + 31 / 60, outHour: 18 })), ["LATE", null]);
+    assert.deepEqual(badges(R.punctualityFlags({ schedule: s09, inHour: 9, outHour: 17.5 })), [null, null]);
+    assert.deepEqual(badges(R.punctualityFlags({ schedule: s09, inHour: 9, outHour: 17 + 29 / 60 + 59 / 3600 })), [null, "EARLY"]);
+  });
+  test("09:30 shift: in at 10:00:59 is not LATE, in at 10:01:00 is LATE", () => {
+    const s0930 = R.computeDaySchedule({ shift: R.shiftFromLabel("09:30 ~ 18:30") });
+    assert.deepEqual(badges(R.punctualityFlags({ schedule: s0930, inHour: 9.5 + 30 / 60 + 59 / 3600, outHour: 18.5 })), [null, null]);
+    assert.deepEqual(badges(R.punctualityFlags({ schedule: s0930, inHour: 9.5 + 31 / 60, outHour: 18.5 })), ["LATE", null]);
+  });
+  test("13:00 shift: in at 13:30:59 is not LATE, in at 13:31:00 is LATE", () => {
+    const s13 = R.computeDaySchedule({ shift: R.shiftFromLabel("13:00 ~ 22:00") });
+    assert.deepEqual(badges(R.punctualityFlags({ schedule: s13, inHour: 13 + 30 / 60 + 59 / 3600, outHour: 22 })), [null, null]);
+    assert.deepEqual(badges(R.punctualityFlags({ schedule: s13, inHour: 13 + 31 / 60, outHour: 22 })), ["LATE", null]);
+  });
   test("a day can be both LATE and EARLY", () => assert.deepEqual(badges(flags({ inHour: 11, outHour: 18 })), ["LATE", "EARLY"]));
   test("morning leave 10-12 moves the LATE deadline to 13:30", () => {
     const schedule = R.computeDaySchedule({ shift: LATE, ptoWindows: [{ start: 10, end: 12 }], ptoHrs: 2 });
