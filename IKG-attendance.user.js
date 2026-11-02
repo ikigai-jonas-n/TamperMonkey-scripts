@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.147] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.148] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.147
+    // @version      7.148
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -3892,6 +3892,7 @@
                 --danger: #EF4444; --danger-bg: rgba(239, 68, 68, 0.1);
                 --warn: #F59E0B; --warn-bg: rgba(245, 158, 11, 0.1);
                 --pto: #8B5CF6; --pto-bg: rgba(139, 92, 246, 0.1);
+                --ot: #fc8403; --ot-bg: rgba(252, 132, 3, 0.12); --ot-border: rgba(252, 132, 3, 0.35);
                 --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             }
             #ikg-fab { position: fixed; bottom: 32px; right: 32px; background: var(--primary); color: #fff; padding: 14px 28px; border-radius: 50px; font-family: var(--font-family); font-weight: 600; font-size: 15px; cursor: pointer; box-shadow: 0 8px 24px var(--primary-glow); z-index: 9998; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); user-select: none; border: none; }
@@ -3968,8 +3969,8 @@
             .ikg-pill--wfh { background: var(--primary); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
             .ikg-pill--pto { background: var(--pto); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
             .ikg-pill--fixed { background: #DB2777; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
-            .ikg-pill--ot { background: linear-gradient(135deg, #DC2626, #991B1B); border: 1px solid rgba(239, 68, 68, 0.5); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
-            .ikg-pill--ot-pending { background: rgba(217, 119, 6, 0.85); border: 1px dashed rgba(245, 158, 11, 0.7); }
+            .ikg-pill--ot { background: linear-gradient(135deg, #FC8403, #E06000); border: 1px solid rgba(252, 132, 3, 0.5); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+            .ikg-pill--ot-pending { background: transparent; color: var(--ot); border: 1px dashed var(--ot); }
             .pto-pill { background: var(--pto-bg); color: var(--pto); border: 1px solid var(--pto); padding: 3px 6px; border-radius: 6px; font-size: 11px; font-weight: 600; text-align: center; margin-top:auto;}
 
             .ikg-summary-pane { flex: 1; padding: 14px 16px; overflow-y: auto; scrollbar-width: thin; background: var(--bg-surface); display: flex; flex-direction: column; gap: 10px; justify-content: flex-start; }
@@ -4474,10 +4475,10 @@
         .ikg-pto-cta:hover, .ikg-pto-cta:focus-visible { filter: brightness(1.1); outline: 2px solid rgba(139, 92, 246, 0.5); outline-offset: 2px; }
 
         @keyframes ikgOtFocusPulse {
-            0%, 100% { box-shadow: inset 0 0 0 rgba(220, 38, 38, 0.7), 0 0 0 rgba(220, 38, 38, 0.7); }
-            50% { box-shadow: inset 0 0 16px rgba(220, 38, 38, 0.55), 0 0 22px rgba(220, 38, 38, 0.85); }
+            0%, 100% { box-shadow: inset 0 0 0 rgba(252, 132, 3, 0.7), 0 0 0 rgba(252, 132, 3, 0.7); }
+            50% { box-shadow: inset 0 0 16px rgba(252, 132, 3, 0.55), 0 0 22px rgba(252, 132, 3, 0.85); }
         }
-        .ikg-day.ikg-day--ot-focus { animation: ikgOtFocusPulse 1.2s ease-in-out 3; border: 1px solid #DC2626 !important; background: rgba(220, 38, 38, 0.1); z-index: 6; }
+        .ikg-day.ikg-day--ot-focus { animation: ikgOtFocusPulse 1.2s ease-in-out 3; border: 1px solid var(--ot) !important; background: rgba(252, 132, 3, 0.1); z-index: 6; }
 
         .ikg-ot-pane { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); width: 100%; height: 100%; overflow: hidden; }
         .ikg-ot-col { overflow-y: auto; padding: 24px 28px; display: flex; flex-direction: column; gap: 14px; }
@@ -4489,7 +4490,7 @@
         .ikg-ot-sync { background: none; border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; width: 26px; height: 26px; cursor: pointer; font-size: 14px; line-height: 1; }
         .ikg-ot-sync:hover, .ikg-ot-sync:focus-visible { color: var(--text-main); border-color: var(--primary); outline: none; }
 
-        .ikg-ot-hero { background: linear-gradient(135deg, rgba(220, 38, 38, 0.16), rgba(220, 38, 38, 0.04)); border: 1px solid rgba(220, 38, 38, 0.35); border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+        .ikg-ot-hero { background: linear-gradient(135deg, rgba(252, 132, 3, 0.16), rgba(252, 132, 3, 0.04)); border: 1px solid rgba(252, 132, 3, 0.35); border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
         .ikg-ot-hero-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
         .ikg-ot-hero-name { font-size: 13px; font-weight: 700; color: var(--text-main); }
         .ikg-ot-hero-num { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; color: var(--text-main); }
@@ -4498,24 +4499,26 @@
 
         .ikg-ot-chips { display: flex; flex-wrap: wrap; gap: 6px; }
         .ikg-ot-chip { font: inherit; font-size: 11.5px; font-weight: 600; color: var(--text-muted); background: var(--bg-base); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; cursor: pointer; transition: all 0.15s ease; }
-        .ikg-ot-chip:hover, .ikg-ot-chip:focus-visible { color: var(--text-main); border-color: #DC2626; outline: none; }
-        .ikg-ot-chip.active { color: #fff; background: #DC2626; border-color: #DC2626; }
+        .ikg-ot-chip:hover, .ikg-ot-chip:focus-visible { color: var(--text-main); border-color: var(--ot); outline: none; }
+        .ikg-ot-chip.active { color: #fff; background: var(--ot); border-color: var(--ot); }
 
-        .ikg-ot-section { display: flex; flex-direction: column; gap: 6px; }
+        .ikg-ot-section { display: flex; flex-direction: column; gap: 4px; }
         .ikg-ot-section-title { font-size: 10.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin: 0 0 4px 4px; display: flex; align-items: center; justify-content: space-between; }
         .ikg-ot-section-title span { opacity: 0.6; }
 
-        .ikg-ot-item { font: inherit; text-align: left; width: 100%; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; background: var(--bg-base); border: 1px solid var(--border); border-radius: 10px; color: var(--text-main); cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease; }
-        .ikg-ot-item:hover, .ikg-ot-item:focus-visible { border-color: #DC2626; background: rgba(220, 38, 38, 0.05); outline: none; transform: translateY(-1px); }
+        .ikg-ot-item { font: inherit; text-align: left; width: 100%; display: grid; grid-template-columns: 104px 92px minmax(0, 1fr) 52px 14px; align-items: center; column-gap: 10px; row-gap: 2px; padding: 9px 12px; background: var(--bg-base); border: 1px solid var(--border); border-radius: 10px; color: var(--text-main); cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease; }
+        .ikg-ot-item:hover, .ikg-ot-item:focus-visible { border-color: var(--ot); background: rgba(252, 132, 3, 0.07); outline: none; }
         .ikg-ot-item:active { transform: scale(0.995); }
-        .ikg-ot-item.is-pending { border: 1px dashed rgba(245, 158, 11, 0.6); background: rgba(245, 158, 11, 0.04); }
-        .ikg-ot-item-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-        .ikg-ot-item-date { font-size: 13px; font-weight: 700; color: var(--text-main); font-variant-numeric: tabular-nums; }
-        .ikg-ot-item-hrs { font-size: 13.5px; font-weight: 800; color: #EF4444; font-variant-numeric: tabular-nums; }
+        .ikg-ot-item.is-pending { border-style: dashed; border-color: rgba(252, 132, 3, 0.5); }
+        .ikg-ot-item-date { font-size: 13px; font-weight: 700; white-space: nowrap; }
+        .ikg-ot-item-type { font-size: 11.5px; font-weight: 600; color: var(--ot); white-space: nowrap; }
+        .ikg-ot-item-stepper { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ikg-ot-item-stepper.is-approved { color: var(--success); }
+        .ikg-ot-item-hrs { font-size: 12.5px; font-weight: 700; text-align: right; white-space: nowrap; color: var(--ot); }
         .ikg-ot-item.is-pending .ikg-ot-item-hrs { color: var(--warn); }
-        .ikg-ot-item-stepper { font-size: 11px; font-weight: 600; color: var(--warn); display: flex; align-items: center; gap: 4px; }
-        .ikg-ot-item-stepper.is-approved { color: var(--success, #10B981); }
-        .ikg-ot-item-desc { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .ikg-ot-item-go { color: var(--text-muted); font-size: 16px; line-height: 1; text-align: center; }
+        .ikg-ot-item:hover .ikg-ot-item-go { color: var(--ot); }
+        .ikg-ot-item-desc { grid-column: 2 / -2; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .ikg-ot-empty { font-size: 12.5px; color: var(--text-muted); border: 1px dashed var(--border); border-radius: 10px; padding: 24px; text-align: center; }
         `);
 
@@ -5202,7 +5205,7 @@
         if (!chip) return;
         const now = Date.now();
         if (otFoc && now <= otFoc.chipUntil) {
-          chip.innerHTML = `<span class="ikg-focus-chip" style="color:#EF4444; background:rgba(220,38,38,0.12); border-color:rgba(220,38,38,0.45);">👺 ${otFoc.label}<button type="button" data-ot-back="1">← Back to Overtime</button></span>`;
+          chip.innerHTML = `<span class="ikg-focus-chip" style="color:var(--ot); background:var(--ot-bg); border-color:var(--ot-border);">👺 ${otFoc.label}<button type="button" data-ot-back="1">← Back to Overtime</button></span>`;
           return;
         }
         if (!focus || now > focus.chipUntil) {
@@ -5237,15 +5240,15 @@
 
       const otItemHtml = (i) => {
         const isPending = i.status === "pending" || i.status === "partially_approved";
-        const stepperHtml = i.stageSummary ? `<div class="ikg-ot-item-stepper${i.status === "approved" ? " is-approved" : ""}">${i.status === "approved" ? "✓ " : "⏳ "}${escapeAttr(i.stageSummary)}</div>` : "";
+        const stepperHtml = i.stageSummary ? `<span class="ikg-ot-item-stepper${i.status === "approved" ? " is-approved" : ""}">${i.status === "approved" ? "✓ " : "⏳ "}${escapeAttr(i.stageSummary)}</span>` : `<span class="ikg-ot-item-stepper"></span>`;
         return `
-          <button type="button" class="ikg-ot-item${isPending ? " is-pending" : ""} ikg-fast-tt no-dot" data-ot-focus="${escapeAttr(i.id)}" data-title="${escapeAttr(otItemTooltip(i))}">
-            <div class="ikg-ot-item-row">
-              <span class="ikg-ot-item-date">${formatYmd(i.date, true)}</span>
-              <span class="ikg-ot-item-hrs">+${IkgWorkRules.formatAmount(i.hours)}h</span>
-            </div>
+          <button type="button" class="ikg-ot-item${isPending ? " is-pending" : ""}" data-ot-focus="${escapeAttr(i.id)}">
+            <span class="ikg-ot-item-date">${formatYmd(i.date, true)}</span>
+            <span class="ikg-ot-item-type">👺 Overtime</span>
             ${stepperHtml}
-            ${i.description ? `<div class="ikg-ot-item-desc">${escapeAttr(i.description)}</div>` : ""}
+            <span class="ikg-ot-item-hrs">+${IkgWorkRules.formatAmount(i.hours)}h</span>
+            <span class="ikg-ot-item-go">›</span>
+            ${i.description ? `<span class="ikg-ot-item-desc">${escapeAttr(i.description)}</span>` : ""}
           </button>`;
       };
 
@@ -5301,7 +5304,7 @@
             <div class="ikg-pto-onboard">
               <div class="ikg-pto-onboard-title">👺 Sync to load your Overtime</div>
               <div>Overtime submissions and approvals come from Deel. Log in to Deel in this browser if the sync asks for it.</div>
-              <button type="button" class="ikg-pto-cta" style="background:#DC2626;" data-ot-sync="1">Sync now</button>
+              <button type="button" class="ikg-pto-cta" style="background:var(--ot);" data-ot-sync="1">Sync now</button>
             </div>`;
           return;
         }
@@ -7222,7 +7225,7 @@
 
                                     <div style="display: flex; flex-direction: column; gap: 16px; font-size: 13px; line-height: 1.6; color: var(--text-main);">
                                         <div>
-                                            <div style="font-size: 12px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">👺 Dedicated Overtime (OT) View</div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--ot); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">👺 Dedicated Overtime (OT) View</div>
                                             <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
                                                 <li><b>Native Overtime Tab:</b> Added <code>👺 Overtime</code> tab with Summary KPI metrics (total approved hours, pending approval count, rejected count) and detailed request cards.</li>
                                                 <li><b>Approval Tracking:</b> Visual approval status chips (<code>APPROVED</code>, <code>PENDING</code>, <code>REJECTED</code>), reviewer name avatars, submission date, and original notes/reasons.</li>
