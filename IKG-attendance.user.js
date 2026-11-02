@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.146] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.147] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.146
+    // @version      7.147
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1187,6 +1187,7 @@
       const AUDIT_STATE_KEY = `IKG_AUDIT_STATE_${APP_VER}`;
       const DEEL_BALANCES_KEY = `IKG_DEEL_BALANCES_${APP_VER}`;
       const DEEL_PTO_LIST_KEY = `IKG_DEEL_PTO_LIST_${APP_VER}`;
+      const DEEL_OVERTIME_LIST_KEY = `IKG_DEEL_OVERTIME_LIST_${APP_VER}`;
 
       const cleanUpAndMigrateStorage = () => {
         const pad = (n) => String(n).padStart(2, "0");
@@ -1194,7 +1195,7 @@
         const todayStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
         const keysToRemove = [];
 
-        const baseKeys = ["IKG_ATTENDANCE_CACHE", "IKG_DAY_NOTES", "IKG_AGGREGATE_CACHE", "IKG_FULL_SYNC_DONE", "IKG_STATS_STATE", "IKG_AUDIT_STATE", "IKG_DEEL_BALANCES", "IKG_DEEL_PTO_LIST"];
+        const baseKeys = ["IKG_ATTENDANCE_CACHE", "IKG_DAY_NOTES", "IKG_AGGREGATE_CACHE", "IKG_FULL_SYNC_DONE", "IKG_STATS_STATE", "IKG_AUDIT_STATE", "IKG_DEEL_BALANCES", "IKG_DEEL_PTO_LIST", "IKG_DEEL_OVERTIME_LIST"];
 
         baseKeys.forEach((base) => {
           const newKey = `${base}_${APP_VER}`;
@@ -1720,6 +1721,102 @@
           });
         };
 
+        const OT_STATUS = Object.freeze({
+          approved: "approved",
+          partially_approved: "partially_approved",
+          pending: "pending",
+          rejected: "rejected",
+        });
+
+        const toOvertimeItem = (summary, detail, todayStr) => {
+          const rawStatus = String(detail?.status || summary?.status || "").toLowerCase();
+          const status = OT_STATUS[rawStatus] || "pending";
+          const rawDate = summary?.details?.day || summary?.details?.start || detail?.details?.requestDetails?.[0]?.shift?.day || "";
+          const date = String(rawDate).slice(0, 10);
+          const hours = Number(summary?.details?.totalWorkedHours ?? summary?.details?.previousShiftData?.totalWorkedHours ?? detail?.details?.requestDetails?.[0]?.shift?.totalWorkedHours ?? 0);
+          const desc = String(summary?.details?.previousShiftData?.description || detail?.details?.requestDetails?.[0]?.shift?.description || summary?.detailsSummary || "").trim();
+          const contractId = summary?.details?.previousShiftData?.contractId || detail?.details?.approvalDetails?.contract?.id || "";
+
+          const stages = detail?.requestApprovers || [];
+          let stageSummary = "";
+          const approvedNames = [];
+          const waitingNames = [];
+          let approvedStages = 0;
+          const totalStages = stages.length;
+
+          stages.forEach((stage) => {
+            const approvers = stage.approvers || [];
+            const approvedList = approvers.filter((a) => a.status === "APPROVED");
+            const waitingList = approvers.filter((a) => a.status === "PENDING" || a.status === "AWAITING");
+            if (approvedList.length >= stage.numberOfRequiredApprovers) {
+              approvedStages++;
+              approvedList.forEach((a) => approvedNames.push(a.fullName || a.hrisProfile?.firstName || a.roleName || "Approver"));
+            } else {
+              (waitingList.length ? waitingList : approvers).forEach((a) => waitingNames.push(a.fullName || a.hrisProfile?.firstName || a.roleName || "Approver"));
+            }
+          });
+
+          if (status === "approved") {
+            stageSummary = approvedNames.length ? `Approved (${approvedNames.join(", ")})` : "Approved";
+          } else if (totalStages > 0) {
+            const waitingText = waitingNames.length ? `Waiting for ${waitingNames.join(", ")}` : "Waiting for approval";
+            stageSummary = `${approvedStages}/${totalStages} Approved${approvedNames.length ? ` (${approvedNames.join(", ")})` : ""} · ${waitingText}`;
+          } else {
+            stageSummary = status === "rejected" ? "Rejected" : "Awaiting approval";
+          }
+
+          let bucket = "pending";
+          if (status === "rejected") {
+            bucket = "rejected";
+          } else if (date === todayStr) {
+            bucket = "ongoing";
+          } else if (status === "approved") {
+            bucket = "approved";
+          }
+
+          return Object.freeze({
+            id: summary?.id || detail?.id,
+            date,
+            hours,
+            description: desc,
+            status,
+            bucket,
+            contractId,
+            year: Number(date.slice(0, 4)) || new Date().getFullYear(),
+            stageSummary,
+            approvers: stages,
+            updatedAt: summary?.updatedAt || detail?.updatedAt || "",
+            requestedAt: summary?.requestedAt || detail?.requestedAt || "",
+          });
+        };
+
+        const groupOvertimeRequests = (requests, todayStr) => {
+          const items = (requests || []).filter((i) => i && i.date);
+          const inBucket = (bucket, dir) => items.filter((i) => i.bucket === bucket).sort((a, b) => dir * a.date.localeCompare(b.date));
+          const approved = inBucket("approved", -1);
+          const ongoing = inBucket("ongoing", -1);
+          const pending = inBucket("pending", -1);
+          const rejected = inBucket("rejected", -1);
+
+          const totalApprovedHrs = Number(approved.reduce((s, i) => s + (Number(i.hours) || 0), 0).toFixed(2));
+          const totalPendingHrs = Number([...pending, ...ongoing].filter((i) => i.status !== "approved").reduce((s, i) => s + (Number(i.hours) || 0), 0).toFixed(2));
+          const totalRejectedHrs = Number(rejected.reduce((s, i) => s + (Number(i.hours) || 0), 0).toFixed(2));
+
+          return Object.freeze({
+            ongoing,
+            pending,
+            approved,
+            rejected,
+            totalApprovedHrs,
+            totalPendingHrs,
+            totalRejectedHrs,
+            countApproved: approved.length,
+            countPending: pending.length + ongoing.filter((i) => i.status !== "approved").length,
+            approvedCount: approved.length,
+            pendingCount: pending.length + ongoing.filter((i) => i.status !== "approved").length,
+          });
+        };
+
         const SPECIAL_DAYS_MIN_VERSION = 1;
         const SPECIAL_DAYS_MAX_CHARS = 512 * 1024;
         const EVENT_NAME_MAX = 60;
@@ -2138,7 +2235,9 @@
             );
           });
 
-        const mapPool = async (items, limit, fn) => {
+        const mapPool = async (items, limitOrFn, fnOrLimit) => {
+          const limit = typeof limitOrFn === "number" ? limitOrFn : typeof fnOrLimit === "number" ? fnOrLimit : 1;
+          const fn = typeof limitOrFn === "function" ? limitOrFn : fnOrLimit;
           const list = [...(items || [])];
           const results = new Array(list.length);
           let next = 0;
@@ -2169,6 +2268,7 @@
           normalizeGasType, normalizeGasTime, normalizeGasDate, normalizeReviewStatus,
           parseGasEnvelope, classifyGasPunches, resolvePunches,
           summarizeEntitlements, pickHeroBalance, formatAmount, formatBalance, groupPtoRequests,
+          toOvertimeItem, groupOvertimeRequests,
         });
       })();
       // @@work-rules:end
@@ -2385,16 +2485,19 @@
       };
 
       const DEEL_APPROVAL_CACHE_KEY = "IKG_DEEL_APPROVAL_CACHE";
+      const DEEL_OT_APPROVAL_CACHE_KEY = "IKG_DEEL_OT_APPROVAL_CACHE";
       const DEEL_MAX_APPROVAL_PAGES = 50;
 
       const fetchDeelApprovalSummaries = async (fetchDeel) => {
         const summaries = [];
         let cursor = null;
+        let prevCursor = undefined;
         for (let page = 0; page < DEEL_MAX_APPROVAL_PAGES; page++) {
           const res = await fetchDeel(`approvals/requests/requester${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`);
           summaries.push(...(res?.data || []));
+          prevCursor = cursor;
           cursor = res?.cursor || null;
-          if (!cursor) break;
+          if (!cursor || cursor === prevCursor) break;
         }
         return summaries;
       };
@@ -2409,9 +2512,41 @@
         })),
       });
 
-      const fetchDeelRequestDetails = async (fetchDeel) => {
+      const fetchDeelOvertimeRequests = async (fetchDeel, otSummaries, todayStr) => {
         try {
-          const summaries = (await fetchDeelApprovalSummaries(fetchDeel)).filter((a) => a.domain === "TIME_OFF" && a.status !== "REJECTED");
+          const cache = GM_getValue(DEEL_OT_APPROVAL_CACHE_KEY, {}) || {};
+          const results = await IkgWorkRules.mapPool(otSummaries, 3, async (summary) => {
+            let detail = cache[summary.id];
+            if (!detail || detail.updatedAt !== summary.updatedAt) {
+              try {
+                detail = await fetchDeel(`approvals/requests/requester/${summary.id}`);
+              } catch (e) {
+                IkgLog.warn(`Deel OT approval ${summary.id} detail unavailable, falling back to summary`, e?.status ?? e);
+                detail = null;
+              }
+            }
+            if (detail) cache[summary.id] = detail;
+            const item = IkgWorkRules.toOvertimeItem(summary, detail, todayStr);
+            const descLog = (item.description || "").replace(/\s+/g, " ").slice(0, 50);
+            IkgLog.info(`[Deel Sync] ${item.date} -> "Overtime" | ${item.hours}h | status: ${item.status} | desc: "${descLog}"`);
+            return item;
+          });
+
+          results.filter((r) => !r.ok).forEach((r) => IkgLog.error("Error fetching Deel OT item:", r.error));
+          const valid = (results || []).filter((r) => r.ok && r.value).map((r) => r.value);
+          GM_setValue(DEEL_OT_APPROVAL_CACHE_KEY, cache);
+          localStorage.setItem(DEEL_OVERTIME_LIST_KEY, JSON.stringify({ syncedAt: Date.now(), requests: valid }));
+          return valid;
+        } catch (e) {
+          IkgLog.warn("Deel Overtime sync failed; keeping existing snapshot", e?.message || e);
+          return null;
+        }
+      };
+
+      const fetchDeelRequestDetails = async (fetchDeel, preloadedSummaries) => {
+        try {
+          const raw = preloadedSummaries || (await fetchDeelApprovalSummaries(fetchDeel));
+          const summaries = raw.filter((a) => a.domain === "TIME_OFF" && a.status !== "REJECTED");
           const cache = GM_getValue(DEEL_APPROVAL_CACHE_KEY, {}) || {};
           const approvals = await Promise.all(
             summaries.map(async (summary) => {
@@ -2580,17 +2715,21 @@
             IkgLog.info(`✅ Resolved Time-Off Profile UUID: ${profileId}`);
           }
 
-          const [toData, detailByTimeOffId] = await Promise.all([
+          const allSummaries = await fetchDeelApprovalSummaries(fetchDeel);
+          const otSummaries = (allSummaries || []).filter((a) => a.domain === "TIME_TRACKING");
+
+          const [toData, detailByTimeOffId, _bal, otList] = await Promise.all([
             fetchDeel(`time_offs/profile/${profileId}/time_off?orderType=DESC&lightweight=true`),
-            fetchDeelRequestDetails(fetchDeel),
+            fetchDeelRequestDetails(fetchDeel, allSummaries),
             syncDeelBalances(fetchDeel, profileId),
+            fetchDeelOvertimeRequests(fetchDeel, otSummaries, toYMD(new Date())),
           ]);
           const ptoList = toDeelPtoList(Array.isArray(toData) ? toData : [], detailByTimeOffId);
           const dayNotes = buildDeelDayNotes(ptoList);
 
           localStorage.setItem(DAY_NOTES_KEY, JSON.stringify(dayNotes));
           localStorage.setItem(DEEL_PTO_LIST_KEY, JSON.stringify({ syncedAt: Date.now(), requests: ptoList }));
-          return { dayNotes };
+          return { dayNotes, otList };
         } catch (e) {
           if (e.status === 401 && !isRetry) {
             IkgLog.warn("Deel Token expired or invalid. Clearing saved token & retrying...");
@@ -3803,10 +3942,10 @@
                 z-index: 3;
                 border-radius: 6px;
             }
-            .ikg-date-header { display: flex; justify-content: flex-end; align-items: center; margin-bottom: auto; min-height: 20px; gap: 6px; }
-            .ikg-date-num { font-size: 14px; font-weight: 600; color: var(--text-muted); }
-            .ikg-today-badge { background: var(--primary); color: #fff; font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 10px; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(59, 130, 246, 0.4); text-transform: uppercase; line-height: 1.2; }
-            .ikg-day.today .ikg-date-num { background: var(--primary); color: #fff; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 12px; font-weight: 700; }
+            .ikg-date-header { display: flex; justify-content: flex-end; align-items: flex-start; margin-bottom: auto; min-height: 20px; gap: 4px; }
+            .ikg-date-num { font-size: 14px; font-weight: 600; color: var(--text-muted); flex-shrink: 0; margin-left: auto; }
+            .ikg-today-badge { background: var(--primary); color: #fff; font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 10px; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(59, 130, 246, 0.4); text-transform: uppercase; line-height: 1.2; flex-shrink: 0; }
+            .ikg-day.today .ikg-date-num { background: var(--primary); color: #fff; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 12px; font-weight: 700; flex-shrink: 0; }
             .skeleton { animation: pulse 1.5s infinite; background: linear-gradient(90deg, var(--bg-surface) 0%, var(--bg-elevated) 50%, var(--bg-surface) 100%); background-size: 200% 100%; border-radius: 6px; }
             @keyframes pulse { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
             .skel-hrs { height: 22px; width: 60px; margin-bottom: 8px; }
@@ -3824,11 +3963,13 @@
             .ikg-times .ikg-time-label { color: var(--text-muted); font-size: 9px; font-weight: 700; letter-spacing: 0.5px; }
             .ikg-times span.ikg-punch-fixed { color: #F9A8D4; border-bottom: 1px dotted rgba(249, 168, 212, 0.6); }
             .ikg-times span.ikg-punch-pending { color: var(--warn); border-bottom: 1px dotted rgba(245, 158, 11, 0.6); }
-            .ikg-pill-row { display: flex; align-items: center; gap: 3px; margin-right: auto; margin-left: 2px; min-width: 0; }
-            .ikg-pill { font-size: 9px; line-height: 12px; color: #fff; padding: 2px 6px; border-radius: 4px; font-weight: 700; letter-spacing: 0.5px; white-space: nowrap; cursor: help; }
+            .ikg-pill-row { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 3px; margin-right: auto; margin-left: 2px; min-width: 0; max-width: calc(100% - 24px); }
+            .ikg-pill { font-size: 8.5px; line-height: 12px; color: #fff; padding: 1.5px 5px; border-radius: 4px; font-weight: 700; letter-spacing: 0.4px; white-space: nowrap; cursor: help; }
             .ikg-pill--wfh { background: var(--primary); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
             .ikg-pill--pto { background: var(--pto); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
             .ikg-pill--fixed { background: #DB2777; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+            .ikg-pill--ot { background: linear-gradient(135deg, #DC2626, #991B1B); border: 1px solid rgba(239, 68, 68, 0.5); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+            .ikg-pill--ot-pending { background: rgba(217, 119, 6, 0.85); border: 1px dashed rgba(245, 158, 11, 0.7); }
             .pto-pill { background: var(--pto-bg); color: var(--pto); border: 1px solid var(--pto); padding: 3px 6px; border-radius: 6px; font-size: 11px; font-weight: 600; text-align: center; margin-top:auto;}
 
             .ikg-summary-pane { flex: 1; padding: 14px 16px; overflow-y: auto; scrollbar-width: thin; background: var(--bg-surface); display: flex; flex-direction: column; gap: 10px; justify-content: flex-start; }
@@ -4331,6 +4472,51 @@
         .ikg-pto-onboard-title { font-size: 18px; font-weight: 700; color: var(--text-main); }
         .ikg-pto-cta { font: inherit; font-weight: 700; font-size: 13px; color: #fff; background: var(--pto); border: none; border-radius: 8px; padding: 9px 20px; cursor: pointer; }
         .ikg-pto-cta:hover, .ikg-pto-cta:focus-visible { filter: brightness(1.1); outline: 2px solid rgba(139, 92, 246, 0.5); outline-offset: 2px; }
+
+        @keyframes ikgOtFocusPulse {
+            0%, 100% { box-shadow: inset 0 0 0 rgba(220, 38, 38, 0.7), 0 0 0 rgba(220, 38, 38, 0.7); }
+            50% { box-shadow: inset 0 0 16px rgba(220, 38, 38, 0.55), 0 0 22px rgba(220, 38, 38, 0.85); }
+        }
+        .ikg-day.ikg-day--ot-focus { animation: ikgOtFocusPulse 1.2s ease-in-out 3; border: 1px solid #DC2626 !important; background: rgba(220, 38, 38, 0.1); z-index: 6; }
+
+        .ikg-ot-pane { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); width: 100%; height: 100%; overflow: hidden; }
+        .ikg-ot-col { overflow-y: auto; padding: 24px 28px; display: flex; flex-direction: column; gap: 14px; }
+        .ikg-ot-col--summary { border-right: 1px solid var(--border); background: var(--bg-base); }
+        .ikg-ot-col--list { background: var(--bg-surface); gap: 18px; }
+        .ikg-ot-head { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
+        .ikg-ot-synced { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; }
+        .ikg-ot-synced.is-stale { color: var(--warn); }
+        .ikg-ot-sync { background: none; border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; width: 26px; height: 26px; cursor: pointer; font-size: 14px; line-height: 1; }
+        .ikg-ot-sync:hover, .ikg-ot-sync:focus-visible { color: var(--text-main); border-color: var(--primary); outline: none; }
+
+        .ikg-ot-hero { background: linear-gradient(135deg, rgba(220, 38, 38, 0.16), rgba(220, 38, 38, 0.04)); border: 1px solid rgba(220, 38, 38, 0.35); border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+        .ikg-ot-hero-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+        .ikg-ot-hero-name { font-size: 13px; font-weight: 700; color: var(--text-main); }
+        .ikg-ot-hero-num { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; color: var(--text-main); }
+        .ikg-ot-hero-num small { font-size: 14px; font-weight: 600; color: var(--text-muted); letter-spacing: 0; }
+        .ikg-ot-sub { font-size: 12px; color: var(--text-muted); }
+
+        .ikg-ot-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+        .ikg-ot-chip { font: inherit; font-size: 11.5px; font-weight: 600; color: var(--text-muted); background: var(--bg-base); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; cursor: pointer; transition: all 0.15s ease; }
+        .ikg-ot-chip:hover, .ikg-ot-chip:focus-visible { color: var(--text-main); border-color: #DC2626; outline: none; }
+        .ikg-ot-chip.active { color: #fff; background: #DC2626; border-color: #DC2626; }
+
+        .ikg-ot-section { display: flex; flex-direction: column; gap: 6px; }
+        .ikg-ot-section-title { font-size: 10.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin: 0 0 4px 4px; display: flex; align-items: center; justify-content: space-between; }
+        .ikg-ot-section-title span { opacity: 0.6; }
+
+        .ikg-ot-item { font: inherit; text-align: left; width: 100%; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; background: var(--bg-base); border: 1px solid var(--border); border-radius: 10px; color: var(--text-main); cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease; }
+        .ikg-ot-item:hover, .ikg-ot-item:focus-visible { border-color: #DC2626; background: rgba(220, 38, 38, 0.05); outline: none; transform: translateY(-1px); }
+        .ikg-ot-item:active { transform: scale(0.995); }
+        .ikg-ot-item.is-pending { border: 1px dashed rgba(245, 158, 11, 0.6); background: rgba(245, 158, 11, 0.04); }
+        .ikg-ot-item-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+        .ikg-ot-item-date { font-size: 13px; font-weight: 700; color: var(--text-main); font-variant-numeric: tabular-nums; }
+        .ikg-ot-item-hrs { font-size: 13.5px; font-weight: 800; color: #EF4444; font-variant-numeric: tabular-nums; }
+        .ikg-ot-item.is-pending .ikg-ot-item-hrs { color: var(--warn); }
+        .ikg-ot-item-stepper { font-size: 11px; font-weight: 600; color: var(--warn); display: flex; align-items: center; gap: 4px; }
+        .ikg-ot-item-stepper.is-approved { color: var(--success, #10B981); }
+        .ikg-ot-item-desc { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .ikg-ot-empty { font-size: 12.5px; color: var(--text-muted); border: 1px dashed var(--border); border-radius: 10px; padding: 24px; text-align: center; }
         `);
 
       // --- ACTIVE SHIFT UI RENDERER ---
@@ -4940,7 +5126,29 @@
         });
         document.getElementById("ikg-cal-focus-chip")?.addEventListener("click", (e) => {
           if (e.target.closest("[data-pto-back]")) onBack();
+          if (e.target.closest("[data-ot-back]")) document.getElementById("tab-overtime")?.click();
         });
+      };
+
+      let otFocus = null;
+      let otStatusFilter = "all";
+      const otExpandedYears = new Set();
+      const otItemsById = new Map();
+
+      const focusOtItem = (item) => {
+        const [y, m] = item.date.split("-").map(Number);
+        currentViewYear = y;
+        currentViewMonth = m;
+        const now = Date.now();
+        ptoFocus = null;
+        otFocus = {
+          date: item.date,
+          month: item.date.slice(0, 7),
+          label: `${item.date} (+${IkgWorkRules.formatAmount(item.hours)}h)`,
+          glowUntil: now + PTO_FOCUS_MS,
+          chipUntil: now + PTO_CHIP_MS,
+        };
+        setTimeout(() => renderFocusChip(activePtoFocus(`${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`), activeOtFocus(`${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`)), PTO_CHIP_MS + 50);
       };
 
       const focusPtoItem = (item) => {
@@ -4949,6 +5157,7 @@
         currentViewYear = y;
         currentViewMonth = m;
         const now = Date.now();
+        otFocus = null;
         ptoFocus = {
           dates: new Set(dates),
           months: new Set(dates.map((d) => d.slice(0, 7))),
@@ -4957,7 +5166,7 @@
           glowUntil: now + PTO_FOCUS_MS,
           chipUntil: now + PTO_CHIP_MS,
         };
-        setTimeout(() => renderFocusChip(activePtoFocus(`${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`)), PTO_CHIP_MS + 50);
+        setTimeout(() => renderFocusChip(activePtoFocus(`${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`), activeOtFocus(`${currentViewYear}-${String(currentViewMonth).padStart(2, "0")}`)), PTO_CHIP_MS + 50);
       };
 
       const activePtoFocus = (monthStr) => {
@@ -4965,23 +5174,181 @@
         return ptoFocus;
       };
 
-      const applyPtoFocus = (grid, focus) => {
-        if (!focus || Date.now() > focus.glowUntil) return;
-        const cells = [...grid.querySelectorAll(".ikg-day[data-date]")].filter((el) => focus.dates.has(el.dataset.date));
-        cells.forEach((el) => el.classList.add("ikg-day--focus"));
-        cells[0]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-        setTimeout(() => cells.forEach((el) => el.classList.remove("ikg-day--focus")), Math.max(0, focus.glowUntil - Date.now()));
+      const activeOtFocus = (monthStr) => {
+        if (otFocus && otFocus.month !== monthStr) otFocus = null;
+        return otFocus;
       };
 
-      const renderFocusChip = (focus) => {
+      const applyPtoFocus = (grid, focus, otFoc) => {
+        const now = Date.now();
+        if (focus && now <= focus.glowUntil) {
+          const cells = [...grid.querySelectorAll(".ikg-day[data-date]")].filter((el) => focus.dates.has(el.dataset.date));
+          cells.forEach((el) => el.classList.add("ikg-day--focus"));
+          cells[0]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          setTimeout(() => cells.forEach((el) => el.classList.remove("ikg-day--focus")), Math.max(0, focus.glowUntil - now));
+        }
+        if (otFoc && now <= otFoc.glowUntil) {
+          const cell = grid.querySelector(`.ikg-day[data-date="${otFoc.date}"]`);
+          if (cell) {
+            cell.classList.add("ikg-day--ot-focus");
+            cell.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            setTimeout(() => cell.classList.remove("ikg-day--ot-focus"), Math.max(0, otFoc.glowUntil - now));
+          }
+        }
+      };
+
+      const renderFocusChip = (focus, otFoc) => {
         const chip = document.getElementById("ikg-cal-focus-chip");
         if (!chip) return;
-        if (!focus || Date.now() > focus.chipUntil) {
+        const now = Date.now();
+        if (otFoc && now <= otFoc.chipUntil) {
+          chip.innerHTML = `<span class="ikg-focus-chip" style="color:#EF4444; background:rgba(220,38,38,0.12); border-color:rgba(220,38,38,0.45);">👺 ${otFoc.label}<button type="button" data-ot-back="1">← Back to Overtime</button></span>`;
+          return;
+        }
+        if (!focus || now > focus.chipUntil) {
           chip.innerHTML = "";
           return;
         }
         const continues = focus.continuesInto.length ? ` · continues in ${focus.continuesInto.map((m) => formatYmd(`${m}-01`).split(" ")[0]).join(", ")}` : "";
         chip.innerHTML = `<span class="ikg-focus-chip">🏝️ ${focus.label}${continues}<button type="button" data-pto-back="1">← Back to PTO</button></span>`;
+      };
+
+      const overtimePillHtml = (otItem) => {
+        if (!otItem) return "";
+        const isPending = otItem.status === "pending" || otItem.status === "partially_approved";
+        const tone = isPending ? "ot-pending" : "ot";
+        const label = isPending ? `👺⏳ +${IkgWorkRules.formatAmount(otItem.hours)}h` : `👺 +${IkgWorkRules.formatAmount(otItem.hours)}h`;
+        const tip = [
+          `👺 Overtime · ${otItem.status.toUpperCase()} · +${IkgWorkRules.formatAmount(otItem.hours)}h`,
+          otItem.stageSummary,
+          otItem.description,
+        ].filter(Boolean).join("\n");
+        return headerPillHtml(tone, label, tip);
+      };
+
+      const otItemTooltip = (i) =>
+        [
+          `👺 Overtime · ${i.status.toUpperCase()} · +${IkgWorkRules.formatAmount(i.hours)}h`,
+          i.date,
+          i.stageSummary,
+          i.description,
+          "Click to show on the calendar",
+        ].filter(Boolean).join("\n");
+
+      const otItemHtml = (i) => {
+        const isPending = i.status === "pending" || i.status === "partially_approved";
+        const stepperHtml = i.stageSummary ? `<div class="ikg-ot-item-stepper${i.status === "approved" ? " is-approved" : ""}">${i.status === "approved" ? "✓ " : "⏳ "}${escapeAttr(i.stageSummary)}</div>` : "";
+        return `
+          <button type="button" class="ikg-ot-item${isPending ? " is-pending" : ""} ikg-fast-tt no-dot" data-ot-focus="${escapeAttr(i.id)}" data-title="${escapeAttr(otItemTooltip(i))}">
+            <div class="ikg-ot-item-row">
+              <span class="ikg-ot-item-date">${formatYmd(i.date, true)}</span>
+              <span class="ikg-ot-item-hrs">+${IkgWorkRules.formatAmount(i.hours)}h</span>
+            </div>
+            ${stepperHtml}
+            ${i.description ? `<div class="ikg-ot-item-desc">${escapeAttr(i.description)}</div>` : ""}
+          </button>`;
+      };
+
+      const otSectionHtml = (title, items) =>
+        items.length ? `<div class="ikg-ot-section"><div class="ikg-ot-section-title"><span>${title}</span><span>${items.length}</span></div>${items.map(otItemHtml).join("")}</div>` : "";
+
+      const otApprovedSectionsHtml = (approved) => {
+        const years = [...new Set(approved.map((i) => i.year))].sort((a, b) => b - a);
+        return years
+          .map((year) => {
+            const items = approved.filter((i) => i.year === year);
+            const shown = otExpandedYears.has(year) ? items : items.slice(0, PTO_TAKEN_PREVIEW);
+            const more = items.length - shown.length;
+            const moreBtn = more > 0 ? `<button type="button" class="ikg-pto-more" data-ot-more="${year}">Show ${more} more</button>` : "";
+            const yearHrs = items.reduce((s, i) => s + (Number(i.hours) || 0), 0);
+            return `<div class="ikg-ot-section"><div class="ikg-ot-section-title"><span>Approved · ${year} (+${IkgWorkRules.formatAmount(yearHrs)}h)</span><span>${items.length}</span></div>${shown.map(otItemHtml).join("")}${moreBtn}</div>`;
+          })
+          .join("");
+      };
+
+      const otListHtml = (groups) => {
+        const all = [...groups.ongoing, ...groups.pending, ...groups.approved, ...groups.rejected];
+        if (!all.length) return `<div class="ikg-ot-empty">👺 No overtime records found in Deel.</div>`;
+        const filter = otStatusFilter;
+        const keep = (items) => (filter === "all" ? items : items.filter((i) => (filter === "pending" ? (i.status === "pending" || i.status === "partially_approved") : i.status === filter)));
+        const chip = (value, label) =>
+          `<button type="button" class="ikg-ot-chip${filter === value ? " active" : ""}" data-ot-filter="${escapeAttr(value)}">${escapeAttr(label)}</button>`;
+        const chips = `
+          <div class="ikg-ot-chips">
+            ${chip("all", `All (${all.length})`)}
+            ${groups.pending.length ? chip("pending", `Awaiting (${groups.pending.length})`) : ""}
+            ${groups.approved.length ? chip("approved", `Approved (${groups.approved.length})`) : ""}
+            ${groups.rejected.length ? chip("rejected", `Rejected (${groups.rejected.length})`) : ""}
+          </div>`;
+        return [
+          chips,
+          otSectionHtml("Awaiting approval", keep(groups.pending)),
+          otSectionHtml("Ongoing", keep(groups.ongoing)),
+          otApprovedSectionsHtml(keep(groups.approved)),
+          otSectionHtml("Rejected", keep(groups.rejected)),
+        ].join("");
+      };
+
+      function renderOvertimeTab() {
+        const pane = document.getElementById("ikg-ot-pane");
+        if (!pane) return;
+        const todayStr = toYMD(new Date());
+        const otStore = readDeelStore(DEEL_OVERTIME_LIST_KEY);
+        const syncButton = `<button type="button" class="ikg-ot-sync" data-ot-sync="1" title="Sync Deel now">↻</button>`;
+
+        if (!otStore) {
+          pane.innerHTML = `
+            <div class="ikg-pto-onboard">
+              <div class="ikg-pto-onboard-title">👺 Sync to load your Overtime</div>
+              <div>Overtime submissions and approvals come from Deel. Log in to Deel in this browser if the sync asks for it.</div>
+              <button type="button" class="ikg-pto-cta" style="background:#DC2626;" data-ot-sync="1">Sync now</button>
+            </div>`;
+          return;
+        }
+
+        const groups = IkgWorkRules.groupOvertimeRequests(otStore?.requests, todayStr);
+        otItemsById.clear();
+        [...groups.ongoing, ...groups.pending, ...groups.approved, ...groups.rejected].forEach((i) => otItemsById.set(i.id, i));
+
+        const syncedAt = otStore?.syncedAt;
+        const isStale = Date.now() - syncedAt > STALE_SYNC_MS;
+
+        pane.innerHTML = `
+          <div class="ikg-ot-col ikg-ot-col--summary">
+            <div class="ikg-ot-head"><span>Summary</span><span class="ikg-ot-synced${isStale ? " is-stale" : ""}">${Number.isFinite(syncedAt) ? formatSyncedAgo(syncedAt) : ""}</span>${syncButton}</div>
+            <section class="ikg-ot-hero">
+              <div class="ikg-ot-hero-top"><span class="ikg-ot-hero-name">👺 Approved Overtime</span></div>
+              <div class="ikg-ot-hero-num">+${IkgWorkRules.formatAmount(groups.totalApprovedHrs)}<small> hrs</small></div>
+              <div class="ikg-ot-sub">${groups.countApproved} approved shift${groups.countApproved === 1 ? "" : "s"}${groups.countPending > 0 ? ` · ${groups.countPending} pending (+${IkgWorkRules.formatAmount(groups.totalPendingHrs)}h)` : ""}</div>
+            </section>
+          </div>
+          <div class="ikg-ot-col ikg-ot-col--list">
+            <div class="ikg-ot-head"><span>Requests</span></div>
+            ${otListHtml(groups)}
+          </div>`;
+      }
+
+      const bindOvertimePaneEvents = ({ onJump, onBack }) => {
+        const pane = document.getElementById("ikg-ot-pane");
+        pane?.addEventListener("click", (e) => {
+          const target = e.target.closest("[data-ot-focus], [data-ot-filter], [data-ot-more], [data-ot-sync]");
+          if (!target) return;
+          if (target.dataset.otFocus) {
+            const item = otItemsById.get(target.dataset.otFocus);
+            if (item) onJump(item);
+          } else if (target.dataset.otFilter) {
+            otStatusFilter = target.dataset.otFilter;
+            renderOvertimeTab();
+          } else if (target.dataset.otMore) {
+            otExpandedYears.add(Number(target.dataset.otMore));
+            renderOvertimeTab();
+          } else {
+            document.getElementById("ikg-btn-fetch")?.click();
+          }
+        });
+        document.getElementById("ikg-cal-focus-chip")?.addEventListener("click", (e) => {
+          if (e.target.closest("[data-ot-back]")) onBack();
+        });
       };
 
       let lastCalendarMonth = { monthStr: "", rows: [] };
@@ -5105,7 +5472,10 @@
         const evalDay = evaluateDay(IKG_DataStore.getDayContext(dateStr, IKG_DataStore.buildSnapshot()));
         const note = (icon, title, body, tone = "") =>
           `<div class="dm-note${tone ? ` dm-note--${tone}` : ""}"><span>${icon}</span><div><b>${escapeAttr(title)}</b>${body ? `<div>${escapeAttr(body)}</div>` : ""}</div></div>`;
+        const otStore = readDeelStore(DEEL_OVERTIME_LIST_KEY);
+        const otItem = (otStore?.requests || []).find((r) => r.date === dateStr);
         const notes = [
+          otItem ? note("👺", `Overtime · +${IkgWorkRules.formatAmount(otItem.hours)}h (${otItem.status.toUpperCase()})`, [otItem.stageSummary, otItem.description].filter(Boolean).join(" · "), "ot") : "",
           evalDay.shortfall ? note("⚠️", evalDay.shortfall.badge ? `${evalDay.shortfall.badge} · ${evalDay.shortfall.detail}` : evalDay.shortfall.detail, evalDay.shortfall.action ? `→ ${evalDay.shortfall.action}` : "", "bad") : "",
           evalDay.uncountedHrs > 0 && evalDay.plannedWindow
             ? note("⏸️", `${formatDurFromDec(evalDay.uncountedHrs, false)} of meal break isn't counted`, `Your leave sets work to ${IkgWorkRules.formatWindow(evalDay.plannedWindow)}; punches during the meal break next to it don't add hours or flex.`)
@@ -5298,6 +5668,9 @@
           isTargetForWarning = true; // Previous month evaluates ONLY if <= 3 working days into current month
         }
 
+        const otStore = readDeelStore(DEEL_OVERTIME_LIST_KEY);
+        const otByDate = new Map((otStore?.requests || []).map((r) => [r.date, r]));
+
         let htmlBuffer = "";
         for (let i = 0; i < firstDay; i++) htmlBuffer += `<div class="ikg-day empty"></div>`;
 
@@ -5411,6 +5784,8 @@
             cellContent = shortfallCellHtml(evalDay);
         }
 
+          const otItem = otByDate.get(dateStr);
+          if (otItem) partialPill += overtimePillHtml(otItem);
           partialPill += pendingPtoPillHtml(evalDay);
           partialPill = eventPillHtml(evalDay) + partialPill;
 
@@ -5444,11 +5819,12 @@
 
         const isFutureMonth = monthStr > currentRealMonthStr;
         const focus = activePtoFocus(monthStr);
+        const otFoc = activeOtFocus(monthStr);
 
         requestAnimationFrame(() => {
           grid.innerHTML = htmlBuffer;
-          applyPtoFocus(grid, focus);
-          renderFocusChip(focus);
+          applyPtoFocus(grid, focus, otFoc);
+          renderFocusChip(focus, otFoc);
 
           const netBalance = month.netHrs;
           let subDays = [];
@@ -6359,6 +6735,7 @@
                         <div class="ikg-tab-group">
                           <div class="ikg-tab active" id="tab-cal"><span>🗓️</span><span>Calendar</span></div>
                           <div class="ikg-tab" id="tab-pto"><span>🏝️</span><span>PTO</span></div>
+                          <div class="ikg-tab" id="tab-overtime"><span>👺</span><span>Overtime</span></div>
                           <div class="ikg-tab" id="tab-stats"><span>📈</span><span>Analytics</span></div>
                           <div class="ikg-tab" id="tab-audit"><span>🔍</span><span>Audit</span></div>
                           <div class="ikg-tab" id="tab-rules"><span>📜</span><span>Rules</span></div>
@@ -6469,6 +6846,10 @@
 
                         <div id="view-pto" class="ikg-view">
                             <div id="ikg-pto-pane" class="ikg-pto-pane"></div>
+                        </div>
+
+                        <div id="view-overtime" class="ikg-view">
+                            <div id="ikg-ot-pane" class="ikg-ot-pane"></div>
                         </div>
 
                         <div id="view-stats" class="ikg-view">
@@ -6834,9 +7215,49 @@
                                                 <span style="font-family: monospace; font-weight: 800; font-size: 18px; color: var(--text-main); background: var(--bg-elevated); padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border);">${SCRIPT_VER}</span>
                                                 <span style="font-size: 10px; font-weight: 700; color: #fff; background: var(--success); padding: 3px 8px; border-radius: 12px; letter-spacing: 0.5px;">LATEST</span>
                                             </div>
-                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Day Modal Redesign, Smart Override Cleaning, and Punctuality Refinements</h3>
+                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Deel Overtime (OT) Tab, Real-Time Approvals Sync &amp; Calendar Integration</h3>
                                         </div>
                                         <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">Current Release</div>
+                                    </div>
+
+                                    <div style="display: flex; flex-direction: column; gap: 16px; font-size: 13px; line-height: 1.6; color: var(--text-main);">
+                                        <div>
+                                            <div style="font-size: 12px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">👺 Dedicated Overtime (OT) View</div>
+                                            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Native Overtime Tab:</b> Added <code>👺 Overtime</code> tab with Summary KPI metrics (total approved hours, pending approval count, rejected count) and detailed request cards.</li>
+                                                <li><b>Approval Tracking:</b> Visual approval status chips (<code>APPROVED</code>, <code>PENDING</code>, <code>REJECTED</code>), reviewer name avatars, submission date, and original notes/reasons.</li>
+                                                <li><b>Instant Snapshot Fallback:</b> Instant load from localStorage snapshot on boot, preventing blank screens while network sync is in flight.</li>
+                                            </ul>
+                                        </div>
+
+                                        <div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--primary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">⚡ Robust Deel Overtime Synchronization</div>
+                                            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Deel Approval Requests Feed:</b> Synced directly with <code>/deelapi/approvals/requests/requester</code> and detailed request endpoints using parallel request pooling.</li>
+                                                <li><b>Reliable Concurrency:</b> Hardened worker pooling with strict timeouts and zero infinite loops.</li>
+                                                <li><b>Real-Time Cache:</b> Persistent storage with versioned cache isolation and background auto-refresh on page loads.</li>
+                                            </ul>
+                                        </div>
+
+                                        <div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--success); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">📅 Calendar Cell Overtime Badges</div>
+                                            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Inline Cell Pill:</b> Days with approved or pending overtime display a compact <code>👺 +Xh OT</code> pill in the calendar grid.</li>
+                                                <li><b>Responsive Pill Wrap:</b> Spaced pill row with <code>flex-wrap: wrap</code> guarantees date numbers are never clipped or crowded when WFH, PTO, and Overtime coincide on the same day.</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="ikg-card" style="border-left: 4px solid var(--border); padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 14px;">
+                                        <div>
+                                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                                                <span style="font-family: monospace; font-weight: 800; font-size: 18px; color: var(--text-muted); background: var(--bg-elevated); padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border);">v7.146</span>
+                                            </div>
+                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Day Modal Redesign, Smart Override Cleaning, and Punctuality Refinements</h3>
+                                        </div>
+                                        <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">Previous Release</div>
                                     </div>
 
                                     <div style="display: flex; flex-direction: column; gap: 16px; font-size: 13px; line-height: 1.6; color: var(--text-main);">
@@ -6999,6 +7420,20 @@
             smartMonthNavigate();
           },
           onBack: () => document.getElementById("tab-pto").click(),
+        });
+        document.getElementById("tab-overtime")?.addEventListener("click", () => {
+          switchTab("tab-overtime", "view-overtime");
+          activeTab = "overtime";
+          renderOvertimeTab();
+        });
+        bindOvertimePaneEvents({
+          onJump: (item) => {
+            focusOtItem(item);
+            switchTab("tab-cal", "view-cal");
+            activeTab = "cal";
+            smartMonthNavigate();
+          },
+          onBack: () => document.getElementById("tab-overtime")?.click(),
         });
         document.getElementById("tab-stats").addEventListener("click", () => {
           switchTab("tab-stats", "view-stats");
@@ -7965,6 +8400,7 @@
       const triggerUIRefresh = () => {
         renderCalendar();
         if (activeTab === "pto") renderPtoTab();
+        if (activeTab === "overtime") renderOvertimeTab();
         if (activeTab === "rules") renderSpecialDaysCard();
         if (activeTab === "stats") renderAnalytics(localCache);
         if (activeTab === "audit") renderAudit(localCache);
