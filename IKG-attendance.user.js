@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.151] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.152] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.151
+    // @version      7.152
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -4257,6 +4257,10 @@
 
           .ikg-fast-tt { position: relative; cursor: help; border-bottom: 1px dotted rgba(148, 163, 184, 0.5); display: inline-block; }
           .ikg-fast-tt.no-dot { border-bottom: none; }
+          .ikg-fast-tt:not([data-title])::after,
+          .ikg-fast-tt[data-title=""]::after {
+              display: none !important;
+          }
           .ikg-fast-tt::after {
               content: attr(data-title);
               position: absolute;
@@ -4284,6 +4288,9 @@
               line-height: 1.4;
               text-align: center;
               margin-bottom: 6px;
+              overflow: hidden;
+              box-sizing: border-box;
+              word-break: break-word;
           }
           .ikg-fast-tt:hover::after {
               opacity: 1;
@@ -4291,31 +4298,47 @@
               transform: translateX(-50%) translateY(0);
           }
 
-          /* 🎯 TOP ROW FIX: Offset tooltips horizontally right to prevent blocking IN/OUT times */
-          .ikg-grid > .ikg-day:nth-child(-n+7) .ikg-fast-tt::after {
-              bottom: auto;
-              top: -4px;
-              left: 100%;
-              margin-bottom: 0;
-              margin-left: 8px;
-              transform: translateX(-4px) translateY(0);
+          /* 🎯 CALENDAR GRID PILL TOOLTIPS: Downward by default, topmost stacking */
+          .ikg-grid .ikg-pill.ikg-fast-tt::after {
+              bottom: auto !important;
+              top: 100% !important;
+              margin-top: 4px !important;
+              margin-bottom: 0 !important;
+              left: 0 !important;
+              right: auto !important;
+              transform: translateY(-4px) !important;
+              text-align: left !important;
+              max-width: 320px !important;
+              min-width: 220px !important;
+              width: max-content !important;
+              z-index: 999999 !important;
+              overflow: hidden !important;
+              box-sizing: border-box !important;
+              box-shadow: 0 16px 36px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(255, 255, 255, 0.08) !important;
           }
-          .ikg-grid > .ikg-day:nth-child(-n+7) .ikg-fast-tt:hover::after {
-              transform: translateX(0) translateY(0);
+          .ikg-grid .ikg-pill.ikg-fast-tt:hover::after {
+              transform: translateY(0) !important;
+              opacity: 1 !important;
+              visibility: visible !important;
           }
 
-          /* 🎯 TOP RIGHT CORNER FIX (Fri/Sat): Offset left to prevent clipping off screen */
-          .ikg-grid > .ikg-day:nth-child(6) .ikg-fast-tt::after,
-          .ikg-grid > .ikg-day:nth-child(7) .ikg-fast-tt::after {
-              left: auto;
-              right: 100%;
-              margin-left: 0;
-              margin-right: 8px;
-              transform: translateX(4px) translateY(0);
+          /* Bottom rows: open upward so they don't clip the bottom of the grid */
+          .ikg-grid > .ikg-day:nth-last-child(-n+14) .ikg-pill.ikg-fast-tt::after {
+              bottom: 100% !important;
+              top: auto !important;
+              margin-top: 0 !important;
+              margin-bottom: 4px !important;
+              transform: translateY(4px) !important;
           }
-          .ikg-grid > .ikg-day:nth-child(6) .ikg-fast-tt:hover::after,
-          .ikg-grid > .ikg-day:nth-child(7) .ikg-fast-tt:hover::after {
-              transform: translateX(0) translateY(0);
+          .ikg-grid > .ikg-day:nth-last-child(-n+14) .ikg-pill.ikg-fast-tt:hover::after {
+              transform: translateY(0) !important;
+          }
+
+          /* Rightmost columns (Fri / Sat): align to the right edge to prevent horizontal clipping */
+          .ikg-grid > .ikg-day:nth-child(7n+6) .ikg-pill.ikg-fast-tt::after,
+          .ikg-grid > .ikg-day:nth-child(7n) .ikg-pill.ikg-fast-tt::after {
+              left: auto !important;
+              right: 0 !important;
           }
 
           /* Left & Right Edge Alignments */
@@ -5088,10 +5111,11 @@
         const statusLabel = isPending ? "AWAITING APPROVAL" : "APPROVED";
         const statusIcon = isPending ? "⏳" : "✓";
         const rangeStr = i.first === i.last ? formatYmd(i.first, true) : `${formatYmd(i.first, true)} – ${formatYmd(i.last, true)}`;
+        const divider = "─".repeat(24);
 
         const lines = [];
         lines.push(`${IkgWorkRules.ptoKindOf(i.fullType).icon} ${i.fullType.toUpperCase()}  [ ${statusIcon} ${statusLabel} ]`);
-        lines.push("─".repeat(40));
+        lines.push(divider);
         lines.push(`📅 Period: ${rangeStr} (${i.totalLabel})`);
         if (i.windowLabel) {
           lines.push(`⏰ Time: ${i.windowLabel}`);
@@ -5100,17 +5124,17 @@
           lines.push(`➡️ Continues into: ${i.continuesInto.map((m) => formatYmd(`${m}-01`).split(" ")[0]).join(", ")}`);
         }
         if (i.description) {
-          lines.push("─".repeat(40));
+          lines.push(divider);
           lines.push(`📝 Reason & Coverage:`);
           lines.push(`   ${i.description}`);
         }
-        lines.push("─".repeat(40));
+        lines.push(divider);
         lines.push("👆 Click to show on calendar");
         return lines.join("\n");
       };
 
       const ptoItemHtml = (i) => `
-        <button type="button" class="ikg-pto-item${i.isPending ? " is-pending" : ""} ikg-fast-tt no-dot" data-pto-focus="${escapeAttr(i.id)}" data-title="${escapeAttr(ptoItemTooltip(i))}">
+        <button type="button" class="ikg-pto-item${i.isPending ? " is-pending" : ""}" data-pto-focus="${escapeAttr(i.id)}" data-full-title="${escapeAttr(ptoItemTooltip(i))}">
           <span class="ikg-pto-item-range">${i.rangeLabel}</span>
           <span class="ikg-pto-item-type">${IkgWorkRules.ptoKindOf(i.fullType).icon} ${escapeAttr(balanceRowName(i.type))}</span>
           <span class="ikg-pto-item-window">${escapeAttr(i.windowLabel)}</span>
@@ -5303,20 +5327,21 @@
         const statusIcon = i.status === "approved" ? "✓" : isPending ? "⏳" : "❌";
         const hrs = "+" + (Number(i.hours) || 0).toFixed(1).replace(/\.0$/, "") + "h";
         const dateStr = i.date ? formatYmd(i.date, true) : "Unknown";
+        const divider = "─".repeat(24);
 
         const lines = [];
         lines.push(`👺 OVERTIME · ${hrs}  [ ${statusIcon} ${statusLabel} ]`);
-        lines.push("─".repeat(40));
+        lines.push(divider);
         lines.push(`📅 Date: ${dateStr}`);
 
         if (i.stageSummary) {
-          lines.push("─".repeat(40));
+          lines.push(divider);
           lines.push(`👥 Approvers:`);
           lines.push(`   ${i.stageSummary}`);
         }
 
         if (i.description) {
-          lines.push("─".repeat(40));
+          lines.push(divider);
           lines.push(`📝 Description:`);
           const cleanDesc = i.description
             .replace(/https:\/\/github\.com\/[^\/]+\/[^\/]+\/pull\/(\d+)/g, "#$1")
@@ -5325,7 +5350,7 @@
         }
 
         if (showAction) {
-          lines.push("─".repeat(40));
+          lines.push(divider);
           lines.push("👆 Click to show on calendar");
         }
 
@@ -5344,7 +5369,7 @@
         const isPending = i.status === "pending" || i.status === "partially_approved";
         const stepperHtml = i.stageSummary ? `<span class="ikg-ot-item-stepper${i.status === "approved" ? " is-approved" : ""}">${i.status === "approved" ? "✓ " : "⏳ "}${escapeAttr(i.stageSummary)}</span>` : `<span class="ikg-ot-item-stepper"></span>`;
         return `
-          <button type="button" class="ikg-ot-item${isPending ? " is-pending" : ""} ikg-fast-tt no-dot" data-ot-focus="${escapeAttr(i.id)}" data-title="${escapeAttr(otItemTooltip(i, true))}">
+          <button type="button" class="ikg-ot-item${isPending ? " is-pending" : ""}" data-ot-focus="${escapeAttr(i.id)}" data-full-title="${escapeAttr(otItemTooltip(i, true))}">
             <span class="ikg-ot-item-date">${formatYmd(i.date, true)}</span>
             <span class="ikg-ot-item-type">👺 Overtime</span>
             ${stepperHtml}
@@ -7602,6 +7627,31 @@
             smartMonthNavigate();
           },
           onBack: () => document.getElementById("tab-overtime")?.click(),
+        });
+
+        // 🎯 DYNAMIC TRUNCATION TOOLTIP: Show hover info ONLY when text is truncated (PTO & Overtime tabs)
+        document.addEventListener("mouseover", (e) => {
+          const item = e.target.closest(".ikg-pto-item, .ikg-ot-item");
+          if (!item) return;
+          const descEl = item.querySelector(".ikg-pto-item-desc, .ikg-ot-item-desc");
+          const stepperEl = item.querySelector(".ikg-ot-item-stepper");
+          const isDescTruncated = descEl && (descEl.scrollWidth > descEl.clientWidth + 1);
+          const isStepperTruncated = stepperEl && (stepperEl.scrollWidth > stepperEl.clientWidth + 1);
+          if (isDescTruncated || isStepperTruncated) {
+            if (item.dataset.fullTitle && item.getAttribute("data-title") !== item.dataset.fullTitle) {
+              item.setAttribute("data-title", item.dataset.fullTitle);
+              item.classList.add("ikg-fast-tt", "no-dot");
+            }
+          } else {
+            item.removeAttribute("data-title");
+            item.classList.remove("ikg-fast-tt");
+          }
+        });
+        document.addEventListener("mouseout", (e) => {
+          const item = e.target.closest(".ikg-pto-item, .ikg-ot-item");
+          if (!item || item.contains(e.relatedTarget)) return;
+          item.removeAttribute("data-title");
+          item.classList.remove("ikg-fast-tt");
         });
         document.getElementById("tab-stats").addEventListener("click", () => {
           switchTab("tab-stats", "view-stats");
