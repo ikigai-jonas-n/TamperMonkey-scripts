@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.148] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.149] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.148
+    // @version      7.149
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -1404,6 +1404,27 @@
           });
         };
 
+        const findBestPtoWindows = (windows, shift, ptoHrs) => {
+          if (!windows || !windows.length || !(ptoHrs > 0)) return windows;
+
+          // 1. For partial PTO (ptoHrs < FULL_PTO_HRS), exclude windows that span the entire shift
+          let candidates = windows;
+          if (ptoHrs < FULL_PTO_HRS) {
+            const nonFull = windows.filter((w) => !(w.start <= shift.start && w.end >= shift.end));
+            if (nonFull.length > 0) candidates = nonFull;
+          }
+
+          // 2. Check if the sum of all remaining candidates matches ptoHrs (e.g. 9-10 + 17-18 = 2h)
+          const sumHrs = candidates.reduce((s, w) => s + (w.end - w.start), 0);
+          if (Math.abs(sumHrs - ptoHrs) <= HOURS_TOLERANCE) return candidates;
+
+          // 3. Otherwise, check if any single window matches ptoHrs within tolerance (e.g. 17:00-19:00 = 2h)
+          const exact = candidates.filter((w) => Math.abs((w.end - w.start) - ptoHrs) <= HOURS_TOLERANCE);
+          if (exact.length >= 1) return [exact[0]];
+
+          return candidates;
+        };
+
         const computePtoSchedule = ({ shift, ptoWindows = [], ptoHrs = 0, isFullPTO = false }) => {
           const workIntervals = workIntervalsOf(shift);
           const standard = {
@@ -1414,7 +1435,8 @@
 
           if (isFullPTO || ptoHrs >= FULL_PTO_HRS) return Object.freeze({ ...fullDay, mode: "full" });
 
-          const windows = mergeIntervals(disambiguateWindows(ptoWindows, shift));
+          const candidateWindows = findBestPtoWindows(ptoWindows, shift, ptoHrs);
+          const windows = mergeIntervals(disambiguateWindows(candidateWindows, shift));
           if (!windows.length && ptoHrs > 0) {
             return Object.freeze({
               ...standard, mode: "legacy", span: round(GROSS_SHIFT_HRS - ptoHrs), ptoCredit: round(ptoHrs),
@@ -1428,7 +1450,20 @@
 
           const hoursMismatch = isDeelHoursMismatch(inShift, workIntervals, shift, ptoHrs);
           const remaining = subtractIntervals(workIntervals, inShift);
-          if (!remaining.length) return Object.freeze({ ...fullDay, mode: "full", windows, hoursMismatch });
+          if (!remaining.length) {
+            if (isFullPTO || ptoHrs >= FULL_PTO_HRS) {
+              return Object.freeze({ ...fullDay, mode: "full", windows, hoursMismatch });
+            }
+            return Object.freeze({
+              ...standard,
+              mode: "legacy",
+              span: round(GROSS_SHIFT_HRS - ptoHrs),
+              ptoCredit: round(ptoHrs),
+              earliestCheckout: round(shift.end - ptoHrs),
+              windows,
+              hoursMismatch: true,
+            });
+          }
 
           const earliestCheckin = remaining[0].start;
           const earliestCheckout = remaining[remaining.length - 1].end;
@@ -2263,7 +2298,7 @@
           parseSpecialDays, eventWindowsFor, eventOverlapHrs, eventReleaseLabel, explainShortfall, judgeEventDay, punctualityFlags, uncountedPunchHrs, leaveWorkedHrs, eventCheckText, EVENT_DAY_NOT_COUNTED, ptoKindOf, ptoIconsOf,
           summarizeMonth, pickWfhSyncDates, countedReason, isCountedReason, explainMonth, explainDayTarget,
           heatmapLayout, ptoShareOf, weekColumns, bucketByPeriod, mapPool, withDeadline, gasRequestMonths, alarmTriggerAction, planAlarmSoundMigration,
-          shiftFromLabel, resolveShift, resolveShiftFromHistory, parsePtoWindows, disambiguateWindows,
+          shiftFromLabel, resolveShift, resolveShiftFromHistory, parsePtoWindows, disambiguateWindows, findBestPtoWindows,
           computeDaySchedule, gradeDay, isGoalMet, formatWindow,
           normalizeGasType, normalizeGasTime, normalizeGasDate, normalizeReviewStatus,
           parseGasEnvelope, classifyGasPunches, resolvePunches,
@@ -3363,7 +3398,7 @@
       isWorkingDay = false;
     } else if (!isRestDay || ptoHrs > 0) {
       targetHrs = schedule.span;
-      ptoCredit = schedule.ptoCredit;
+      ptoCredit = isFullPTO ? schedule.ptoCredit : Math.min(schedule.ptoCredit, ptoHrs > 0 ? ptoHrs : schedule.ptoCredit);
       if (dObj <= todayD) isWorkingDay = true;
     } else if (isRestDay && actualHrs > 0) {
       isWorkingDay = true;
@@ -7218,9 +7253,40 @@
                                                 <span style="font-family: monospace; font-weight: 800; font-size: 18px; color: var(--text-main); background: var(--bg-elevated); padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border);">${SCRIPT_VER}</span>
                                                 <span style="font-size: 10px; font-weight: 700; color: #fff; background: var(--success); padding: 3px 8px; border-radius: 12px; letter-spacing: 0.5px;">LATEST</span>
                                             </div>
-                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Deel Overtime (OT) Tab, Real-Time Approvals Sync &amp; Calendar Integration</h3>
+                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Precision Partial PTO Disambiguation &amp; Net Balance Fix</h3>
                                         </div>
                                         <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">Current Release</div>
+                                    </div>
+
+                                    <div style="display: flex; flex-direction: column; gap: 16px; font-size: 13px; line-height: 1.6; color: var(--text-main);">
+                                        <div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--pto); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">🏝️ Precision PTO Window Selection</div>
+                                            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Ground-Truth Duration Matching:</b> When leave requests mention working shifts or handover notes alongside leave times, candidate windows are cross-referenced directly with Deel's deducted hours (<code>ptoHrs</code>), selecting the exact leave window with zero information loss.</li>
+                                                <li><b>Full-Shift Exclusion:</b> Windows that cover the full 9-hour shift are excluded on partial leave days (&lt; 8h), preventing shift descriptions from overriding the actual leave span.</li>
+                                                <li><b>Multi-Window Preservation:</b> Supports multi-window leave requests (e.g. split appointments) by matching candidate sets whose duration matches Deel's total.</li>
+                                            </ul>
+                                        </div>
+
+                                        <div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--success); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">🛡️ Multi-Tier Calculation Guards</div>
+                                            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Partial PTO Containment:</b> A partial leave day can never be escalated to full-day mode, preventing phantom target zeroing and erroneous flex inflation.</li>
+                                                <li><b>Strict Credit Clamping:</b> PTO credit on partial leave days is strictly bounded by the actual Deel deduction amount, ensuring accurate monthly net balances.</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="ikg-card" style="border-left: 4px solid var(--border); padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 14px;">
+                                        <div>
+                                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                                                <span style="font-family: monospace; font-weight: 800; font-size: 18px; color: var(--text-muted); background: var(--bg-elevated); padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border);">v7.148</span>
+                                            </div>
+                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Deel Overtime (OT) Tab, Real-Time Approvals Sync &amp; Calendar Integration</h3>
+                                        </div>
+                                        <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">Previous Release</div>
                                     </div>
 
                                     <div style="display: flex; flex-direction: column; gap: 16px; font-size: 13px; line-height: 1.6; color: var(--text-main);">

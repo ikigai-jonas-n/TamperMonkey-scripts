@@ -161,6 +161,31 @@ describe("computeDaySchedule span (required punch-in to punch-out)", () => {
   test("window hours far from Deel hours are flagged as a mismatch", () => {
     assert.equal(schedule(DAY, [win(17, 18)], 3).hoursMismatch, true);
   });
+
+  test("partial PTO with full-shift and partial windows selects matching window", () => {
+    const s = R.computeDaySchedule({
+      shift: DAY_10,
+      ptoWindows: [win(10, 19), win(17, 19), win(10, 19)],
+      ptoHrs: 2,
+      isFullPTO: false,
+    });
+    assert.deepEqual([s.span, s.ptoCredit, s.mode, s.earliestCheckin, s.earliestCheckout, s.hoursMismatch], [7, 2, "window", 10, 17, false]);
+  });
+
+  test("partial PTO multi-window sum matching ptoHrs is preserved", () => {
+    const candidates = R.findBestPtoWindows([win(9, 10), win(17, 18)], DAY, 2);
+    assert.deepEqual(candidates, [win(9, 10), win(17, 18)]);
+  });
+
+  test("partial PTO covering whole shift falls back to legacy mode and never full-day", () => {
+    const s = R.computeDaySchedule({
+      shift: DAY,
+      ptoWindows: [win(9, 18)],
+      ptoHrs: 2,
+      isFullPTO: false,
+    });
+    assert.deepEqual([s.span, s.ptoCredit, s.mode, s.hoursMismatch], [7, 2, "legacy", true]);
+  });
 });
 
 describe("gradeDay", () => {
