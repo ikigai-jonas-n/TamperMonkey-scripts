@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.149] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.151] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.149
+    // @version      7.151
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -4253,6 +4253,7 @@
 
             /* 🎯 TOOLTIP BASE & BOUNDARY BREAKOUT FIX */
           .ikg-day { overflow: visible !important; }
+          .ikg-grid > .ikg-day:hover { z-index: 1000 !important; }
 
           .ikg-fast-tt { position: relative; cursor: help; border-bottom: 1px dotted rgba(148, 163, 184, 0.5); display: inline-block; }
           .ikg-fast-tt.no-dot { border-bottom: none; }
@@ -4439,12 +4440,40 @@
         .ikg-focus-chip button { font: inherit; font-size: 11px; color: var(--text-main); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
         .ikg-focus-chip button:hover, .ikg-focus-chip button:focus-visible { border-color: var(--pto); outline: none; }
 
-        .ikg-pto-pane .ikg-fast-tt::after { bottom: auto; top: 100%; margin: 6px 0 0; text-align: left; transform: translateX(-50%) translateY(-4px); }
-        .ikg-pto-pane .ikg-fast-tt:hover::after { transform: translateX(-50%) translateY(0); }
+        .ikg-pto-pane .ikg-pto-item:hover,
+        .ikg-ot-pane .ikg-ot-item:hover,
+        .ikg-pto-row:hover,
+        .ikg-pto-hero:hover {
+            position: relative !important;
+            z-index: 1000 !important;
+        }
+        .ikg-pto-pane .ikg-fast-tt::after,
+        .ikg-ot-pane .ikg-fast-tt::after {
+            bottom: auto !important;
+            top: 100% !important;
+            margin: 6px 0 0 0 !important;
+            left: 0 !important;
+            transform: translateY(-4px) !important;
+            text-align: left !important;
+            max-width: 440px !important;
+            min-width: 280px !important;
+            width: max-content !important;
+            white-space: pre-line !important;
+            line-height: 1.45 !important;
+            z-index: 999999 !important;
+            border: 1px solid var(--border) !important;
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;
+        }
+        .ikg-pto-pane .ikg-fast-tt:hover::after,
+        .ikg-ot-pane .ikg-fast-tt:hover::after {
+            transform: translateY(0) !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+        }
         .ikg-pto-pane { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); width: 100%; height: 100%; overflow: hidden; }
         .ikg-pto-col { overflow-y: auto; padding: 24px 28px; display: flex; flex-direction: column; gap: 14px; }
         .ikg-pto-col--balances { border-right: 1px solid var(--border); background: var(--bg-base); }
-        .ikg-pto-col--list { background: var(--bg-surface); gap: 18px; }
+        .ikg-pto-col--list { background: var(--bg-surface); gap: 18px; padding-bottom: 80px !important; }
         .ikg-pto-head { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
         .ikg-pto-synced { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; }
         .ikg-pto-synced.is-stale { color: var(--warn); }
@@ -4518,7 +4547,7 @@
         .ikg-ot-pane { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); width: 100%; height: 100%; overflow: hidden; }
         .ikg-ot-col { overflow-y: auto; padding: 24px 28px; display: flex; flex-direction: column; gap: 14px; }
         .ikg-ot-col--summary { border-right: 1px solid var(--border); background: var(--bg-base); }
-        .ikg-ot-col--list { background: var(--bg-surface); gap: 18px; }
+        .ikg-ot-col--list { background: var(--bg-surface); gap: 18px; padding-bottom: 80px !important; }
         .ikg-ot-head { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
         .ikg-ot-synced { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; }
         .ikg-ot-synced.is-stale { color: var(--warn); }
@@ -5054,14 +5083,31 @@
         ].join("");
       };
 
-      const ptoItemTooltip = (i) =>
-        [
-          `${i.fullType} · ${i.isPending ? "awaiting approval" : "approved"}`,
-          `${i.first === i.last ? formatYmd(i.first, true) : `${formatYmd(i.first, true)} – ${formatYmd(i.last, true)}`} · ${i.totalLabel}${i.windowLabel ? ` · ${i.windowLabel}` : ""}`,
-          i.continuesInto.length ? `Continues into ${i.continuesInto.map((m) => formatYmd(`${m}-01`).split(" ")[0]).join(", ")}` : "",
-          i.description,
-          "Click to show on the calendar",
-        ].filter(Boolean).join("\n");
+      const ptoItemTooltip = (i) => {
+        const isPending = i.isPending;
+        const statusLabel = isPending ? "AWAITING APPROVAL" : "APPROVED";
+        const statusIcon = isPending ? "⏳" : "✓";
+        const rangeStr = i.first === i.last ? formatYmd(i.first, true) : `${formatYmd(i.first, true)} – ${formatYmd(i.last, true)}`;
+
+        const lines = [];
+        lines.push(`${IkgWorkRules.ptoKindOf(i.fullType).icon} ${i.fullType.toUpperCase()}  [ ${statusIcon} ${statusLabel} ]`);
+        lines.push("─".repeat(40));
+        lines.push(`📅 Period: ${rangeStr} (${i.totalLabel})`);
+        if (i.windowLabel) {
+          lines.push(`⏰ Time: ${i.windowLabel}`);
+        }
+        if (i.continuesInto && i.continuesInto.length) {
+          lines.push(`➡️ Continues into: ${i.continuesInto.map((m) => formatYmd(`${m}-01`).split(" ")[0]).join(", ")}`);
+        }
+        if (i.description) {
+          lines.push("─".repeat(40));
+          lines.push(`📝 Reason & Coverage:`);
+          lines.push(`   ${i.description}`);
+        }
+        lines.push("─".repeat(40));
+        lines.push("👆 Click to show on calendar");
+        return lines.join("\n");
+      };
 
       const ptoItemHtml = (i) => `
         <button type="button" class="ikg-pto-item${i.isPending ? " is-pending" : ""} ikg-fast-tt no-dot" data-pto-focus="${escapeAttr(i.id)}" data-title="${escapeAttr(ptoItemTooltip(i))}">
@@ -5251,33 +5297,54 @@
         chip.innerHTML = `<span class="ikg-focus-chip">🏝️ ${focus.label}${continues}<button type="button" data-pto-back="1">← Back to PTO</button></span>`;
       };
 
+      const otItemTooltip = (i, showAction = true) => {
+        const isPending = i.status === "pending" || i.status === "partially_approved";
+        const statusLabel = i.status === "approved" ? "APPROVED" : isPending ? "AWAITING APPROVAL" : (i.status || "").toUpperCase();
+        const statusIcon = i.status === "approved" ? "✓" : isPending ? "⏳" : "❌";
+        const hrs = "+" + (Number(i.hours) || 0).toFixed(1).replace(/\.0$/, "") + "h";
+        const dateStr = i.date ? formatYmd(i.date, true) : "Unknown";
+
+        const lines = [];
+        lines.push(`👺 OVERTIME · ${hrs}  [ ${statusIcon} ${statusLabel} ]`);
+        lines.push("─".repeat(40));
+        lines.push(`📅 Date: ${dateStr}`);
+
+        if (i.stageSummary) {
+          lines.push("─".repeat(40));
+          lines.push(`👥 Approvers:`);
+          lines.push(`   ${i.stageSummary}`);
+        }
+
+        if (i.description) {
+          lines.push("─".repeat(40));
+          lines.push(`📝 Description:`);
+          const cleanDesc = i.description
+            .replace(/https:\/\/github\.com\/[^\/]+\/[^\/]+\/pull\/(\d+)/g, "#$1")
+            .trim();
+          lines.push(`   ${cleanDesc}`);
+        }
+
+        if (showAction) {
+          lines.push("─".repeat(40));
+          lines.push("👆 Click to show on calendar");
+        }
+
+        return lines.join("\n");
+      };
+
       const overtimePillHtml = (otItem) => {
         if (!otItem) return "";
         const isPending = otItem.status === "pending" || otItem.status === "partially_approved";
         const tone = isPending ? "ot-pending" : "ot";
         const label = isPending ? `👺⏳ +${IkgWorkRules.formatAmount(otItem.hours)}h` : `👺 +${IkgWorkRules.formatAmount(otItem.hours)}h`;
-        const tip = [
-          `👺 Overtime · ${otItem.status.toUpperCase()} · +${IkgWorkRules.formatAmount(otItem.hours)}h`,
-          otItem.stageSummary,
-          otItem.description,
-        ].filter(Boolean).join("\n");
-        return headerPillHtml(tone, label, tip);
+        return headerPillHtml(tone, label, otItemTooltip(otItem, false));
       };
-
-      const otItemTooltip = (i) =>
-        [
-          `👺 Overtime · ${i.status.toUpperCase()} · +${IkgWorkRules.formatAmount(i.hours)}h`,
-          i.date,
-          i.stageSummary,
-          i.description,
-          "Click to show on the calendar",
-        ].filter(Boolean).join("\n");
 
       const otItemHtml = (i) => {
         const isPending = i.status === "pending" || i.status === "partially_approved";
         const stepperHtml = i.stageSummary ? `<span class="ikg-ot-item-stepper${i.status === "approved" ? " is-approved" : ""}">${i.status === "approved" ? "✓ " : "⏳ "}${escapeAttr(i.stageSummary)}</span>` : `<span class="ikg-ot-item-stepper"></span>`;
         return `
-          <button type="button" class="ikg-ot-item${isPending ? " is-pending" : ""}" data-ot-focus="${escapeAttr(i.id)}">
+          <button type="button" class="ikg-ot-item${isPending ? " is-pending" : ""} ikg-fast-tt no-dot" data-ot-focus="${escapeAttr(i.id)}" data-title="${escapeAttr(otItemTooltip(i, true))}">
             <span class="ikg-ot-item-date">${formatYmd(i.date, true)}</span>
             <span class="ikg-ot-item-type">👺 Overtime</span>
             ${stepperHtml}
@@ -7246,16 +7313,48 @@
                                     <div style="font-size:13px; color:var(--text-muted);">Release notes, punctuality rules, and feature updates for IKG Attendance Pro.</div>
                                 </div>
 
-                                <div class="ikg-card" style="border-left: 4px solid var(--primary); padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+                                <div class="ikg-card" style="border-left: 4px solid var(--ot); padding: 24px; display: flex; flex-direction: column; gap: 16px;">
                                     <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 14px;">
                                         <div>
                                             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
                                                 <span style="font-family: monospace; font-weight: 800; font-size: 18px; color: var(--text-main); background: var(--bg-elevated); padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border);">${SCRIPT_VER}</span>
                                                 <span style="font-size: 10px; font-weight: 700; color: #fff; background: var(--success); padding: 3px 8px; border-radius: 12px; letter-spacing: 0.5px;">LATEST</span>
                                             </div>
-                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Precision Partial PTO Disambiguation &amp; Net Balance Fix</h3>
+                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Structured Downward Tooltips &amp; Visual Boundaries (Overtime, PTO &amp; Calendar)</h3>
                                         </div>
                                         <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">Current Release</div>
+                                    </div>
+
+                                    <div style="display: flex; flex-direction: column; gap: 16px; font-size: 13px; line-height: 1.6; color: var(--text-main);">
+                                        <div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--ot); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">👺 Structured Overtime &amp; Calendar Tooltips</div>
+                                            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Downward Tooltip Positioning:</b> Overtime tab item cards and calendar pills open downward by default, eliminating upward clipping and frame overlap.</li>
+                                                <li><b>Topmost Stacking Guarantee:</b> Hovered items dynamically elevate to <code>z-index: 1000</code> with tooltips at <code>z-index: 999999</code>, guaranteeing other cards or frames cannot paint over active tooltips.</li>
+                                                <li><b>Crisp Visual Sections:</b> Separated status badges, dates, approver reviewer lists, and descriptions with dedicated divider lines and emoji identifiers instead of raw run-on sentences.</li>
+                                                <li><b>PR URL Beautification:</b> Automatically formats lengthy GitHub PR URLs (e.g. <code>https://github.com/.../pull/1958</code>) cleanly as <code>#1958</code> for effortless reading.</li>
+                                            </ul>
+                                        </div>
+
+                                        <div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--pto); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">🏝️ Structured PTO Sectioning</div>
+                                            <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
+                                                <li><b>Multi-Section PTO Hover Cards:</b> Tooltips on PTO cards now distinctly isolate Leave Type &amp; Status, Period &amp; Hours, Shift Times, and Reason &amp; Coverage notes.</li>
+                                                <li><b>Extended List Padding:</b> Added bottom clearance to scrollable PTO and Overtime columns so bottom cards never have tooltips cut off at the viewport edge.</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="ikg-card" style="border-left: 4px solid var(--border); padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 14px;">
+                                        <div>
+                                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                                                <span style="font-family: monospace; font-weight: 800; font-size: 18px; color: var(--text-muted); background: var(--bg-elevated); padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border);">v7.149</span>
+                                            </div>
+                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Precision Partial PTO Disambiguation &amp; Net Balance Fix</h3>
+                                        </div>
+                                        <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">Previous Release</div>
                                     </div>
 
                                     <div style="display: flex; flex-direction: column; gap: 16px; font-size: 13px; line-height: 1.6; color: var(--text-main);">
