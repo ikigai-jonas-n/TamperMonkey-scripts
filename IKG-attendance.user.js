@@ -1,7 +1,7 @@
 // ==UserScript==
-    // @name         [7.152] IKG Attendance Pro (Autopilot & Alarms)
+    // @name         [7.153] IKG Attendance Pro (Autopilot & Alarms)
     // @namespace    http://tampermonkey.net/
-    // @version      7.152
+    // @version      7.153
     // @updateURL    https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @downloadURL  https://gist.githubusercontent.com/ikigai-jonas-n/f532c3a6c1b3cdeb7d6bbbfba3ecfd0e/raw/IKG-attendance.user.js
     // @description  Full Auto-Login, Keep-Alive Token, GCal/Mac Alarms, Deel PTO Sync, and Modern UI.
@@ -5106,32 +5106,7 @@
         ].join("");
       };
 
-      const ptoItemTooltip = (i) => {
-        const isPending = i.isPending;
-        const statusLabel = isPending ? "AWAITING APPROVAL" : "APPROVED";
-        const statusIcon = isPending ? "⏳" : "✓";
-        const rangeStr = i.first === i.last ? formatYmd(i.first, true) : `${formatYmd(i.first, true)} – ${formatYmd(i.last, true)}`;
-        const divider = "─".repeat(24);
-
-        const lines = [];
-        lines.push(`${IkgWorkRules.ptoKindOf(i.fullType).icon} ${i.fullType.toUpperCase()}  [ ${statusIcon} ${statusLabel} ]`);
-        lines.push(divider);
-        lines.push(`📅 Period: ${rangeStr} (${i.totalLabel})`);
-        if (i.windowLabel) {
-          lines.push(`⏰ Time: ${i.windowLabel}`);
-        }
-        if (i.continuesInto && i.continuesInto.length) {
-          lines.push(`➡️ Continues into: ${i.continuesInto.map((m) => formatYmd(`${m}-01`).split(" ")[0]).join(", ")}`);
-        }
-        if (i.description) {
-          lines.push(divider);
-          lines.push(`📝 Reason & Coverage:`);
-          lines.push(`   ${i.description}`);
-        }
-        lines.push(divider);
-        lines.push("👆 Click to show on calendar");
-        return lines.join("\n");
-      };
+      const ptoItemTooltip = (i) => i.description || "";
 
       const ptoItemHtml = (i) => `
         <button type="button" class="ikg-pto-item${i.isPending ? " is-pending" : ""}" data-pto-focus="${escapeAttr(i.id)}" data-full-title="${escapeAttr(ptoItemTooltip(i))}">
@@ -5368,8 +5343,11 @@
       const otItemHtml = (i) => {
         const isPending = i.status === "pending" || i.status === "partially_approved";
         const stepperHtml = i.stageSummary ? `<span class="ikg-ot-item-stepper${i.status === "approved" ? " is-approved" : ""}">${i.status === "approved" ? "✓ " : "⏳ "}${escapeAttr(i.stageSummary)}</span>` : `<span class="ikg-ot-item-stepper"></span>`;
+        const cleanDesc = i.description
+          ? i.description.replace(/https:\/\/github\.com\/[^\/]+\/[^\/]+\/pull\/(\d+)/g, "#$1").trim()
+          : "";
         return `
-          <button type="button" class="ikg-ot-item${isPending ? " is-pending" : ""}" data-ot-focus="${escapeAttr(i.id)}" data-full-title="${escapeAttr(otItemTooltip(i, true))}">
+          <button type="button" class="ikg-ot-item${isPending ? " is-pending" : ""}" data-ot-focus="${escapeAttr(i.id)}" data-full-title="${escapeAttr(cleanDesc)}">
             <span class="ikg-ot-item-date">${formatYmd(i.date, true)}</span>
             <span class="ikg-ot-item-type">👺 Overtime</span>
             ${stepperHtml}
@@ -7345,27 +7323,26 @@
                                                 <span style="font-family: monospace; font-weight: 800; font-size: 18px; color: var(--text-main); background: var(--bg-elevated); padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border);">${SCRIPT_VER}</span>
                                                 <span style="font-size: 10px; font-weight: 700; color: #fff; background: var(--success); padding: 3px 8px; border-radius: 12px; letter-spacing: 0.5px;">LATEST</span>
                                             </div>
-                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Structured Downward Tooltips &amp; Visual Boundaries (Overtime, PTO &amp; Calendar)</h3>
+                                            <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-main);">Descriptive Calendar Tooltips &amp; Clean Description Hover for PTO &amp; Overtime</h3>
                                         </div>
                                         <div style="font-size: 12px; color: var(--text-muted); font-family: monospace;">Current Release</div>
                                     </div>
 
                                     <div style="display: flex; flex-direction: column; gap: 16px; font-size: 13px; line-height: 1.6; color: var(--text-main);">
                                         <div>
-                                            <div style="font-size: 12px; font-weight: 700; color: var(--ot); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">👺 Structured Overtime &amp; Calendar Tooltips</div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--ot); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">👺 Descriptive Calendar Tooltips</div>
                                             <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
-                                                <li><b>Downward Tooltip Positioning:</b> Overtime tab item cards and calendar pills open downward by default, eliminating upward clipping and frame overlap.</li>
-                                                <li><b>Topmost Stacking Guarantee:</b> Hovered items dynamically elevate to <code>z-index: 1000</code> with tooltips at <code>z-index: 999999</code>, guaranteeing other cards or frames cannot paint over active tooltips.</li>
-                                                <li><b>Crisp Visual Sections:</b> Separated status badges, dates, approver reviewer lists, and descriptions with dedicated divider lines and emoji identifiers instead of raw run-on sentences.</li>
-                                                <li><b>PR URL Beautification:</b> Automatically formats lengthy GitHub PR URLs (e.g. <code>https://github.com/.../pull/1958</code>) cleanly as <code>#1958</code> for effortless reading.</li>
+                                                <li><b>Rich Calendar Overtime Details:</b> Because day cells cannot show full details, hovering a pill opens a structured descriptive card with status, date, approvers, and description.</li>
+                                                <li><b>Safe Grid Boundaries:</b> Pill tooltips open downward by default (preventing month title collisions in rows 1–3), upward in bottom rows, and anchor cleanly on screen edges.</li>
+                                                <li><b>PR URL Beautification:</b> Automatically formats lengthy GitHub PR URLs cleanly as <code>#1958</code>.</li>
                                             </ul>
                                         </div>
 
                                         <div>
-                                            <div style="font-size: 12px; font-weight: 700; color: var(--pto); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">🏝️ Structured PTO Sectioning</div>
+                                            <div style="font-size: 12px; font-weight: 700; color: var(--pto); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">🏝️ Streamlined PTO &amp; Overtime Tabs</div>
                                             <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px;">
-                                                <li><b>Multi-Section PTO Hover Cards:</b> Tooltips on PTO cards now distinctly isolate Leave Type &amp; Status, Period &amp; Hours, Shift Times, and Reason &amp; Coverage notes.</li>
-                                                <li><b>Extended List Padding:</b> Added bottom clearance to scrollable PTO and Overtime columns so bottom cards never have tooltips cut off at the viewport edge.</li>
+                                                <li><b>Truncation-Only Hover:</b> Hover popup only triggers when description text is actually truncated with an ellipsis. If everything is visible, no popup is shown.</li>
+                                                <li><b>Description-Only Popup:</b> Card hover shows purely the full description text without redundant headers or section dividers, keeping the view clean.</li>
                                             </ul>
                                         </div>
                                     </div>
